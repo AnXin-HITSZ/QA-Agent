@@ -1,0 +1,257 @@
+@import "./styles/tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
+    "Source Han Sans SC", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+#app {
+  height: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--primary) 28%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
+}
+
+/* ============ Markdown 渲染 ============ */
+.md {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  margin: 1.4em 0 0.5em;
+  font-family: "Space Grotesk", "IBM Plex Sans", "Noto Sans SC", "PingFang SC", sans-serif;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+}
+.md h1 {
+  font-size: 1.5em;
+}
+.md h2 {
+  font-size: 1.25em;
+  padding-bottom: 0.24em;
+  border-bottom: 1px solid var(--line);
+}
+.md h3 {
+  font-size: 1.08em;
+}
+.md h4 {
+  font-size: 1em;
+  color: var(--muted);
+}
+
+.md p {
+  margin: 0.7em 0;
+}
+
+.md a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.md a:hover {
+  color: var(--primary-strong);
+}
+
+.md strong {
+  font-weight: 600;
+}
+
+/* 无序列表 */
+.md ul {
+  margin: 0.7em 0;
+  padding-left: 1.3em;
+}
+.md ul li {
+  margin: 0.32em 0;
+}
+.md ul li::marker {
+  color: var(--primary);
+}
+
+/* 有序列表 —— 把「步骤序号」做成记忆点 */
+.md ol {
+  margin: 0.9em 0;
+  padding-left: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.md ol > li {
+  position: relative;
+  min-height: 1.75em;
+  margin: 0.55em 0;
+  padding-left: 2.6em;
+  counter-increment: step;
+}
+.md ol > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0.02em;
+  display: grid;
+  place-items: center;
+  width: 1.75em;
+  height: 1.75em;
+  border-radius: var(--radius-xs);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-family: "IBM Plex Sans", sans-serif;
+  font-weight: 600;
+  font-size: 0.82em;
+}
+.md ol ul {
+  margin: 0.35em 0;
+}
+
+/* 引用块 = 注意事项 / 提示,印泥红警示 */
+.md blockquote {
+  margin: 0.9em 0;
+  padding: 0.7em 1em;
+  border-left: 3px solid var(--seal);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  background: var(--seal-tint);
+  color: var(--ink);
+}
+.md blockquote > :first-child {
+  margin-top: 0;
+}
+.md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* 表格(可横向滚动,不撑破容器) */
+.md table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 0.9em 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.md th,
+.md td {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.md thead th {
+  background: var(--surface-2);
+  font-weight: 600;
+  color: var(--ink);
+}
+.md tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+/* 分隔线 */
+.md hr {
+  margin: 1.4em 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+
+/* 行内代码 */
+.md :not(pre) > code {
+  padding: 0.12em 0.4em;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.88em;
+}
+
+/* 代码块 */
+.md pre {
+  margin: 0.9em 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow-x: auto;
+}
+.md pre code {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 0.86em;
+  line-height: 1.6;
+}
+
+/* highlight.js token 配色(贴合调色板,亮暗通用) */
+.hljs-comment,
+.hljs-quote {
+  color: var(--muted);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-built_in {
+  color: var(--primary);
+}
+.hljs-string,
+.hljs-attr,
+.hljs-template-tag {
+  color: var(--seal);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--primary-strong);
+}
+.hljs-title,
+.hljs-name,
+.hljs-section {
+  color: var(--ink);
+  font-weight: 600;
+}
+.hljs-meta {
+  color: var(--muted);
+}

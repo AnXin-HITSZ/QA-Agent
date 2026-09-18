@@ -1,0 +1,60 @@
+/* 设计令牌:配色 / 尺寸。亮色为默认;暗色经 data-theme="dark" 或系统偏好切换。
+   调色板刻意用「冷调实验纸 + 科研青 + 印泥红」,避开 AI 常见的暖奶油 + 陶土。 */
+:root {
+  --paper: #edf1f1;
+  --surface: #ffffff;
+  --surface-2: #f4f7f7;
+  --ink: #17272e;
+  --muted: #5b6a70;
+  --line: #dae0e1;
+  --primary: #0e6e78;
+  --primary-strong: #0a555d;
+  --primary-tint: #e2eff0;
+  --seal: #9b2c2c;
+  --seal-tint: #f8ece9;
+  --on-primary: #ffffff;
+  --focus: #0e6e78;
+
+  --radius: 14px;
+  --radius-sm: 9px;
+  --radius-xs: 6px;
+  --maxw: 860px;
+  --shadow: 0 1px 2px rgba(23, 39, 46, 0.05), 0 18px 40px -28px rgba(23, 39, 46, 0.35);
+}
+
+:root[data-theme="dark"] {
+  --paper: #0f1719;
+  --surface: #16242a;
+  --surface-2: #1c2f36;
+  --ink: #e6ecee;
+  --muted: #9fb0b6;
+  --line: #26383f;
+  --primary: #35a7b3;
+  --primary-strong: #4cbcc7;
+  --primary-tint: #12343a;
+  --seal: #d9695c;
+  --seal-tint: #2c1d1c;
+  --on-primary: #06232a;
+  --focus: #35a7b3;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 20px 44px -30px rgba(0, 0, 0, 0.7);
+}
+
+/* 用户未手动选择主题时,首屏跟随系统暗色偏好 */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --paper: #0f1719;
+    --surface: #16242a;
+    --surface-2: #1c2f36;
+    --ink: #e6ecee;
+    --muted: #9fb0b6;
+    --line: #26383f;
+    --primary: #35a7b3;
+    --primary-strong: #4cbcc7;
+    --primary-tint: #12343a;
+    --seal: #d9695c;
+    --seal-tint: #2c1d1c;
+    --on-primary: #06232a;
+    --focus: #35a7b3;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 20px 44px -30px rgba(0, 0, 0, 0.7);
+  }
+}

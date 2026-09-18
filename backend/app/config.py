@@ -22,6 +22,28 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     llm_request_timeout: float = 60.0
 
+    # ---- SOP / Skill ----
+    sops_dir: str = ""  # 为空则用 backend/sops 默认目录
+
+    # ---- Embeddings(RAG 向量化,OpenAI 兼容端点;如阿里云 DashScope)----
+    embeddings_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embeddings_api_key: str = ""
+    embeddings_model: str = "text-embedding-v4"
+    embeddings_dim: int = 1024
+
+    # ---- Qdrant 向量库 ----
+    qdrant_url: str = ""  # 例:http://<ECS-IP>:6333;为空则 RAG 不可用
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "lab_knowledge"
+
+    # ---- Redis(LangGraph checkpointer:跨轮对话记忆的持久化)----
+    # 例:redis://:密码@<ECS-IP>:6379/0;为空则退化为单轮模式(无跨轮记忆)。
+    # 注意:LangGraph 的 Redis Saver 依赖 RedisJSON + RediSearch 模块(Redis 8.0+ 内置,
+    # 或用 Redis Stack),普通 Redis 会在建索引时报错。
+    redis_url: str = ""
+    # 会话 checkpoint 存活时长(分钟);0 或负数表示永不过期。用于自动清理长期不活跃的会话。
+    redis_ttl_minutes: int = 0
+
     # ---- CORS ----
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
