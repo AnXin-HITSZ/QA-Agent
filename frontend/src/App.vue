@@ -5,11 +5,14 @@ import AnswerRecord from "./components/AnswerRecord.vue";
 import AppHeader from "./components/AppHeader.vue";
 import Composer from "./components/Composer.vue";
 import EmptyState from "./components/EmptyState.vue";
+import HistorySidebar from "./components/HistorySidebar.vue";
 import UserQuery from "./components/UserQuery.vue";
 import { useChat } from "./composables/useChat";
 
 const { messages, loading, error, send } = useChat();
 const listEl = ref<HTMLElement | null>(null);
+// 移动端历史抽屉开关(桌面端侧栏常驻,此值不起作用)。
+const sidebarOpen = ref(false);
 
 // 流式时占位回答已在列表里(带自己的进度提示),此时不再显示全局「思考中」。
 const isStreaming = computed(() => messages.value.some((m) => m.streaming));
@@ -31,47 +34,65 @@ watch([() => messages.value.length, contentLen, loading], scrollToBottom);
 </script>
 
 <template>
-  <div class="app">
-    <AppHeader />
+  <div class="app" :class="{ 'app--drawer': sidebarOpen }">
+    <HistorySidebar class="app__side" @navigate="sidebarOpen = false" />
+    <div class="app__backdrop" @click="sidebarOpen = false" />
 
-    <main ref="listEl" class="app__thread">
-      <div class="thread">
-        <EmptyState v-if="!messages.length" @pick="send" />
+    <div class="app__main">
+      <AppHeader :history-open="sidebarOpen" @toggle-history="sidebarOpen = !sidebarOpen" />
 
-        <template v-for="(m, i) in messages" :key="i">
-          <UserQuery v-if="m.role === 'user'" :text="m.content" />
-          <AnswerRecord
-            v-else
-            :steps="m.steps"
-            :skill="m.skill"
-            :streaming="m.streaming"
-          />
-        </template>
+      <main ref="listEl" class="app__thread">
+        <div class="thread">
+          <EmptyState v-if="!messages.length" @pick="send" />
 
-        <div v-if="loading && !isStreaming" class="thinking" aria-live="polite">
-          <span class="thinking__dot" />
-          <span class="thinking__dot" />
-          <span class="thinking__dot" />
-          <span class="thinking__txt">正在整理答案</span>
+          <template v-for="(m, i) in messages" :key="i">
+            <UserQuery v-if="m.role === 'user'" :text="m.content" />
+            <AnswerRecord
+              v-else
+              :steps="m.steps"
+              :skill="m.skill"
+              :streaming="m.streaming"
+            />
+          </template>
+
+          <div v-if="loading && !isStreaming" class="thinking" aria-live="polite">
+            <span class="thinking__dot" />
+            <span class="thinking__dot" />
+            <span class="thinking__dot" />
+            <span class="thinking__txt">正在整理答案</span>
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
 
-    <footer class="app__dock">
-      <div class="thread">
-        <p v-if="error" class="app__error" role="alert">{{ error }}</p>
-        <Composer :loading="loading" @send="send" />
-      </div>
-    </footer>
+      <footer class="app__dock">
+        <div class="thread">
+          <p v-if="error" class="app__error" role="alert">{{ error }}</p>
+          <Composer :loading="loading" @send="send" />
+        </div>
+      </footer>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .app {
   display: flex;
-  flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  overflow: hidden;
+}
+.app__side {
+  width: 260px;
+  flex-shrink: 0;
+}
+.app__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.app__backdrop {
+  display: none;
 }
 .app__thread {
   flex: 1;
@@ -121,6 +142,30 @@ watch([() => messages.value.length, contentLen, loading], scrollToBottom);
   margin-left: 4px;
 }
 
+/* 窄屏:侧栏变为可滑出的抽屉,叠在内容之上 */
+@media (max-width: 860px) {
+  .app__side {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 20;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: var(--shadow);
+  }
+  .app--drawer .app__side {
+    transform: translateX(0);
+  }
+  .app--drawer .app__backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    background: color-mix(in srgb, var(--ink) 32%, transparent);
+  }
+}
+
 @keyframes blink {
   0%,
   80%,
@@ -138,6 +183,9 @@ watch([() => messages.value.length, contentLen, loading], scrollToBottom);
   }
   .app__thread {
     scroll-behavior: auto;
+  }
+  .app__side {
+    transition: none;
   }
 }
 </style>

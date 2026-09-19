@@ -1,14 +1,28 @@
 <script setup lang="ts">
 import { useTheme } from "../composables/useTheme";
 
+defineProps<{ historyOpen?: boolean }>();
+const emit = defineEmits<{ (e: "toggle-history"): void }>();
+
 const { theme, toggle } = useTheme();
 </script>
 
 <template>
   <header class="hd">
-    <div class="hd__mark">
-      <span class="hd__name">实验室问答</span>
-      <span class="hd__sub">Lab Assistant</span>
+    <div class="hd__lead">
+      <button
+        class="hd__menu"
+        type="button"
+        :aria-expanded="historyOpen ? 'true' : 'false'"
+        aria-label="历史对话"
+        @click="emit('toggle-history')"
+      >
+        ☰
+      </button>
+      <div class="hd__mark">
+        <span class="hd__name">实验室问答</span>
+        <span class="hd__sub">Lab Assistant</span>
+      </div>
     </div>
     <button
       class="hd__theme"
@@ -34,6 +48,28 @@ const { theme, toggle } = useTheme();
   position: sticky;
   top: 0;
   z-index: 5;
+}
+.hd__lead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hd__menu {
+  display: none; /* 桌面端侧栏常驻,不需要开关;窄屏才显示 */
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.hd__menu:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 .hd__mark {
   display: flex;
@@ -72,5 +108,11 @@ const { theme, toggle } = useTheme();
 .hd__theme:hover {
   border-color: var(--primary);
   color: var(--primary);
+}
+
+@media (max-width: 860px) {
+  .hd__menu {
+    display: grid;
+  }
 }
 </style>

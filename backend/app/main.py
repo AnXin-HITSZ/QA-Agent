@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import chat, health
+from app.api.routes import chat, conversations, health
 from app.config import get_settings
 from app.graph import build_graph
 
@@ -44,6 +44,8 @@ async def lifespan(app: FastAPI):
             saver_cm = None
             checkpointer = None
     app.state.graph = build_graph(checkpointer=checkpointer)
+    # 同一个 checkpointer 也给历史对话路由用(扫描 / 读取 / 删除);降级时为 None。
+    app.state.checkpointer = checkpointer
     if checkpointer is None:
         logger.info("对话记忆:单轮模式(无跨轮记忆);配置 REDIS_URL 即可开启。")
     try:
@@ -67,6 +69,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(chat.router)
+    app.include_router(conversations.router)
     return app
 
 

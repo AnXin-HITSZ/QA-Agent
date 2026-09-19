@@ -71,14 +71,24 @@
 - 持久化选 **Redis**(非 Postgres):对话是 JSON、ECS 已装 Redis、LangGraph 有 Redis Saver。
 - 用 `langgraph-checkpoint-redis`(0.3.9)的 **`AsyncRedisSaver`**,在 `main.py` 的 FastAPI `lifespan` 里挂进图 → `app.state.graph`;`thread_id` 作会话钥匙,`/chat` 回传、`/chat/stream` 先发 `meta{thread_id}`。
 - **优雅降级**:没配 `REDIS_URL` 或 Redis 初始化失败 → 打告警、退回单轮模式,后端照常起。
-- **⚠️ 前置(你在 ECS 确认)**:Redis Saver 依赖 **RedisJSON + RediSearch** 模块 → 需 **Redis 8.0+** 或 **Redis Stack**;普通 Redis 会在建索引时报错。
-  - 验证:`redis-cli MODULE LIST` 应见 `search` 与 `ReJSON`;不行就 `docker run -d -p 6379:6379 redis:8`。
-  - 真 `.env` 填 `REDIS_URL=redis://:密码@<ECS-IP>:6379/0`(设 requirepass + 安全组只放行后端/开发机 IP)。
+- **✅ 前置已就绪(2026-09-18)**:ECS 原生 Redis 已从 6.0.16 升级到 **8.10.2**(官方 apt 源),`loadmodule` 加载了 `rejson.so` + `redisearch.so`,`MODULE LIST` 可见 `search` 与 `ReJSON`;`bind 0.0.0.0` + `requirepass` + 安全组放行开发机;后端日志确认 `Redis checkpointer 已启用`。
+  - 升级踩坑记录:① `daemonize/supervised` 与 systemd `Type=notify` 不匹配 → 启动 `Result: protocol`,改 `daemonize no` + `supervised systemd`;② 保留旧配置导致模块没加载(只有编译进内核的 `vectorset`)→ 手动加 `loadmodule`;③ 远程连不上是 `bind` 仍为回环(错误码 10061 refused,非超时)→ 改 `bind 0.0.0.0`。
+  - 真 `.env` 已填 `REDIS_URL=redis://:密码@8.135.60.136:6379/0`(redis-py 裸 TCP,不需要 NO_PROXY)。进生产前轮换一次 requirepass。
+
+### 历史对话列表 —— DONE(2026-09-19)
+
+- **以后端 Redis 为准**(非 localStorage),单用户、无鉴权:扫描 checkpointer 索引里的全部线程做列表展示;删除连带清 Redis 记忆。
+- 用 `AsyncRedisSaver` 的现成异步 API(已核对 0.3.9 源码):列全部 `alist(None)`(config=None → 过滤器 `*`,按 checkpoint_id ULID 倒序);读一通 `aget_tuple({"configurable":{"thread_id":tid}})`(走 `checkpoint_latest` 指针取最新态);删一通 `adelete_thread(tid)`(清该线程全部 checkpoint + writes + 指针)。消息取自 `checkpoint["channel_values"]["messages"]`,时间取 `checkpoint["ts"]`(ISO)。
+- 后端:`main.py` 把 checkpointer 也挂到 `app.state`(原只挂 graph);新增 `app/api/routes/conversations.py`(独立路由,和 health/chat 并列)+ `app/schemas/conversation.py`。三端点 `GET /conversations`(返回 `{enabled, items}`,Redis 没开 → enabled=false 空列表)、`GET /conversations/{tid}`(回放 Q&A)、`DELETE /conversations/{tid}`(204;Redis 没开 → 503)。
+- 前端:`api.ts` 加 3 函数 + 类型;`useChat.ts` 改**模块级单例**(App 与侧栏共享态)+ 加 `conversations/historyEnabled/loadConversations/openConversation/removeConversation`,首轮拿到 thread_id 后自动刷新列表;新增 `HistorySidebar.vue`(列表 + 新对话 + 行内删除确认 + 活跃高亮 + 空态/未启用态);`App.vue` 改两栏(窄屏侧栏变滑出抽屉);`AppHeader.vue` 移除「新对话」(挪进侧栏),改为窄屏可见的抽屉开关。
+- **回放精度**:只还原最终答案文本(每条助手答案塞进单一 step),不重建当时的工具调用时间线(Redis 存的是最终消息;实时对话仍有完整时间线)。
+- 已验:后端 `create_app()` OpenAPI 三端点就位、`_replay/_title` 对真实 LangChain 消息处理正确;前端 `npm run build` 通过。
+- 小注:RediSearch 索引近实时,首轮刚建完偶有毫秒级延迟才被 `alist` 扫到;`alist` 默认扫上限 10000 条 checkpoint(单用户够,超了再加分页)。
 
 ### 待办
 
-- 后端跑起来后**端到端冒烟**:同一 `thread_id` 连问两轮,验证第二轮记得第一轮上下文。
-- **前端**:`thread_id` 存 localStorage + 每次提问回传 + 「新对话」按钮(清 thread_id 开新桶)。
+- **端到端冒烟(你来点)**:① 同一通对话连问两轮(先"我是安心,请记住名字",再"我是谁") → 第二轮应答出"安心";② 历史栏应列出该对话,点开能回放,删除后从列表消失且再问不再记得。
+- **✅ 前端(2026-09-18 DONE)**:`api.ts` 发送带 `thread_id`、接住后端 `meta` 事件;`useChat.ts` 存 `threadId`(内存态,刷新即新开一通)+ 每次回传 + `newConversation()`;头部加「新对话」按钮。**注:** 暂不落 localStorage —— 消息列表没持久化,只存 thread_id 会造成"刷新后界面空白但模型还记得"的错位;要持久化需连消息一起存,留作后续。
 - **下一步:长对话摘要压缩**(消息累积到阈值 → 摘要压缩早期轮次,控制 token / 上下文长度)。
 
 ---

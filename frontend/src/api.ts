@@ -8,23 +8,25 @@ export interface ChatRequest {
 export interface ChatResponse {
   skill: string | null; // 命中的 Skill id;null 表示走通用问答
   content: string;
+  thread_id: string; // 本次会话线程 ID;续接记忆时回传
 }
 
 // 流式事件回调。后端 SSE:token/tool_call/tool_result 均带 step(agent 轮次号),done 附 skill。
 export interface StreamHandlers {
+  onMeta?: (threadId: string) => void;
   onToolCall?: (name: string, args: Record<string, unknown>, step: number) => void;
   onToolResult?: (name: string | null, step: number) => void;
   onToken?: (content: string, step: number) => void;
   onDone?: (skill: string | null) => void;
 }
 
-export async function chat(message: string): Promise<ChatResponse> {
+export async function chat(message: string, threadId?: string | null): Promise<ChatResponse> {
   let res: Response;
   try {
     res = await fetch("/api/v1/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message } satisfies ChatRequest),
+      body: JSON.stringify({ message, thread_id: threadId ?? null } satisfies ChatRequest),
     });
   } catch {
     throw new Error("没连上后端。确认后端已在 127.0.0.1:8000 运行,然后重试。");
@@ -36,13 +38,17 @@ export async function chat(message: string): Promise<ChatResponse> {
 }
 
 // EventSource 不支持 POST,这里用 fetch + ReadableStream 手动解析 SSE 帧(无新依赖)。
-export async function chatStream(message: string, handlers: StreamHandlers): Promise<void> {
+export async function chatStream(
+  message: string,
+  handlers: StreamHandlers,
+  threadId?: string | null,
+): Promise<void> {
   let res: Response;
   try {
     res = await fetch("/api/v1/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message } satisfies ChatRequest),
+      body: JSON.stringify({ message, thread_id: threadId ?? null } satisfies ChatRequest),
     });
   } catch {
     throw new Error("没连上后端。确认后端已在 127.0.0.1:8000 运行,然后重试。");
@@ -68,6 +74,9 @@ export async function chatStream(message: string, handlers: StreamHandlers): Pro
     }
     const step = Number(payload?.step ?? 0); // agent 轮次号,据此把事件归入对应段
     switch (event) {
+      case "meta":
+        handlers.onMeta?.(String(payload?.thread_id ?? ""));
+        break;
       case "tool_call":
         handlers.onToolCall?.(
           String(payload?.name ?? ""),
@@ -105,4 +114,58 @@ export async function chatStream(message: string, handlers: StreamHandlers): Pro
     }
   }
   if (buf.trim()) dispatch(buf); // flush 尾帧
+}
+
+// ── 历史对话:后端以 Redis 为准,扫描 / 读取 / 删除会话 ──
+
+export interface ConversationSummary {
+  thread_id: string;
+  title: string;
+  message_count: number;
+  updated_at: string | null; // 最新 checkpoint 的 ISO 时间;null = 无
+}
+
+export interface ConversationList {
+  enabled: boolean; // 后端 Redis 跨轮记忆是否开启;false 时列表恒空、隐藏历史栏
+  items: ConversationSummary[];
+}
+
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ConversationDetail {
+  thread_id: string;
+  messages: ConversationMessage[];
+}
+
+// 列出全部历史会话(最近活跃在前)。后端未连通时静默返回 enabled=false,不打扰主流程。
+export async function listConversations(): Promise<ConversationList> {
+  try {
+    const res = await fetch("/api/v1/conversations");
+    if (!res.ok) return { enabled: false, items: [] };
+    return (await res.json()) as ConversationList;
+  } catch {
+    return { enabled: false, items: [] };
+  }
+}
+
+// 读取一通历史会话的 Q&A 文本,用于回放。
+export async function getConversation(threadId: string): Promise<ConversationDetail> {
+  const res = await fetch(`/api/v1/conversations/${encodeURIComponent(threadId)}`);
+  if (!res.ok) {
+    throw new Error(`打开对话失败(HTTP ${res.status})。可能已被删除,或后端不可用。`);
+  }
+  return (await res.json()) as ConversationDetail;
+}
+
+// 删除一通历史会话,连带清掉它在 Redis 的记忆。
+export async function deleteConversation(threadId: string): Promise<void> {
+  const res = await fetch(`/api/v1/conversations/${encodeURIComponent(threadId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(`删除对话失败(HTTP ${res.status})。稍后重试。`);
+  }
 }
