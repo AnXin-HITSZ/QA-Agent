@@ -30,7 +30,13 @@ async def lifespan(app: FastAPI):
             from langgraph.checkpoint.redis import AsyncRedisSaver
 
             ttl = {"default_ttl": settings.redis_ttl_minutes, "refresh_on_read": True} if settings.redis_ttl_minutes > 0 else None
-            saver_cm = AsyncRedisSaver.from_conn_string(settings.redis_url, ttl=ttl)
+            # 连接加固:socket_keepalive 让空闲连接不被公网 NAT/空闲超时悄悄掐断,
+            # health_check_interval 在复用前先探活、剔除死连接。主要为 Windows 开发机:
+            # 那里 uvicorn 无 uvloop、回退到 asyncio SelectorEventLoop,Py3.12 有个 writelines
+            # bug——复用到死连接会崩成 TypeError 而非可重试的 ConnectionError(生产 Linux 走
+            # uvloop 无此坑)。透传进 AsyncRedis.from_url,对生产纯属无害加固。
+            conn_args = {"socket_keepalive": True, "health_check_interval": 30}
+            saver_cm = AsyncRedisSaver.from_conn_string(settings.redis_url, ttl=ttl, connection_args=conn_args)
             checkpointer = await saver_cm.__aenter__()
             await checkpointer.asetup()  # 首次连接建 RedisJSON/RediSearch 索引;已存在则幂等跳过
             logger.info("对话记忆:Redis checkpointer 已启用(跨轮记忆开)")
