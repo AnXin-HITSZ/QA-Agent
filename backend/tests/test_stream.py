@@ -5,7 +5,6 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from app.config import get_settings
 from app.main import app
-from app.skills import loader
 
 _TRAVEL = """---
 id: travel
@@ -60,16 +59,9 @@ def _fake_run():
     ]
 
 
-def _prepare(tmp_path, monkeypatch):
-    (tmp_path / "travel.md").write_text(_TRAVEL, encoding="utf-8")
-    monkeypatch.setenv("SOPS_DIR", str(tmp_path))
-    get_settings.cache_clear()
-    loader.reload()
+def _body(install_sops, monkeypatch) -> str:
+    install_sops({"travel.md": _TRAVEL})
     monkeypatch.setattr("app.api.routes.chat.get_graph", lambda: _FakeGraph(_fake_run()))
-
-
-def _body(tmp_path, monkeypatch) -> str:
-    _prepare(tmp_path, monkeypatch)
     prefix = get_settings().api_prefix
     client = TestClient(app)
     r = client.post(f"{prefix}/chat/stream", json={"message": "差旅怎么报销"})
@@ -77,29 +69,29 @@ def _body(tmp_path, monkeypatch) -> str:
     return r.text
 
 
-def test_stream_emits_tool_call(tmp_path, monkeypatch):
-    body = _body(tmp_path, monkeypatch)
+def test_stream_emits_tool_call(install_sops, monkeypatch):
+    body = _body(install_sops, monkeypatch)
     assert "event: tool_call" in body
     assert "get_sop" in body
     assert '"skill_id": "travel"' in body
     assert '"step": 0' in body
 
 
-def test_stream_tokens_carry_step(tmp_path, monkeypatch):
-    body = _body(tmp_path, monkeypatch)
+def test_stream_tokens_carry_step(install_sops, monkeypatch):
+    body = _body(install_sops, monkeypatch)
     # 思考铺垫在第 0 轮
     assert '"content": "我先查一下", "step": 0' in body
     # 工具跑完后 step 前进,最终答案在第 1 轮
     assert '"content": "填报销单", "step": 1' in body
 
 
-def test_stream_emits_tool_result(tmp_path, monkeypatch):
-    body = _body(tmp_path, monkeypatch)
+def test_stream_emits_tool_result(install_sops, monkeypatch):
+    body = _body(install_sops, monkeypatch)
     assert "event: tool_result" in body
 
 
-def test_stream_streams_only_final_answer_tokens(tmp_path, monkeypatch):
-    body = _body(tmp_path, monkeypatch)
+def test_stream_streams_only_final_answer_tokens(install_sops, monkeypatch):
+    body = _body(install_sops, monkeypatch)
     assert "event: token" in body
     assert "第一步" in body
     assert "填报销单" in body
@@ -109,7 +101,7 @@ def test_stream_streams_only_final_answer_tokens(tmp_path, monkeypatch):
     assert "全文" not in body
 
 
-def test_stream_done_carries_skill(tmp_path, monkeypatch):
-    body = _body(tmp_path, monkeypatch)
+def test_stream_done_carries_skill(install_sops, monkeypatch):
+    body = _body(install_sops, monkeypatch)
     assert "event: done" in body
     assert '"skill": "travel"' in body

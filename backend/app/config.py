@@ -22,9 +22,6 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     llm_request_timeout: float = 60.0
 
-    # ---- SOP / Skill ----
-    sops_dir: str = ""  # 为空则用 backend/sops 默认目录
-
     # ---- Embeddings(RAG 向量化,OpenAI 兼容端点;如阿里云 DashScope)----
     embeddings_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embeddings_api_key: str = ""
@@ -44,6 +41,7 @@ class Settings(BaseSettings):
     oss_access_key_id: str = ""  # RAM 子账号 AK,只从 .env 读,绝不提交
     oss_access_key_secret: str = ""
     oss_prefix: str = "knowledge/"  # 知识库在桶内的根前缀,分类树挂在它下面
+    oss_sops_prefix: str = "sops/"  # SOP 文档在桶内的根前缀,与知识库同桶、分属不同前缀
 
     # ---- OCR(把扫描件 / 图片抽文本;接口已预留,引擎 2d 再接)----
     # 留空 = 关闭:needs_ocr 的图片 / 扫描 PDF 在摄取时跳过并告警(优雅降级)。

@@ -1,6 +1,5 @@
-"""Skill 加载器离线单测(不涉及 LLM)。"""
+"""Skill 加载器离线单测(不涉及 LLM;SOP 经内存假仓库注入,见 conftest.install_sops)。"""
 
-from app.config import get_settings
 from app.skills import loader
 
 _SKILL_MD = """---
@@ -17,15 +16,8 @@ triggers:
 """
 
 
-def _prepare(tmp_path, monkeypatch, *, filename="travel.md", content=_SKILL_MD):
-    (tmp_path / filename).write_text(content, encoding="utf-8")
-    monkeypatch.setenv("SOPS_DIR", str(tmp_path))
-    get_settings.cache_clear()
-    loader.reload()
-
-
-def test_catalog_and_get_skill(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_catalog_and_get_skill(install_sops):
+    install_sops({"travel.md": _SKILL_MD})
 
     catalog = loader.get_catalog()
     assert len(catalog) == 1
@@ -43,13 +35,13 @@ def test_catalog_and_get_skill(tmp_path, monkeypatch):
     assert loader.get_skill("does-not-exist") is None
 
 
-def test_reload_picks_up_new_file(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_reload_picks_up_new_file(install_sops):
+    store = install_sops({"travel.md": _SKILL_MD})
     assert len(loader.get_catalog()) == 1
 
-    (tmp_path / "supplies.md").write_text(
-        "---\nid: supplies\nname: 耗材报销\ndescription: 耗材试剂报销\n---\n# 耗材\n步骤\n",
-        encoding="utf-8",
+    # 模拟 OSS 新增一篇 SOP
+    store.files["supplies.md"] = (
+        "---\nid: supplies\nname: 耗材报销\ndescription: 耗材试剂报销\n---\n# 耗材\n步骤\n"
     )
     # 未 reload 前仍是缓存的 1 个
     assert len(loader.get_catalog()) == 1
@@ -59,13 +51,8 @@ def test_reload_picks_up_new_file(tmp_path, monkeypatch):
     assert {s.id for s in loader.get_catalog()} == {"travel", "supplies"}
 
 
-def test_id_defaults_to_filename(tmp_path, monkeypatch):
-    _prepare(
-        tmp_path,
-        monkeypatch,
-        filename="no-id.md",
-        content="---\nname: 无 id 技能\n---\n正文\n",
-    )
+def test_id_defaults_to_filename(install_sops):
+    install_sops({"no-id.md": "---\nname: 无 id 技能\n---\n正文\n"})
     found = loader.get_skill("no-id")
     assert found is not None
     assert found[0].name == "无 id 技能"

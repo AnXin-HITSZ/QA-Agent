@@ -42,13 +42,16 @@ const error = ref("");
 // 会话线程 ID:首轮由后端 meta 事件回传,存下后每次提问回传以续接跨轮记忆。
 const threadId = ref<string | null>(null);
 // 历史会话列表(最近活跃在前)+ 后端是否开启跨轮记忆(false 时前端隐藏历史栏)。
+// historyDegraded:记忆已启用但这次读取失败(超时/Redis 错误)—— 与"未启用"分开显示,可重试。
 const conversations = ref<ConversationSummary[]>([]);
 const historyEnabled = ref(false);
+const historyDegraded = ref(false);
 
-// 拉取历史会话列表;后端未连通时静默置空,不打扰主流程。
+// 拉取历史会话列表;失败时进入 degraded(可重试)而非误报"未启用"。
 async function loadConversations(): Promise<void> {
-  const { enabled, items } = await listConversations();
+  const { enabled, degraded, items } = await listConversations();
   historyEnabled.value = enabled;
+  historyDegraded.value = degraded;
   conversations.value = items;
 }
 
@@ -171,6 +174,7 @@ export function useChat() {
     threadId,
     conversations,
     historyEnabled,
+    historyDegraded,
     send,
     newConversation,
     openConversation,

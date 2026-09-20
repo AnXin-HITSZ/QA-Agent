@@ -144,7 +144,7 @@ def index_file(key: str) -> dict:
     embeddings = get_embeddings()   # 先验 embeddings 已配(未配抛 RuntimeError)
     store.delete_by_oss_key(key)    # 幂等:清掉该文件旧向量(顺带验 Qdrant 通)
     try:
-        data = oss.get_object(key)
+        data = oss.knowledge_store().get_object(key)
         res = extract(data, key)
         text, reason = _resolve_text(res, data)
         if text is None:
@@ -173,7 +173,8 @@ def reindex(prefix: str = "") -> dict:
 
     任一依赖(OSS / Qdrant / Embeddings)未配置会抛 RuntimeError,交路由转 503。
     """
-    files = oss.list_all(prefix)      # 先验 OSS 通 + 拿文件清单
+    kb = oss.knowledge_store()
+    files = kb.list_all(prefix)       # 先验 OSS 通 + 拿文件清单
     embeddings = get_embeddings()     # 先验 embeddings 已配(fail-fast,别清库后才发现)
     name = store.recreate_collection()  # 清空并重建 collection
 
@@ -186,7 +187,7 @@ def reindex(prefix: str = "") -> dict:
     for f in files:
         key = f["key"]
         try:
-            data = oss.get_object(key)
+            data = kb.get_object(key)
             res = extract(data, key)
             text, reason = _resolve_text(res, data)
             if text is None:

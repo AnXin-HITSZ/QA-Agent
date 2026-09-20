@@ -139,7 +139,8 @@ export interface ConversationSummary {
 }
 
 export interface ConversationList {
-  enabled: boolean; // 后端 Redis 跨轮记忆是否开启;false 时列表恒空、隐藏历史栏
+  enabled: boolean; // 后端 Redis 跨轮记忆是否配置启用;false = 未配置(单轮模式)
+  degraded: boolean; // 已启用但本次读取失败(超时/Redis 错误);true 时列表恒空、提示重试
   items: ConversationSummary[];
 }
 
@@ -153,14 +154,20 @@ export interface ConversationDetail {
   messages: ConversationMessage[];
 }
 
-// 列出全部历史会话(最近活跃在前)。后端未连通时静默返回 enabled=false,不打扰主流程。
+// 列出全部历史会话(最近活跃在前)。
+// 请求失败(后端不可用 / 非 2xx)不谎称"未启用",而是标记 degraded=true → 前端提示可重试。
 export async function listConversations(): Promise<ConversationList> {
   try {
     const res = await fetch("/api/v1/conversations");
-    if (!res.ok) return { enabled: false, items: [] };
-    return (await res.json()) as ConversationList;
+    if (!res.ok) return { enabled: false, degraded: true, items: [] };
+    const data = (await res.json()) as Partial<ConversationList>;
+    return {
+      enabled: data.enabled ?? false,
+      degraded: data.degraded ?? false,
+      items: data.items ?? [],
+    };
   } catch {
-    return { enabled: false, items: [] };
+    return { enabled: false, degraded: true, items: [] };
   }
 }
 
@@ -343,4 +350,63 @@ export async function reindexKnowledge(prefix = ""): Promise<ReindexResult> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prefix }),
   });
+}
+
+// ── SOP 流程:查看 + 增删改查(对齐后端 /sops)──
+
+// SOP 列表项(不含正文)。key 为桶内完整路径(sops/<id>.md);updated_at 为最后修改 Unix 秒。
+export interface SopSummary {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  key: string;
+  updated_at: number | null;
+}
+
+// SOP 详情:在列表项基础上带 Markdown 正文。
+export interface SopDetail extends SopSummary {
+  body: string;
+}
+
+// 新建 / 更新 SOP 的请求体(id 不可改:新建时定名,更新须与路径一致)。
+export interface SopWrite {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string[];
+  body: string;
+}
+
+// 列出全部 SOP(不含正文,按 id 升序)。OSS 未配置 → 抛 ApiError(status 503)。
+export async function listSops(): Promise<SopSummary[]> {
+  return kfetchJson<SopSummary[]>(`/api/v1/sops`);
+}
+
+// 读单篇 SOP 详情(含正文)。不存在 → ApiError(404)。
+export async function getSop(id: string): Promise<SopDetail> {
+  return kfetchJson<SopDetail>(`/api/v1/sops/${encodeURIComponent(id)}`);
+}
+
+// 新建 SOP。id 重复 → ApiError(409);id 非法 → ApiError(400)。
+export async function createSop(body: SopWrite): Promise<SopDetail> {
+  return kfetchJson<SopDetail>(`/api/v1/sops`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// 更新 SOP 内容(不可改 id)。不存在 → ApiError(404);路径 id 与内容 id 不一致 → 400。
+export async function updateSop(id: string, body: SopWrite): Promise<SopDetail> {
+  return kfetchJson<SopDetail>(`/api/v1/sops/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// 删除 SOP(204 无 body)。不存在 → ApiError(404)。
+export async function deleteSop(id: string): Promise<void> {
+  return kfetchVoid(`/api/v1/sops/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

@@ -1,24 +1,35 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 
 import AppHeader from "./components/AppHeader.vue";
 import ChatView from "./components/ChatView.vue";
 import HistorySidebar from "./components/HistorySidebar.vue";
 import KnowledgeView from "./components/KnowledgeView.vue";
+import SopView from "./components/SopView.vue";
 import { useSidebar } from "./composables/useSidebar";
 
-type View = "chat" | "knowledge";
+type View = "chat" | "knowledge" | "sops";
 
 // 历史抽屉开关(两视图共用;侧栏为固定覆盖层,不占布局 → 内容始终整窗居中)。
 // 由对话视图的「会话工具胶囊」触发,故用模块级单例共享。
 const { open, closeDrawer } = useSidebar();
 
-// hash 路由:#/knowledge → 知识库,其它一律对话。刷新后停在当前视图,链接可分享。
+// hash 路由:#/knowledge → 知识库,#/sops → SOP 流程,其它一律对话。刷新后停在当前视图,链接可分享。
 function viewFromHash(): View {
-  return location.hash.replace(/^#\/?/, "") === "knowledge" ? "knowledge" : "chat";
+  const h = location.hash.replace(/^#\/?/, "");
+  if (h === "knowledge") return "knowledge";
+  if (h === "sops") return "sops";
+  return "chat";
 }
 
 const view = ref<View>(viewFromHash());
+
+// 当前视图对应的组件(三视图映射,供 KeepAlive 保活)。
+const viewComponent = computed(() => {
+  if (view.value === "knowledge") return KnowledgeView;
+  if (view.value === "sops") return SopView;
+  return ChatView;
+});
 
 function changeView(v: View): void {
   view.value = v;
@@ -59,10 +70,10 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
     <div class="app__main">
       <AppHeader :view="view" @change-view="changeView" />
 
-      <!-- 两视图保活:切换即时,滚动位置 / 输入草稿 / 知识库当前分类都不丢 -->
+      <!-- 三视图保活:切换即时,滚动位置 / 输入草稿 / 知识库当前分类 / SOP 浏览态都不丢 -->
       <Transition name="view-fade" mode="out-in">
         <KeepAlive>
-          <component :is="view === 'chat' ? ChatView : KnowledgeView" />
+          <component :is="viewComponent" />
         </KeepAlive>
       </Transition>
     </div>

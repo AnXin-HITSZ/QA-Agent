@@ -1,10 +1,8 @@
-"""ReAct 轨迹回读 used_sop_id 的离线单测(不涉及 LLM)。"""
+"""ReAct 轨迹回读 used_sop_id 的离线单测(不涉及 LLM;SOP 经内存假仓库注入)。"""
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.config import get_settings
 from app.graph.trace import used_sop_id
-from app.skills import loader
 
 _TRAVEL = """---
 id: travel
@@ -28,13 +26,7 @@ triggers:
 1. 提交采购申请
 """
 
-
-def _prepare(tmp_path, monkeypatch):
-    (tmp_path / "travel.md").write_text(_TRAVEL, encoding="utf-8")
-    (tmp_path / "supplies.md").write_text(_SUPPLIES, encoding="utf-8")
-    monkeypatch.setenv("SOPS_DIR", str(tmp_path))
-    get_settings.cache_clear()
-    loader.reload()
+_FILES = {"travel.md": _TRAVEL, "supplies.md": _SUPPLIES}
 
 
 def _get_sop(skill_id: str, cid: str = "c1") -> dict:
@@ -45,8 +37,8 @@ def _search(query: str, cid: str = "c0") -> dict:
     return {"name": "search_sops", "args": {"query": query}, "id": cid, "type": "tool_call"}
 
 
-def test_used_sop_id_from_last_get_sop(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_used_sop_id_from_last_get_sop(install_sops):
+    install_sops(_FILES)
     messages = [
         HumanMessage(content="差旅怎么报销"),
         AIMessage(content="", tool_calls=[_get_sop("travel")]),
@@ -56,8 +48,8 @@ def test_used_sop_id_from_last_get_sop(tmp_path, monkeypatch):
     assert used_sop_id(messages) == "travel"
 
 
-def test_used_sop_id_none_when_only_search(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_used_sop_id_none_when_only_search(install_sops):
+    install_sops(_FILES)
     messages = [
         HumanMessage(content="有哪些报销"),
         AIMessage(content="", tool_calls=[_search("报销")]),
@@ -67,20 +59,20 @@ def test_used_sop_id_none_when_only_search(tmp_path, monkeypatch):
     assert used_sop_id(messages) is None
 
 
-def test_used_sop_id_none_when_no_tools(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_used_sop_id_none_when_no_tools(install_sops):
+    install_sops(_FILES)
     messages = [HumanMessage(content="打印机在哪"), AIMessage(content="在三楼东侧")]
     assert used_sop_id(messages) is None
 
 
-def test_used_sop_id_ignores_unknown_id(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_used_sop_id_ignores_unknown_id(install_sops):
+    install_sops(_FILES)
     messages = [AIMessage(content="", tool_calls=[_get_sop("nope")])]
     assert used_sop_id(messages) is None
 
 
-def test_used_sop_id_returns_last_valid(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_used_sop_id_returns_last_valid(install_sops):
+    install_sops(_FILES)
     messages = [
         AIMessage(content="", tool_calls=[_get_sop("travel", "c1")]),
         ToolMessage(content="# 差旅报销 ...", tool_call_id="c1"),
@@ -91,8 +83,8 @@ def test_used_sop_id_returns_last_valid(tmp_path, monkeypatch):
     assert used_sop_id(messages) == "supplies"
 
 
-def test_used_sop_id_falls_back_past_invalid_last(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_used_sop_id_falls_back_past_invalid_last(install_sops):
+    install_sops(_FILES)
     messages = [
         AIMessage(content="", tool_calls=[_get_sop("travel", "c1")]),
         ToolMessage(content="# 差旅报销 ...", tool_call_id="c1"),

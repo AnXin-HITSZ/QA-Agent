@@ -37,7 +37,7 @@ def _sign_sources(hits: list[dict]) -> list[SourceCitation]:
         if not key:
             continue
         try:
-            url = oss.sign_url(key)
+            url = oss.knowledge_store().sign_url(key)
         except Exception:
             url = None
         out.append(

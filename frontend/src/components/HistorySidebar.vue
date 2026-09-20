@@ -7,6 +7,7 @@ import { useSidebar } from "../composables/useSidebar";
 const {
   conversations,
   historyEnabled,
+  historyDegraded,
   threadId,
   loading,
   newConversation,
@@ -82,7 +83,15 @@ function when(iso: string | null): string {
       </button>
     </div>
 
-    <nav v-if="historyEnabled" class="side__list" aria-label="历史对话">
+    <!-- degraded 优先:记忆已启用但这次读不到(超时/Redis 无响应)→ 给方向 + 重试,而非谎称未启用 -->
+    <div v-if="historyDegraded" class="side__off side__off--warn">
+      <p class="side__off-msg">暂时读不到历史对话。<br />记忆服务无响应,请稍后重试。</p>
+      <button class="side__retry" type="button" :disabled="loading" @click="loadConversations">
+        重试
+      </button>
+    </div>
+
+    <nav v-else-if="historyEnabled" class="side__list" aria-label="历史对话">
       <p v-if="!conversations.length" class="side__empty">还没有历史对话。</p>
       <ul v-else class="side__ul">
         <li
@@ -218,6 +227,34 @@ function when(iso: string | null): string {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+}
+.side__off--warn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.side__off-msg {
+  margin: 0;
+}
+.side__retry {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.side__retry:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.side__retry:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .side__ul {
   margin: 0;

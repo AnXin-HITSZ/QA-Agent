@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SOP 流程 · 样式原型</title>
+<style>
+/* ============================================================
+   仅样式原型:纯前端、假数据、零后端。复用项目现有设计 token。
+   真实实现会拆成 Vue 组件、自托管字体、走后端 API。
+   ============================================================ */
+
+/* ---------- 设计令牌(取自 styles/tokens.css) ---------- */
+:root {
+  --paper: #edf1f1;
+  --surface: #ffffff;
+  --surface-2: #f4f7f7;
+  --ink: #17272e;
+  --muted: #5b6a70;
+  --line: #dae0e1;
+  --primary: #0e6e78;
+  --primary-strong: #0a555d;
+  --primary-tint: #e2eff0;
+  --seal: #9b2c2c;
+  --seal-tint: #f8ece9;
+  --on-primary: #ffffff;
+  --focus: #0e6e78;
+  --radius: 14px;
+  --radius-sm: 9px;
+  --radius-xs: 6px;
+  --maxw: 960px;
+  --shadow: 0 1px 2px rgba(23, 39, 46, 0.05), 0 18px 40px -28px rgba(23, 39, 46, 0.35);
+}
+:root[data-theme="dark"] {
+  --paper: #0f1719;
+  --surface: #16242a;
+  --surface-2: #1c2f36;
+  --ink: #e6ecee;
+  --muted: #9fb0b6;
+  --line: #26383f;
+  --primary: #35a7b3;
+  --primary-strong: #4cbcc7;
+  --primary-tint: #12343a;
+  --seal: #d9695c;
+  --seal-tint: #2c1d1c;
+  --on-primary: #06232a;
+  --focus: #35a7b3;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 20px 44px -30px rgba(0, 0, 0, 0.7);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
+    "Source Han Sans SC", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+.app { display: flex; flex-direction: column; height: 100%; }
+
+/* ---------- 页头(取自 AppHeader.vue) ---------- */
+.hd {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+  padding: 14px 24px 0; border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 72%, var(--paper));
+  backdrop-filter: blur(6px); position: sticky; top: 0; z-index: 5;
+}
+.hd__lead { display: flex; align-items: center; gap: 12px; padding-bottom: 13px; }
+.hd__mark { display: flex; align-items: baseline; gap: 10px; }
+.hd__name {
+  font-family: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  font-weight: 600; font-size: 19px; letter-spacing: 0.01em; color: var(--ink);
+}
+.hd__sub { font-family: "Space Grotesk", sans-serif; font-size: 12.5px; font-weight: 500; color: var(--muted); letter-spacing: 0.04em; }
+.hd__right { display: flex; align-items: flex-end; gap: 14px; }
+.hd__theme {
+  flex-shrink: 0; width: 34px; height: 34px; display: grid; place-items: center; margin-bottom: 6px;
+  border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--ink);
+  font-size: 15px; line-height: 1; cursor: pointer; transition: border-color 0.15s, color 0.15s;
+}
+.hd__theme:hover { border-color: var(--primary); color: var(--primary); }
+.hd__tabs { display: flex; align-items: flex-end; gap: 4px; }
+.hd__tab {
+  padding: 9px 18px; border: 1px solid transparent; border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0; margin-bottom: -1px;
+  background: transparent; color: var(--muted); font: inherit; font-size: 14px; line-height: 1.4;
+  cursor: pointer; white-space: nowrap; transition: color 0.15s, background 0.15s;
+}
+.hd__tab:hover { color: var(--ink); }
+.hd__tab.is-active {
+  color: var(--ink); font-weight: 600; background: var(--paper);
+  border-color: var(--line); box-shadow: inset 0 2px 0 var(--primary);
+}
+
+/* ---------- SOP 视图外壳 ---------- */
+.sv { flex: 1; overflow-y: auto; padding: 18px 20px 40px; }
+.sv__wrap { max-width: var(--maxw); margin: 0 auto; }
+.sv__bar { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.sv__title { margin: 0; font-family: "Space Grotesk", "IBM Plex Sans", sans-serif; font-size: 18px; font-weight: 600; color: var(--ink); }
+.sv__count { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; }
+.btn-primary {
+  display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 16px;
+  border: 1px solid var(--primary); border-radius: var(--radius-sm);
+  background: var(--primary); color: var(--on-primary); font: inherit; font-size: 14px; font-weight: 500;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.btn-primary:hover { background: var(--primary-strong); border-color: var(--primary-strong); }
+.btn-ghost {
+  display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 15px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ---------- SOP 卡片列表 ---------- */
+.sv__cards { display: flex; flex-direction: column; gap: 12px; }
+.sop {
+  position: relative; display: flex; overflow: hidden; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.sop:hover { border-color: color-mix(in srgb, var(--primary) 40%, var(--line)); box-shadow: var(--shadow); }
+.sop__spine { width: 4px; flex-shrink: 0; background: var(--primary); }
+.sop__body { flex: 1; min-width: 0; padding: 15px 18px 13px; }
+.sop__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sop__name { margin: 0; font-size: 16px; font-weight: 600; color: var(--ink); }
+.sop__id {
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--muted);
+  padding: 1px 6px; border: 1px solid var(--line); border-radius: var(--radius-xs); background: var(--surface-2);
+}
+.sop__desc { margin: 7px 0 10px; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+.sop__tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.chip--static {
+  padding: 2px 9px; border-radius: 999px; background: var(--primary-tint); color: var(--primary-strong);
+  font-size: 12px; line-height: 1.6;
+}
+.sop__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sop__meta { color: var(--muted); font-size: 12px; }
+.sop__act { display: flex; align-items: center; gap: 6px; }
+.sop__act .link {
+  border: 0; background: transparent; color: var(--primary); font: inherit; font-size: 13px; cursor: pointer;
+  padding: 4px 8px; border-radius: var(--radius-xs); transition: background 0.12s;
+}
+.sop__act .link:hover { background: var(--primary-tint); }
+.sop__act .link--del { color: var(--muted); }
+.sop__act .link--del:hover { color: var(--seal); background: var(--seal-tint); }
+
+/* ---------- 编辑器 ---------- */
+.ed__back {
+  display: inline-flex; align-items: center; gap: 4px; margin-bottom: 14px;
+  border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13.5px; cursor: pointer;
+}
+.ed__back:hover { color: var(--primary); }
+.ed__panel { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.ed__section { padding: 20px 22px; }
+.ed__section + .ed__section { border-top: 1px solid var(--line); }
+.ed__legend {
+  margin: 0 0 16px; font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 12.5px; font-weight: 600; letter-spacing: 0.02em; color: var(--muted);
+  text-transform: none;
+}
+.ed__legendrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.ed__legendrow .ed__legend { margin: 0; }
+.ed__tools { display: flex; align-items: center; gap: 10px; }
+
+.field { margin-bottom: 16px; }
+.field:last-child { margin-bottom: 0; }
+.field__label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--ink); }
+.field__req { color: var(--seal); margin-left: 2px; }
+.in {
+  width: 100%; height: 40px; padding: 0 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 14px; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.in:focus { outline: none; border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
+.in--mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; }
+.in:disabled { color: var(--muted); cursor: not-allowed; }
+.hint { margin: 6px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* 触发词 chip 输入 */
+.chips {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 40px;
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.chips:focus-within { border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px 3px 10px;
+  border-radius: 999px; background: var(--primary-tint); color: var(--primary-strong);
+  font-size: 12.5px; line-height: 1.6;
+}
+.chip__x {
+  display: grid; place-items: center; width: 16px; height: 16px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--primary-strong); font-size: 12px; cursor: pointer; opacity: 0.7;
+}
+.chip__x:hover { opacity: 1; background: color-mix(in srgb, var(--primary) 22%, transparent); }
+.chips__in { flex: 1; min-width: 120px; height: 28px; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13.5px; }
+.chips__in:focus { outline: none; }
+
+/* 正文编辑 / 预览 */
+.link-btn { border: 0; background: transparent; color: var(--primary); font: inherit; font-size: 13px; cursor: pointer; padding: 4px 6px; border-radius: var(--radius-xs); }
+.link-btn:hover { background: var(--primary-tint); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2); }
+.seg__btn { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 13px; padding: 6px 14px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.seg__btn.is-active { background: var(--surface); color: var(--primary); font-weight: 600; box-shadow: inset 0 -2px 0 var(--primary); }
+.ta {
+  width: 100%; min-height: 340px; padding: 14px 16px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink);
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; line-height: 1.7; resize: vertical;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.ta:focus { outline: none; border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
+.preview { min-height: 340px; padding: 4px 2px; }
+
+.ed__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+.btn-del-strong { border: 1px solid color-mix(in srgb, var(--seal) 40%, transparent); background: var(--surface); color: var(--seal); font: inherit; font-size: 14px; height: 38px; padding: 0 15px; border-radius: var(--radius-sm); cursor: pointer; }
+.btn-del-strong:hover { background: var(--seal-tint); }
+.ed__save { display: flex; align-items: center; gap: 8px; }
+
+/* ---------- 详情(只读查看) ---------- */
+.doc { position: relative; display: flex; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+.doc__spine { width: 4px; flex-shrink: 0; background: var(--primary); }
+.doc__body { flex: 1; min-width: 0; padding: 22px 26px 26px; }
+.doc__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.doc__name { margin: 0 0 8px; font-family: "Space Grotesk", "IBM Plex Sans", sans-serif; font-size: 22px; font-weight: 600; line-height: 1.25; color: var(--ink); }
+.doc__act { flex-shrink: 0; display: flex; gap: 8px; }
+.doc__desc { margin: 12px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.doc__tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.doc__meta { margin: 12px 0 0; color: var(--muted); font-size: 12.5px; }
+.doc__rule { margin: 18px 0 4px; border: none; border-top: 1px solid var(--line); }
+
+/* ---------- Markdown 渲染(取自 style.css .md) ---------- */
+.md { font-size: 15px; line-height: 1.75; color: var(--ink); overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { margin: 1.4em 0 0.5em; font-family: "Space Grotesk", "IBM Plex Sans", "Noto Sans SC", sans-serif; font-weight: 600; line-height: 1.3; color: var(--ink); }
+.md h2 { font-size: 1.25em; padding-bottom: 0.24em; border-bottom: 1px solid var(--line); }
+.md h3 { font-size: 1.08em; }
+.md h4 { font-size: 1em; color: var(--muted); }
+.md p { margin: 0.7em 0; }
+.md strong { font-weight: 600; }
+.md ul { margin: 0.7em 0; padding-left: 1.3em; }
+.md ul li { margin: 0.32em 0; }
+.md ul li::marker { color: var(--primary); }
+.md ol { margin: 0.9em 0; padding-left: 0; list-style: none; counter-reset: step; }
+.md ol > li { position: relative; min-height: 1.75em; margin: 0.55em 0; padding-left: 2.6em; counter-increment: step; }
+.md ol > li::before {
+  content: counter(step); position: absolute; left: 0; top: 0.02em; display: grid; place-items: center;
+  width: 1.75em; height: 1.75em; border-radius: var(--radius-xs); background: var(--primary); color: var(--on-primary);
+  font-family: "IBM Plex Sans", sans-serif; font-weight: 600; font-size: 0.82em;
+}
+.md blockquote { margin: 0.9em 0; padding: 0.7em 1em; border-left: 3px solid var(--seal); border-radius: 0 var(--radius-xs) var(--radius-xs) 0; background: var(--seal-tint); color: var(--ink); }
+.md blockquote > :first-child { margin-top: 0; }
+.md blockquote > :last-child { margin-bottom: 0; }
+.md table { display: block; width: max-content; max-width: 100%; margin: 0.9em 0; overflow-x: auto; border-collapse: collapse; font-size: 0.95em; }
+.md th, .md td { padding: 7px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.md thead th { background: var(--surface-2); font-weight: 600; color: var(--ink); }
+.md tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+.md hr { margin: 1.4em 0; border: none; border-top: 1px solid var(--line); }
+.md :not(pre) > code { padding: 0.12em 0.4em; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-2); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.88em; }
+
+.hidden { display: none !important; }
+
+@media (max-width: 640px) {
+  .ed__foot { flex-direction: column-reverse; align-items: stretch; }
+  .ed__save { justify-content: flex-end; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 页头:第三个折页标签「SOP 流程」处于活动态 -->
+  <header class="hd">
+    <div class="hd__lead">
+      <div class="hd__mark">
+        <span class="hd__name">实验室问答</span>
+        <span class="hd__sub">Lab Assistant</span>
+      </div>
+    </div>
+    <div class="hd__right">
+      <nav class="hd__tabs" aria-label="视图切换">
+        <button class="hd__tab" type="button">对话</button>
+        <button class="hd__tab" type="button">知识库</button>
+        <button class="hd__tab is-active" type="button" aria-current="page">SOP 流程</button>
+      </nav>
+      <button class="hd__theme" type="button" id="themeBtn" aria-label="切换主题">☾</button>
+    </div>
+  </header>
+
+  <!-- ============ 列表视图 ============ -->
+  <main class="sv" id="listView">
+    <div class="sv__wrap">
+      <div class="sv__bar">
+        <div>
+          <h2 class="sv__title">SOP 流程</h2>
+          <p class="sv__count" id="listCount"></p>
+        </div>
+        <button class="btn-primary" type="button" id="newBtn">
+          <span aria-hidden="true">＋</span> 新建 SOP
+        </button>
+      </div>
+      <div class="sv__cards" id="cards"></div>
+    </div>
+  </main>
+
+  <!-- ============ 详情视图(只读) ============ -->
+  <main class="sv hidden" id="detailView">
+    <div class="sv__wrap">
+      <button class="ed__back" type="button" id="dBack"><span aria-hidden="true">‹</span> 返回列表</button>
+      <article class="doc">
+        <div class="doc__spine"></div>
+        <div class="doc__body">
+          <div class="doc__head">
+            <div>
+              <h2 class="doc__name" id="dName"></h2>
+              <code class="sop__id" id="dId"></code>
+            </div>
+            <div class="doc__act">
+              <button class="btn-ghost" type="button" id="dEdit">编辑</button>
+            </div>
+          </div>
+          <p class="doc__desc" id="dDesc"></p>
+          <div class="doc__tags" id="dTags"></div>
+          <p class="doc__meta" id="dMeta"></p>
+          <hr class="doc__rule" />
+          <div class="md" id="dBody"></div>
+        </div>
+      </article>
+    </div>
+  </main>
+
+  <!-- ============ 编辑视图 ============ -->
+  <main class="sv hidden" id="editView">
+    <div class="sv__wrap">
+      <button class="ed__back" type="button" id="backBtn"><span aria-hidden="true">‹</span> 返回列表</button>
+
+      <div class="ed__panel">
+        <!-- 基本信息 -->
+        <div class="ed__section">
+          <p class="ed__legend" id="edTitle">新建 SOP</p>
+
+          <div class="field">
+            <label class="field__label" for="fId">标识 ID<span class="field__req">*</span></label>
+            <input class="in in--mono" id="fId" placeholder="例如 travel-reimbursement" />
+            <p class="hint">仅小写字母、数字与连字符;作为 OSS 内的文件名(<code>sops/&lt;id&gt;.md</code>),创建后不可修改。</p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="fName">名称<span class="field__req">*</span></label>
+            <input class="in" id="fName" placeholder="例如 差旅费报销" />
+          </div>
+          <div class="field">
+            <label class="field__label" for="fDesc">简介</label>
+            <input class="in" id="fDesc" placeholder="一句话说明这篇流程解决什么问题" />
+          </div>
+          <div class="field">
+            <label class="field__label">触发词</label>
+            <div class="chips" id="chips">
+              <input class="chips__in" id="chipsIn" placeholder="输入后回车添加" />
+            </div>
+            <p class="hint">用户提问命中这些关键词时,更容易匹配到本流程。回车添加,点 ✕ 删除。</p>
+          </div>
+        </div>
+
+        <!-- 正文 -->
+        <div class="ed__section">
+          <div class="ed__legendrow">
+            <p class="ed__legend">正文(Markdown)</p>
+            <div class="ed__tools">
+              <button class="link-btn" type="button" id="tplBtn">插入标准章节</button>
+              <div class="seg" role="tablist" aria-label="正文视图">
+                <button class="seg__btn is-active" type="button" data-mode="edit">编辑</button>
+                <button class="seg__btn" type="button" data-mode="preview">预览</button>
+              </div>
+            </div>
+          </div>
+          <textarea class="ta" id="fBody" placeholder="用 Markdown 书写流程正文……"></textarea>
+          <div class="md preview hidden" id="preview"></div>
+        </div>
+      </div>
+
+      <div class="ed__foot">
+        <button class="btn-del-strong hidden" type="button" id="delBtn">删除此 SOP</button>
+        <span id="delSpacer"></span>
+        <div class="ed__save">
+          <button class="btn-ghost" type="button" id="cancelBtn">取消</button>
+          <button class="btn-primary" type="button" id="saveBtn">保存</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ---------- 假数据 ---------- */
+const SOPS = [
+  {
+    id: "travel-reimbursement",
+    name: "差旅费报销",
+    description: "校内教职工及研究生因公出差的交通、住宿及补助报销流程。",
+    triggers: ["出差", "高铁", "差旅", "住宿", "报销"],
+    updated: "2026-09-18",
+    body: `## 适用范围
+
+校内教职工及研究生因公出差,产生的交通、住宿、市内交通及伙食补助等费用的报销。
+
+## 所需材料
+
+| 材料 | 说明 |
+| --- | --- |
+| 出差审批单 | 出行前经导师与科研秘书签字 |
+| 交通票据 | 高铁 / 飞机行程单原件 |
+| 住宿发票 | 增值税普通发票,抬头为学校全称 |
+| 会议通知 | 参会类出差需附邀请函或通知 |
+
+## 办理步骤
+
+1. 登录财务综合信息门户,进入「差旅费报销」模块。
+2. 按行程逐笔录入交通与住宿费用,上传票据扫描件。
+3. 生成报销单并打印,将票据原件粘贴于粘贴单。
+4. 交导师签字后送科研秘书初审。
+5. 提交财务处窗口终审,等待打款。
+
+## 注意事项
+
+> 发票抬头必须为「哈尔滨工业大学(深圳)」全称,个人抬头不予报销。
+
+> 出差结束后 30 天内完成报销,逾期需附情况说明。`,
+  },
+  {
+    id: "supplies-reimbursement",
+    name: "办公用品报销",
+    description: "实验室办公与低值耗材采购后的报销流程。",
+    triggers: ["办公用品", "耗材", "采购", "报销"],
+    updated: "2026-09-15",
+    body: `## 适用范围
+
+实验室日常办公用品、低值易耗品的自购报销(单笔 500 元以下)。
+
+## 所需材料
+
+| 材料 | 说明 |
+| --- | --- |
+| 购物清单 | 注明品名、数量、单价 |
+| 增值税发票 | 抬头为学校全称,附税号 |
+| 验收记录 | 到货后由课题组登记 |
+
+## 办理步骤
+
+1. 采购前在课题组群内报备预算。
+2. 保留发票与清单,登录报销系统录入。
+3. 交导师签字后提交科研秘书。
+
+## 注意事项
+
+> 单笔超过 500 元的采购须先走线上审批,不得拆分发票规避限额。`,
+  },
+];
+
+const TEMPLATE = `## 适用范围
+
+## 所需材料
+
+## 办理步骤
+
+## 注意事项
+`;
+
+/* ---------- 极简 Markdown 渲染(仅够原型预览;真实版用 markdown-it) ---------- */
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function inline(s){return esc(s).replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>");}
+function splitRow(l){let s=l.trim();if(s.startsWith("|"))s=s.slice(1);if(s.endsWith("|"))s=s.slice(0,-1);return s.split("|").map(c=>c.trim());}
+function isSpecial(l){return !l.trim()||/^(#{1,6})\s/.test(l)||/^\s*>/.test(l)||/^\s*\d+\.\s/.test(l)||/^\s*[-*]\s/.test(l)||/^\s*---+\s*$/.test(l)||l.trim().startsWith("|");}
+function renderMarkdown(src){
+  const lines=(src||"").replace(/\r\n/g,"\n").split("\n");
+  const out=[];let i=0;
+  const isSep=s=>s.includes("-")&&/^\s*\|?[\s:\-|]+\|?\s*$/.test(s);
+  while(i<lines.length){
+    const line=lines[i];
+    if(!line.trim()){i++;continue;}
+    let m=line.match(/^(#{1,6})\s+(.*)$/);
+    if(m){const lv=Math.min(m[1].length,4);out.push(`<h${lv}>${inline(m[2])}</h${lv}>`);i++;continue;}
+    if(/^\s*---+\s*$/.test(line)){out.push("<hr>");i++;continue;}
+    if(line.trim().startsWith("|")&&i+1<lines.length&&isSep(lines[i+1])){
+      const head=splitRow(line);i+=2;const rows=[];
+      while(i<lines.length&&lines[i].trim().startsWith("|")){rows.push(splitRow(lines[i]));i++;}
+      let t="<table><thead><tr>"+head.map(c=>`<th>${inline(c)}</th>`).join("")+"</tr></thead><tbody>";
+      for(const r of rows)t+="<tr>"+r.map(c=>`<td>${inline(c)}</td>`).join("")+"</tr>";
+      out.push(t+"</tbody></table>");continue;
+    }
+    if(/^\s*>\s?/.test(line)){
+      const buf=[];while(i<lines.length&&/^\s*>\s?/.test(lines[i])){buf.push(lines[i].replace(/^\s*>\s?/,""));i++;}
+      out.push("<blockquote>"+renderMarkdown(buf.join("\n"))+"</blockquote>");continue;
+    }
+    if(/^\s*\d+\.\s+/.test(line)){
+      const buf=[];while(i<lines.length&&/^\s*\d+\.\s+/.test(lines[i])){buf.push(lines[i].replace(/^\s*\d+\.\s+/,""));i++;}
+      out.push("<ol>"+buf.map(x=>`<li>${inline(x)}</li>`).join("")+"</ol>");continue;
+    }
+    if(/^\s*[-*]\s+/.test(line)){
+      const buf=[];while(i<lines.length&&/^\s*[-*]\s+/.test(lines[i])){buf.push(lines[i].replace(/^\s*[-*]\s+/,""));i++;}
+      out.push("<ul>"+buf.map(x=>`<li>${inline(x)}</li>`).join("")+"</ul>");continue;
+    }
+    const buf=[];while(i<lines.length&&!isSpecial(lines[i])){buf.push(lines[i]);i++;}
+    out.push("<p>"+inline(buf.join(" "))+"</p>");
+  }
+  return out.join("\n");
+}
+
+/* ---------- 视图逻辑 ---------- */
+const $ = id => document.getElementById(id);
+let triggers = [];
+let currentSop = null;
+
+function renderList(){
+  $("listCount").textContent = `共 ${SOPS.length} 篇流程 · 存于 OSS「sops/」前缀`;
+  $("cards").innerHTML = SOPS.map((s, idx) => `
+    <article class="sop" data-open="${idx}" title="查看详情">
+      <div class="sop__spine"></div>
+      <div class="sop__body">
+        <div class="sop__head">
+          <h3 class="sop__name">${esc(s.name)}</h3>
+          <code class="sop__id">${esc(s.id)}</code>
+        </div>
+        <p class="sop__desc">${esc(s.description)}</p>
+        <div class="sop__tags">${s.triggers.map(t=>`<span class="chip--static">${esc(t)}</span>`).join("")}</div>
+        <div class="sop__foot">
+          <span class="sop__meta">更新于 ${esc(s.updated)}</span>
+          <div class="sop__act">
+            <button class="link" type="button" data-view="${idx}">查看</button>
+            <button class="link" type="button" data-edit="${idx}">编辑</button>
+            <button class="link link--del" type="button" data-del="${idx}">删除</button>
+          </div>
+        </div>
+      </div>
+    </article>`).join("");
+  document.querySelectorAll("[data-open]").forEach(c =>
+    c.addEventListener("click", () => openDetail(SOPS[+c.dataset.open])));
+  document.querySelectorAll("[data-view]").forEach(b =>
+    b.addEventListener("click", e => { e.stopPropagation(); openDetail(SOPS[+b.dataset.view]); }));
+  document.querySelectorAll("[data-edit]").forEach(b =>
+    b.addEventListener("click", e => { e.stopPropagation(); openEditor(SOPS[+b.dataset.edit]); }));
+  document.querySelectorAll("[data-del]").forEach(b =>
+    b.addEventListener("click", e => { e.stopPropagation(); alert("原型:此处将弹出印泥红二次确认并调用 DELETE。"); }));
+}
+
+function renderChips(){
+  const box = $("chips");
+  box.querySelectorAll(".chip").forEach(n => n.remove());
+  const input = $("chipsIn");
+  triggers.forEach((t, i) => {
+    const el = document.createElement("span");
+    el.className = "chip";
+    el.innerHTML = `${esc(t)}<button class="chip__x" type="button" aria-label="删除">✕</button>`;
+    el.querySelector("button").addEventListener("click", () => { triggers.splice(i,1); renderChips(); });
+    box.insertBefore(el, input);
+  });
+}
+
+function setMode(mode){
+  const editing = mode === "edit";
+  $("fBody").classList.toggle("hidden", !editing);
+  $("preview").classList.toggle("hidden", editing);
+  if(!editing) $("preview").innerHTML = renderMarkdown($("fBody").value);
+  document.querySelectorAll(".seg__btn").forEach(b => b.classList.toggle("is-active", b.dataset.mode === mode));
+}
+
+function openDetail(sop){
+  currentSop = sop;
+  $("dName").textContent = sop.name;
+  $("dId").textContent = sop.id;
+  $("dDesc").textContent = sop.description;
+  $("dTags").innerHTML = sop.triggers.map(t=>`<span class="chip--static">${esc(t)}</span>`).join("");
+  $("dMeta").textContent = `更新于 ${sop.updated} · 存于 sops/${sop.id}.md`;
+  $("dBody").innerHTML = renderMarkdown(sop.body);
+  $("listView").classList.add("hidden");
+  $("editView").classList.add("hidden");
+  $("detailView").classList.remove("hidden");
+  window.scrollTo(0,0);
+}
+
+function openEditor(sop){
+  const isNew = !sop;
+  currentSop = sop || null;
+  $("edTitle").textContent = isNew ? "新建 SOP" : "编辑 SOP";
+  $("fId").value = sop ? sop.id : "";
+  $("fId").disabled = !isNew;
+  $("fName").value = sop ? sop.name : "";
+  $("fDesc").value = sop ? sop.description : "";
+  $("fBody").value = sop ? sop.body : "";
+  triggers = sop ? [...sop.triggers] : [];
+  renderChips();
+  setMode("edit");
+  $("delBtn").classList.toggle("hidden", isNew);
+  $("listView").classList.add("hidden");
+  $("detailView").classList.add("hidden");
+  $("editView").classList.remove("hidden");
+  window.scrollTo(0,0);
+}
+
+function showList(){
+  $("editView").classList.add("hidden");
+  $("detailView").classList.add("hidden");
+  $("listView").classList.remove("hidden");
+}
+
+/* ---------- 事件绑定 ---------- */
+$("newBtn").addEventListener("click", () => openEditor(null));
+$("backBtn").addEventListener("click", showList);
+$("cancelBtn").addEventListener("click", () => { if(currentSop) openDetail(currentSop); else showList(); });
+$("dBack").addEventListener("click", showList);
+$("dEdit").addEventListener("click", () => openEditor(currentSop));
+$("saveBtn").addEventListener("click", () => { alert("原型:此处将调用后端保存接口(POST/PUT)。"); showList(); });
+$("delBtn").addEventListener("click", () => alert("原型:此处将弹出印泥红二次确认并调用 DELETE。"));
+$("tplBtn").addEventListener("click", () => {
+  const ta = $("fBody");
+  ta.value = (ta.value.trim() ? ta.value.replace(/\s*$/,"") + "\n\n" : "") + TEMPLATE;
+  ta.focus();
+});
+$("chipsIn").addEventListener("keydown", e => {
+  if(e.key === "Enter"){ e.preventDefault(); const v = e.target.value.trim(); if(v && !triggers.includes(v)){ triggers.push(v); renderChips(); } e.target.value = ""; }
+  else if(e.key === "Backspace" && !e.target.value && triggers.length){ triggers.pop(); renderChips(); }
+});
+document.querySelectorAll(".seg__btn").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+$("themeBtn").addEventListener("click", () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+  $("themeBtn").textContent = dark ? "☾" : "☀";
+});
+
+renderList();
+</script>
+</body>
+</html>

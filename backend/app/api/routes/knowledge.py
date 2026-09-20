@@ -50,14 +50,23 @@ def _norm(prefix: str) -> str:
 
 @contextmanager
 def _dep_503():
-    """把依赖"未配置"错误(RuntimeError)转成 503:OSS(get_bucket)/ Qdrant / Embeddings。
+    """把依赖错误转成对应 HTTP 状态,而非裸 500:
 
-    前端据此提示"存储 / 索引未接通";其余错误照常上抛为 500。
+    - 未配置(RuntimeError)→ 503:OSS(get_bucket)/ Qdrant / Embeddings,前端提示"存储 / 索引未接通";
+    - 真实 OSS 调用失败(oss2 的 OssError:拒绝访问 / 桶不存在 / 网络不通等)→ 502,
+      并回传一句可读成因(如"请检查 RAM 是否授权 knowledge/ 前缀"),前端就地显示"载入失败";
+    - 其余错误照常上抛为 500。
     """
     try:
         yield
     except RuntimeError as exc:  # .env 缺 OSS_* / QDRANT_URL / EMBEDDINGS_* 等连接信息
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 —— 仅翻译 oss2 的调用错误,其余原样上抛
+        if oss.is_oss_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=oss.oss_error_detail(exc)
+            ) from exc
+        raise
 
 
 def _drop_vectors(key: str) -> None:
@@ -76,7 +85,7 @@ def _drop_vectors(key: str) -> None:
 def get_tree(prefix: str = "") -> KnowledgeTree:
     """列某节点下直接一层(子分类节点 + 文件),供前端逐层展开分类树。"""
     with _dep_503():
-        result = oss.list_children(prefix)
+        result = oss.knowledge_store().list_children(prefix)
     return KnowledgeTree(
         prefix=_norm(prefix),
         folders=result["folders"],
@@ -96,7 +105,7 @@ def create_folder(body: CreateFolderRequest) -> CreateFolderResult:
         )
     node = parent + name
     with _dep_503():
-        oss.put_folder_marker(node)  # 落成零字节、以 / 结尾的目录标记对象
+        oss.knowledge_store().put_folder_marker(node)  # 落成零字节、以 / 结尾的目录标记对象
     return CreateFolderResult(prefix=node + "/")
 
 
@@ -113,6 +122,7 @@ def upload_files(
     p = _norm(prefix)
     items: list[UploadResultItem] = []
     with _dep_503():
+        kb = oss.knowledge_store()
         for f in files:
             # 只取文件名基名:防御浏览器/客户端塞进路径分隔符(多选文件正常只给文件名)。
             name = (f.filename or "").replace("\\", "/").split("/")[-1].strip()
@@ -120,11 +130,11 @@ def upload_files(
                 items.append(UploadResultItem(name=f.filename or "", key="", status="rejected"))
                 continue
             key = p + name
-            if oss.object_exists(key):
+            if kb.object_exists(key):
                 items.append(UploadResultItem(name=name, key=key, status="skipped_exists"))
                 continue
             data = f.file.read()  # 同步处理器,直接读底层文件对象(FastAPI 已在线程池中跑本函数)
-            oss.put_object(key, data, content_type=f.content_type or None, meta={"title": name})
+            kb.put_object(key, data, content_type=f.content_type or None, meta={"title": name})
             items.append(UploadResultItem(name=name, key=key, status="uploaded"))
     return UploadResult(prefix=p, items=items)
 
@@ -139,7 +149,7 @@ def delete_file(key: str) -> Response:
             detail="key 不能为空、且不能以 / 结尾(删分类节点请用 DELETE /folder)",
         )
     with _dep_503():
-        oss.delete_object(k)
+        oss.knowledge_store().delete_object(k)
     _drop_vectors(k)  # 连带清该文件的向量(best-effort,不阻断)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -154,8 +164,9 @@ def delete_folder(prefix: str) -> DeleteFolderResult:
             detail="删除节点必须指定非空 prefix(不允许一键清空整个知识库)",
         )
     with _dep_503():
-        keys = [f["key"] for f in oss.list_all(p)]  # 删前拿到子树文件清单,供连带清向量
-        n = oss.delete_prefix(p)
+        kb = oss.knowledge_store()
+        keys = [f["key"] for f in kb.list_all(p)]  # 删前拿到子树文件清单,供连带清向量
+        n = kb.delete_prefix(p)
     for k in keys:  # best-effort 清理每个文件的向量(不阻断)
         _drop_vectors(k)
     return DeleteFolderResult(prefix=p, deleted=n)

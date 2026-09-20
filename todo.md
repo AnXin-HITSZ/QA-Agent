@@ -36,6 +36,29 @@
 
 ---
 
+## SOP 上 OSS + 前端 CRUD —— ✅ DONE(2026-09-20,待用户功能性验证)
+
+> **目标**:把 SOP(标准作业流程)从本地 `backend/sops/*.md` 迁到阿里云 OSS(与知识库**同桶、不同前缀** `sops/`),后端提供查看 + 编辑的 CRUD 接口,前端给用户看 SOP 并做增删改查。
+
+### 已确认的设计决定(2026-09-20)
+
+- **OSS 前缀参数化**:把 OSS 增删改查抽成共享工具,SOP 与知识库都调它,**前缀作为独立参数注入**。落地 = `OssStore(prefix)` 类 + `knowledge_store()` / `sops_store()` 两个单例工厂。
+- **SOP 表示**:按 SOP 文档真实结构做**结构化表单**(id / name / description / triggers / 正文 body),前端**不用原始表单样式**,做美化后的表单 UI。
+- **无本地兜底**:不保留本地目录读取,完全重构为 OSS 读。
+- **废弃字段 `sops_dir` 直接删除**(第 2 步随 loader 重写一并删)。
+- **不迁移现有 `backend/sops/*.md`**:那是测试文档,不迁。
+- **前端布局:全屏三态切换版**(列表 → 详情 → 编辑),即 `frontend/mockups/sop-view.html` 原型;非左右分栏(`sop-view-split.html` 为已否决备选,保留作参考)。
+
+### 步骤与进度(一步一步;不用工作流)
+
+- **1 后端 OSS util 重构** ✅ DONE(2026-09-20)—— [oss.py](backend/app/rag/oss.py) 从单一硬编码根前缀重写为 `OssStore(prefix)` 类(前缀作独立参数,`_full`/`_rel` 及全部增删改查/签名/连通性自检收为实例方法;`get_bucket()`、`_encode_meta`、`_META_PREFIX` 仍模块级,桶与前缀无关全局共用)+ `knowledge_store()`(`oss_prefix`,默 `knowledge/`)/ `sops_store()`(`oss_sops_prefix`,默 `sops/`)两个 `@lru_cache` 工厂。构造只记归一化前缀、不连 OSS(未配也能实例化,只有调方法命中 `get_bucket()` 才抛 → 优雅降级契约不变)。[config.py](backend/app/config.py) 加 `oss_sops_prefix="sops/"`(`sops_dir` 留第 2 步删)。11 处调用点(knowledge.py×7 / ingest.py×3 / chat.py×1)全改为 `oss.knowledge_store().X()`,知识库行为与重构前**逐字不变**(同前缀、同逻辑)。验证:5 文件 py_compile 通过;`qa-agent` 环境 `pytest` 23 passed;工厂前缀隔离与 `_full` 拼接自检正确。
+- **2 config + loader 重写** ✅ DONE(2026-09-20)—— [config.py](backend/app/config.py) 删 `sops_dir` 字段;[loader.py](backend/app/skills/loader.py) 从「本地 `sops/*.md` 目录」改为读 `oss.sops_store()`(`list_all()` 拿 `.md` 清单 → `get_object` → `frontmatter.loads`),`lru_cache` 与 `get_catalog/get_skill/reload` **签名逐字不变**(search.py/tools.py/trace.py/chat.py 零改)。**优雅降级**:OSS 未配(`get_bucket` RuntimeError)/ 不可达 → `_load()` 兜 `except Exception` 返回空目录;单篇坏文件跳过并告警不影响整表。文档同步:[.env.example](backend/.env.example) 删 `SOPS_DIR`、在 OSS 段加 `OSS_SOPS_PREFIX=sops/`;[README.md](backend/README.md) 目录结构去掉本地 `sops/`、loader 描述改「从 OSS sops/ 前缀读」。测试改造:SOP 已迁 OSS,不能再靠本地临时目录注入 → 新增 [tests/conftest.py](backend/tests/conftest.py)(`FakeSopsStore` 内存假仓库 + `install_sops` 夹具接管 `app.rag.oss.sops_store`),[test_skills](backend/tests/test_skills.py)/[test_search](backend/tests/test_search.py)/[test_trace](backend/tests/test_trace.py)/[test_stream](backend/tests/test_stream.py) 的 `SOPS_DIR`+tmp_path 注入全改为 `install_sops({...})`。验证:py_compile 通过;`qa-agent` 环境 `pytest` **23 passed**;降级路径实测 `reload()`→0、catalog 空、不抛异常。
+- **3 迁移** —— 跳过(测试文档,不迁)。
+- **4 后端 SOP CRUD 路由** ✅ DONE(2026-09-20)—— [skill.py](backend/app/schemas/skill.py) 加 `SopSummary`(id/name/description/triggers/key/updated_at)/`SopDetail`(+body)/`SopWrite`(id/name/description/triggers/body)。[oss.py](backend/app/rag/oss.py) `OssStore` 补 `stat(key)`(head 取 size+最后修改 Unix 秒,不存在返回 None,供详情时间戳/存在性判断)。新增 [sops.py](backend/app/api/routes/sops.py) 挂 `/api/v1/sops`:`GET`(列表,不含正文,按 id 升序,单篇坏文件跳过告警)、`GET /{id}`(详情,404)、`POST`(201,重名 409,非法 id 400)、`PUT /{id}`(404,路径 id≠内容 id→400)、`DELETE /{id}`(204,404);每次写后 `loader.reload()` 让 LLM 侧目录即时同步。约定:每篇 = OSS `sops/<id>.md`(YAML frontmatter + 正文),id 即文件名、**不支持改名**(要改删旧建新);id 白名单 `^[A-Za-z0-9][A-Za-z0-9_-]*$` 挡路径穿越;`frontmatter.dumps/loads` 序列化;同步 `def` 走线程池;OSS 未配(`get_bucket` RuntimeError)→ 503。[main.py](backend/app/main.py) 挂 `sops.router`。测试:[conftest.py](backend/tests/conftest.py) 的 `FakeSopsStore` 扩到 object_exists/put_object/delete_object/stat + `prefix`;新增 [test_sops.py](backend/tests/test_sops.py) 13 项(列表/详情/新建/更新/删除全路径 + 409/400/404 + 写后 loader 即时同步)。验证:py_compile 通过;`qa-agent` 环境 `pytest` **36 passed**。
+- **5 前端 SopView** ✅ DONE(2026-09-20)—— [api.ts](frontend/src/api.ts) 加 `SopSummary`/`SopDetail`/`SopWrite` 类型 + `listSops`/`getSop`/`createSop`/`updateSop`/`deleteSop`(复用 `kfetchJson`/`kfetchVoid`,503→`ApiError`)。新增 [useSops.ts](frontend/src/composables/useSops.ts) 模块级单例:`list`/`loading`/`error`/`storageEnabled`(503→false 走空态)/`loaded`/`mode`(list|detail|editor)/`current`/`editingNew`/`detailLoading`/`detailError`/`saving`/`saveError` + `loadList`/`showList`/`openDetail`/`openEditor(id?)`/`save`(create/update→刷新列表→跳详情)/`remove`。新增 [styles/sop.css](frontend/src/styles/sop.css)(取自已批准原型,SOP 专属类;不重定义全局 `.md`/页头/令牌;内容栏 960px 写死)+ [SopView.vue](frontend/src/components/SopView.vue)(编排:按 mode 切三子视图,onMounted 首屏载一次)+ [SopList.vue](frontend/src/components/SopList.vue)(卡片列表 + 行内删除确认 + 存储未接通/失败/空态)+ [SopDetail.vue](frontend/src/components/SopDetail.vue)(`.doc` 只读 + `MarkdownView` 正文 + 「更新于 X · 存于 sops/id.md」)+ [SopEditor.vue](frontend/src/components/SopEditor.vue)(id/name/desc 字段 + triggers 芯片输入回车加/Backspace删 + 插入标准章节 + 编辑/预览切换 + 就地保存/删除确认;id 客户端预校验 `^[A-Za-z0-9][A-Za-z0-9_-]*$`,编辑既有篇时 id 禁改)。[AppHeader.vue](frontend/src/components/AppHeader.vue) 加第三折页标签「SOP 流程」;[App.vue](frontend/src/App.vue) View 加 `sops`、`viewFromHash` 认 `#/sops`、`viewComponent` computed 三视图映射进 KeepAlive。验证:`npm run build`(vue-tsc)**通过**,无类型错误。待用户功能性验证。
+
+---
+
 ## 前端界面打磨
 
 - **标签卡导航 + 切换保活 + 空态居中** ✅ DONE(2026-09-20)—— 「对话 / 知识库」从分段胶囊(`.hd__seg`)改为**折页标签(方案 A)**:标签在页头右侧,活动标签白底(=内容区 `--paper` 同色)、去下边框、`margin-bottom:-1px` 压在页头底线上 + 顶部 `inset 0 2px var(--primary)` 科研青,与内容连成一体(页头改 `align-items:flex-end`,lead/theme 靠 padding/margin 抬离底线视觉齐平)。

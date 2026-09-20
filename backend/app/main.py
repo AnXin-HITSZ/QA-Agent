@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import chat, conversations, health, knowledge
+from app.api.routes import chat, conversations, health, knowledge, sops
 from app.config import get_settings
 from app.graph import build_graph
 
@@ -78,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(knowledge.router)
     app.include_router(knowledge.admin_router)
+    app.include_router(sops.router)
     return app
 
 

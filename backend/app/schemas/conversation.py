@@ -18,7 +18,8 @@ class ConversationSummary(BaseModel):
 
 
 class ConversationList(BaseModel):
-    enabled: bool = Field(..., description="Redis 跨轮记忆是否开启;false 时 items 恒为空")
+    enabled: bool = Field(..., description="Redis 跨轮记忆是否配置启用;false 表示未配置(单轮模式)")
+    degraded: bool = Field(default=False, description="已启用但本次读取失败(超时/Redis 错误);true 时 items 恒空,前端提示重试")
     items: list[ConversationSummary] = Field(default_factory=list, description="会话摘要,最近活跃在前")
 
 

@@ -13,15 +13,12 @@
 
 ```
 backend/
-  sops/                   Skill 库(每个 .md 一个 SOP:frontmatter + 正文)
-    travel-reimbursement.md
-    supplies-reimbursement.md
   app/
     main.py               FastAPI 入口(CORS + 路由)
-    config.py             配置(读取 .env,含 LLM 连接参数、SOPS_DIR)
+    config.py             配置(读取 .env,含 LLM 连接参数、OSS 前缀)
     llm.py                get_llm():从 .env 建 ChatOpenAI(需真实 LLM_API_KEY)
     skills/
-      loader.py           扫描 sops/*.md → get_catalog() / get_skill(id) / reload()
+      loader.py           从 OSS sops/ 前缀读 *.md → get_catalog() / get_skill(id) / reload()
       search.py           search_sops(query, top_k):字段加权打分的纯检索函数
     graph/
       state.py            ChatState(messages:add_messages 累积 ReAct 轨迹)

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useTheme } from "../composables/useTheme";
 
-type View = "chat" | "knowledge";
+type View = "chat" | "knowledge" | "sops";
 
 defineProps<{ view: View }>();
 const emit = defineEmits<{
@@ -39,6 +39,15 @@ const { theme, toggle } = useTheme();
           @click="emit('change-view', 'knowledge')"
         >
           知识库
+        </button>
+        <button
+          class="hd__tab"
+          type="button"
+          :class="{ 'is-active': view === 'sops' }"
+          :aria-current="view === 'sops' ? 'page' : undefined"
+          @click="emit('change-view', 'sops')"
+        >
+          SOP 流程
         </button>
       </nav>
       <button

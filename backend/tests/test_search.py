@@ -1,8 +1,6 @@
-"""SOP 检索纯函数 + 工具单测(不涉及 LLM)。"""
+"""SOP 检索纯函数 + 工具单测(不涉及 LLM;SOP 经内存假仓库注入,见 conftest.install_sops)。"""
 
-from app.config import get_settings
 from app.graph.tools import get_sop, search_sops as search_sops_tool
-from app.skills import loader
 from app.skills.search import search_sops
 
 _TRAVEL = """---
@@ -32,17 +30,11 @@ triggers:
 2. 附发票
 """
 
-
-def _prepare(tmp_path, monkeypatch):
-    (tmp_path / "travel.md").write_text(_TRAVEL, encoding="utf-8")
-    (tmp_path / "supplies.md").write_text(_SUPPLIES, encoding="utf-8")
-    monkeypatch.setenv("SOPS_DIR", str(tmp_path))
-    get_settings.cache_clear()
-    loader.reload()
+_FILES = {"travel.md": _TRAVEL, "supplies.md": _SUPPLIES}
 
 
-def test_search_ranks_by_relevance(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_search_ranks_by_relevance(install_sops):
+    install_sops(_FILES)
     hits = search_sops("高铁")
     assert hits
     assert hits[0].id == "travel"  # 命中触发词,排最前
@@ -50,32 +42,32 @@ def test_search_ranks_by_relevance(tmp_path, monkeypatch):
     assert {h.id for h in hits} == {"travel"}  # supplies 不命中,被排除
 
 
-def test_search_empty_lists_all(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_search_empty_lists_all(install_sops):
+    install_sops(_FILES)
     hits = search_sops("")
     assert {h.id for h in hits} == {"travel", "supplies"}
 
 
-def test_search_no_match_returns_empty(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_search_no_match_returns_empty(install_sops):
+    install_sops(_FILES)
     assert search_sops("量子计算机维修") == []
 
 
-def test_search_top_k_limits(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_search_top_k_limits(install_sops):
+    install_sops(_FILES)
     assert len(search_sops("", top_k=1)) == 1
 
 
-def test_search_tool_text_output(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_search_tool_text_output(install_sops):
+    install_sops(_FILES)
     out = search_sops_tool.invoke({"query": "高铁"})
     assert "id: travel" in out
     empty = search_sops_tool.invoke({"query": "不存在的东西"})
     assert "没有找到" in empty
 
 
-def test_get_sop_tool(tmp_path, monkeypatch):
-    _prepare(tmp_path, monkeypatch)
+def test_get_sop_tool(install_sops):
+    install_sops(_FILES)
     out = get_sop.invoke({"skill_id": "travel"})
     assert "差旅报销" in out and "填报销单" in out
     missing = get_sop.invoke({"skill_id": "nope"})
