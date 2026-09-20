@@ -1,0 +1,23 @@
+[Unit]
+Description=Lab QA Assistant (FastAPI / uvicorn)
+# 本地依赖:Redis(跨轮记忆)、Docker 里的 Qdrant(向量库)。这里只是 best-effort 排序:
+# 即便它们晚起或没起,后端也会优雅降级(见 app/main.py 的 lifespan),不会起不来。
+After=network-online.target redis-server.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=__USER__
+Group=__USER__
+# 关键:工作目录必须是 backend/,pydantic-settings 才能就地读到 .env
+#      (config.py 里 env_file=".env" 是相对路径,相对本目录解析)。
+WorkingDirectory=__HOME__/qa-agent/backend
+Environment=PYTHONUNBUFFERED=1
+# 直接用 conda 环境里的 python,不做 conda activate(与 start-dev.sh 同一思路,规避激活坑)。
+# --workers 2:小机型够用;核多可调大。SSE 流式与多 worker 兼容(每个请求落到单个 worker)。
+ExecStart=__HOME__/miniconda3/envs/qa-agent/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
