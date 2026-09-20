@@ -9,6 +9,7 @@ import {
   getConversation,
   listConversations,
   type ConversationSummary,
+  type Source,
 } from "../api";
 
 // 一次工具调用的活动项。
@@ -30,6 +31,7 @@ export interface Msg {
   content: string; // 用户消息文本;助手消息改用 steps,content 留空
   steps?: Step[]; // 助手 ReAct 时间线,按 step 顺序
   skill?: string | null;
+  sources?: Source[]; // 本次回答引用的知识库来源(done 事件回填)
   streaming?: boolean;
 }
 
@@ -63,6 +65,7 @@ async function send(text: string): Promise<void> {
     content: "",
     steps: [],
     skill: null,
+    sources: [],
     streaming: true,
   });
   messages.value.push(reply);
@@ -94,8 +97,9 @@ async function send(text: string): Promise<void> {
         onToken: (content, step) => {
           ensureStep(step).text += content;
         },
-        onDone: (skill) => {
+        onDone: (skill, sources) => {
           reply.skill = skill;
+          reply.sources = sources;
         },
       },
       threadId.value,

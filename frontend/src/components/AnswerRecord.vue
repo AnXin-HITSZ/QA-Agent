@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
+import type { Source } from "../api";
 import type { Step, ToolActivity } from "../composables/useChat";
 import MarkdownView from "./MarkdownView.vue";
 
 const props = defineProps<{
   steps?: Step[];
   skill?: string | null;
+  sources?: Source[];
   streaming?: boolean;
 }>();
 
 const list = computed<Step[]>(() => props.steps ?? []);
 const hasContent = computed(() => list.value.some((s) => s.text || s.tools.length));
+const sources = computed<Source[]>(() => props.sources ?? []);
+
+// 展示名:优先文件名,退而取 oss_key 的末段。
+function srcName(s: Source): string {
+  if (s.source) return s.source;
+  const base = (s.oss_key || "").split("/").filter(Boolean).pop();
+  return base || s.oss_key || "未知来源";
+}
 
 // skill id → 中文名。未收录的 id 原样显示。
 const SKILL_NAMES: Record<string, string> = {
@@ -74,6 +84,31 @@ function actLabel(a: ToolActivity): string {
 
       <p v-if="streaming && !hasContent" class="ar__pending" aria-live="polite">正在整理答案…</p>
     </div>
+
+    <footer v-if="sources.length" class="ar__sources">
+      <p class="ar__srchead">参考来源</p>
+      <ul class="ar__srclist">
+        <li v-for="s in sources" :key="s.oss_key" class="src">
+          <a
+            v-if="s.url"
+            class="src__link"
+            :href="s.url"
+            target="_blank"
+            rel="noopener"
+          >
+            <span class="src__doc" aria-hidden="true">📄</span>
+            <span class="src__name">{{ srcName(s) }}</span>
+          </a>
+          <span v-else class="src__link src__link--off" title="下载链接暂不可用">
+            <span class="src__doc" aria-hidden="true">📄</span>
+            <span class="src__name">{{ srcName(s) }}</span>
+            <span class="src__off">链接不可用</span>
+          </span>
+          <span v-if="s.category" class="src__cat">{{ s.category }}</span>
+          <span v-if="s.score != null" class="src__score">{{ s.score.toFixed(2) }}</span>
+        </li>
+      </ul>
+    </footer>
   </article>
 </template>
 
@@ -204,6 +239,70 @@ height: 6px;
   margin: 8px 0 2px;
   color: var(--muted);
   font-size: 13.5px;
+}
+
+/* 参考来源:答案末尾的常驻清单,与正文以发丝线分隔,安静不抢戏 */
+.ar__sources {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.ar__srchead {
+  margin: 0 0 6px;
+  font-family: "IBM Plex Sans", "Noto Sans SC", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.ar__srclist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.src {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+.src__link {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.src__link:hover {
+  border-bottom-color: currentColor;
+}
+.src__link--off {
+  color: var(--muted);
+  cursor: default;
+}
+.src__doc {
+  font-size: 12px;
+}
+.src__name {
+  word-break: break-all;
+}
+.src__off {
+  font-size: 11.5px;
+}
+.src__cat {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+.src__score {
+  margin-left: auto;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.6;
 }
 
 @keyframes act-pulse {

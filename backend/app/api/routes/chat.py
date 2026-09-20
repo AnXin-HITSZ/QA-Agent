@@ -11,8 +11,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.config import get_settings
 from app.graph import get_graph
-from app.graph.trace import used_sop_id
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.graph.trace import used_sop_id, used_sources
+from app.rag import oss
+from app.schemas.chat import ChatRequest, ChatResponse, SourceCitation
 from app.skills import loader
 
 router = APIRouter(prefix=get_settings().api_prefix, tags=["chat"])
@@ -24,6 +25,33 @@ def _graph(request: Request):
     return g if g is not None else get_graph()
 
 
+def _sign_sources(hits: list[dict]) -> list[SourceCitation]:
+    """把检索命中转成带短时效签名 URL 的引用来源。
+
+    sign_url 是本地 HMAC 计算(不发网络请求),在 async 处理器里直接调无害;OSS 未配置 /
+    签名异常不致命 —— 仍返回来源元信息,只是 url 留空(前端据此不给可点链接)。
+    """
+    out: list[SourceCitation] = []
+    for h in hits:
+        key = h.get("oss_key")
+        if not key:
+            continue
+        try:
+            url = oss.sign_url(key)
+        except Exception:
+            url = None
+        out.append(
+            SourceCitation(
+                oss_key=key,
+                source=h.get("source"),
+                category=h.get("category"),
+                score=h.get("score"),
+                url=url,
+            )
+        )
+    return out
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     """一次性返回完整回复;从 ReAct 轨迹回填本次引用的 SOP。thread_id 续接跨轮记忆。"""
@@ -33,7 +61,12 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     messages = result["messages"]
     ai = messages[-1]
     content = ai.content if isinstance(ai.content, str) else str(ai.content)
-    return ChatResponse(skill=used_sop_id(messages), content=content, thread_id=thread_id)
+    return ChatResponse(
+        skill=used_sop_id(messages),
+        content=content,
+        thread_id=thread_id,
+        sources=_sign_sources(used_sources(messages)),
+    )
 
 
 @router.post("/chat/stream")
@@ -52,7 +85,7 @@ async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse
     async def event_gen():
         # 先把本通对话的 thread_id 交给前端存下,后续提问回传即可续接记忆。
         yield {"event": "meta", "data": json.dumps({"thread_id": thread_id}, ensure_ascii=False)}
-        seen: list = []  # 累积 agent 产出的消息,done 时回读本次引用的 SOP
+        seen: list = []  # 累积 agent + tools 产出的消息,done 时回读本次引用的 SOP 与知识库来源
         step = 0  # agent 轮次号:token / tool_call / 该轮 tool_result 共享它
         async for mode, data in graph.astream(inputs, stream_mode=["updates", "messages"], config=config):
             if mode == "messages":
@@ -75,11 +108,13 @@ async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse
                         for call in getattr(msg, "tool_calls", None) or []:
                             yield {"event": "tool_call", "data": json.dumps({"name": call.get("name"), "args": call.get("args") or dict(), "step": step}, ensure_ascii=False)}
                 elif node == "tools":
+                    seen.extend(messages)  # ToolMessage 带 artifact → done 时供 used_sources 读知识库来源
                     for msg in messages:
                         yield {"event": "tool_result", "data": json.dumps({"name": getattr(msg, "name", None), "tool_call_id": getattr(msg, "tool_call_id", None), "step": step}, ensure_ascii=False)}
                     # 工具跑完 → 下一轮 agent 属于新的 step。
                     step += 1
-        yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen)}, ensure_ascii=False)}
+        sources = [s.model_dump() for s in _sign_sources(used_sources(seen))]
+        yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen), "sources": sources}, ensure_ascii=False)}
 
     return EventSourceResponse(event_gen())
 

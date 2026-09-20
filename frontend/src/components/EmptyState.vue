@@ -24,7 +24,7 @@ const emit = defineEmits<{ (e: "pick", text: string): void }>();
 <style scoped>
 .empty {
   max-width: 560px;
-  margin: 52px auto;
+  margin: 0 auto;
   text-align: center;
 }
 .empty__lead {

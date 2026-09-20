@@ -1,4 +1,5 @@
 fastapi>=0.115
+python-multipart>=0.0.9
 uvicorn[standard]>=0.30
 pydantic>=2.7
 pydantic-settings>=2.3
@@ -10,6 +11,12 @@ langchain-openai>=0.2
 sse-starlette>=2.1
 python-frontmatter>=1.0
 qdrant-client>=1.12
+oss2>=2.18
+# RAG 文档抽取器(2c):按扩展名把文件抽成文本
+pypdf>=4.0
+python-docx>=1.1
+openpyxl>=3.1
+python-pptx>=0.6
 langgraph-checkpoint-redis>=0.3,<0.4
 pytest>=8.2
 pytest-asyncio>=0.23

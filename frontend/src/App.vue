@@ -1,75 +1,70 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 
-import AnswerRecord from "./components/AnswerRecord.vue";
 import AppHeader from "./components/AppHeader.vue";
-import Composer from "./components/Composer.vue";
-import EmptyState from "./components/EmptyState.vue";
+import ChatView from "./components/ChatView.vue";
 import HistorySidebar from "./components/HistorySidebar.vue";
-import UserQuery from "./components/UserQuery.vue";
-import { useChat } from "./composables/useChat";
+import KnowledgeView from "./components/KnowledgeView.vue";
+import { useSidebar } from "./composables/useSidebar";
 
-const { messages, loading, error, send } = useChat();
-const listEl = ref<HTMLElement | null>(null);
-// 移动端历史抽屉开关(桌面端侧栏常驻,此值不起作用)。
-const sidebarOpen = ref(false);
+type View = "chat" | "knowledge";
 
-// 流式时占位回答已在列表里(带自己的进度提示),此时不再显示全局「思考中」。
-const isStreaming = computed(() => messages.value.some((m) => m.streaming));
-// 逐 token / 工具事件增长时消息条数不变,靠内容与活动总量触发滚动。
-const contentLen = computed(() =>
-  messages.value.reduce((n, m) => {
-    let len = m.content.length;
-    for (const s of m.steps ?? []) len += s.text.length + s.tools.length;
-    return n + len;
-  }, 0),
-);
+// 历史抽屉开关(两视图共用;侧栏为固定覆盖层,不占布局 → 内容始终整窗居中)。
+// 由对话视图的「会话工具胶囊」触发,故用模块级单例共享。
+const { open, closeDrawer } = useSidebar();
 
-async function scrollToBottom(): Promise<void> {
-  await nextTick();
-  listEl.value?.scrollTo({ top: listEl.value.scrollHeight, behavior: "smooth" });
+// hash 路由:#/knowledge → 知识库,其它一律对话。刷新后停在当前视图,链接可分享。
+function viewFromHash(): View {
+  return location.hash.replace(/^#\/?/, "") === "knowledge" ? "knowledge" : "chat";
 }
 
-watch([() => messages.value.length, contentLen, loading], scrollToBottom);
+const view = ref<View>(viewFromHash());
+
+function changeView(v: View): void {
+  view.value = v;
+  closeDrawer(); // 切走时收起历史抽屉
+  const h = "#/" + v;
+  if (location.hash !== h) location.hash = h; // 写入历史,浏览器前进/后退可用
+}
+
+// 从历史抽屉里「新对话 / 打开某通」:收起抽屉,并确保回到对话视图。
+function onSideNavigate(): void {
+  closeDrawer();
+  if (view.value !== "chat") changeView("chat");
+}
+
+// 浏览器前进/后退(或手改 hash)时同步视图。
+function onHashChange(): void {
+  const v = viewFromHash();
+  if (v !== view.value) {
+    view.value = v;
+    closeDrawer();
+  }
+}
+
+onMounted(() => {
+  window.addEventListener("hashchange", onHashChange);
+  // 首屏把 hash 规整到当前视图(不新增历史条目)。
+  const h = "#/" + view.value;
+  if (location.hash !== h) history.replaceState(null, "", h);
+});
+onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
 </script>
 
 <template>
-  <div class="app" :class="{ 'app--drawer': sidebarOpen }">
-    <HistorySidebar class="app__side" @navigate="sidebarOpen = false" />
-    <div class="app__backdrop" @click="sidebarOpen = false" />
+  <div class="app" :class="{ 'app--drawer': open }">
+    <HistorySidebar class="app__side" @navigate="onSideNavigate" />
+    <div class="app__backdrop" @click="closeDrawer" />
 
     <div class="app__main">
-      <AppHeader :history-open="sidebarOpen" @toggle-history="sidebarOpen = !sidebarOpen" />
+      <AppHeader :view="view" @change-view="changeView" />
 
-      <main ref="listEl" class="app__thread">
-        <div class="thread">
-          <EmptyState v-if="!messages.length" @pick="send" />
-
-          <template v-for="(m, i) in messages" :key="i">
-            <UserQuery v-if="m.role === 'user'" :text="m.content" />
-            <AnswerRecord
-              v-else
-              :steps="m.steps"
-              :skill="m.skill"
-              :streaming="m.streaming"
-            />
-          </template>
-
-          <div v-if="loading && !isStreaming" class="thinking" aria-live="polite">
-            <span class="thinking__dot" />
-            <span class="thinking__dot" />
-            <span class="thinking__dot" />
-            <span class="thinking__txt">正在整理答案</span>
-          </div>
-        </div>
-      </main>
-
-      <footer class="app__dock">
-        <div class="thread">
-          <p v-if="error" class="app__error" role="alert">{{ error }}</p>
-          <Composer :loading="loading" @send="send" />
-        </div>
-      </footer>
+      <!-- 两视图保活:切换即时,滚动位置 / 输入草稿 / 知识库当前分类都不丢 -->
+      <Transition name="view-fade" mode="out-in">
+        <KeepAlive>
+          <component :is="view === 'chat' ? ChatView : KnowledgeView" />
+        </KeepAlive>
+      </Transition>
     </div>
   </div>
 </template>
@@ -81,108 +76,53 @@ watch([() => messages.value.length, contentLen, loading], scrollToBottom);
   height: 100dvh;
   overflow: hidden;
 }
-.app__side {
-  width: 260px;
-  flex-shrink: 0;
-}
 .app__main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
+
+/* 历史侧栏:所有宽度都是滑出抽屉、不占布局 → 两视图内容都整窗居中,切换零横移 */
+.app__side {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 260px;
+  z-index: 20;
+  transform: translateX(-100%);
+  transition: transform 0.22s ease;
+  box-shadow: var(--shadow);
+}
+.app--drawer .app__side {
+  transform: translateX(0);
+}
 .app__backdrop {
   display: none;
 }
-.app__thread {
-  flex: 1;
-  overflow-y: auto;
-  padding: 18px 20px 8px;
-}
-.thread {
-  max-width: var(--maxw);
-  margin: 0 auto;
-}
-.app__dock {
-  padding: 12px 20px 18px;
-  border-top: 1px solid var(--line);
-  background: var(--paper);
-}
-.app__error {
-  margin: 0 0 10px;
-  padding: 9px 13px;
-  border: 1px solid color-mix(in srgb, var(--seal) 32%, transparent);
-  border-radius: var(--radius-sm);
-  background: var(--seal-tint);
-  color: var(--seal);
-  font-size: 13.5px;
-}
-.thinking {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 12px 2px;
-  color: var(--muted);
-  font-size: 13.5px;
-}
-.thinking__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--primary);
-  animation: blink 1.2s infinite ease-in-out both;
-}
-.thinking__dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.thinking__dot:nth-child(3) {
-  animation-delay: 0.4s;
-}
-.thinking__txt {
-  margin-left: 4px;
+.app--drawer .app__backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: color-mix(in srgb, var(--ink) 32%, transparent);
 }
 
-/* 窄屏:侧栏变为可滑出的抽屉,叠在内容之上 */
-@media (max-width: 860px) {
-  .app__side {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    z-index: 20;
-    transform: translateX(-100%);
-    transition: transform 0.22s ease;
-    box-shadow: var(--shadow);
-  }
-  .app--drawer .app__side {
-    transform: translateX(0);
-  }
-  .app--drawer .app__backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 15;
-    background: color-mix(in srgb, var(--ink) 32%, transparent);
-  }
+/* 视图切换:一次极轻的淡入 */
+.view-fade-enter-active,
+.view-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.view-fade-enter-from,
+.view-fade-leave-to {
+  opacity: 0;
 }
 
-@keyframes blink {
-  0%,
-  80%,
-  100% {
-    opacity: 0.25;
-  }
-  40% {
-    opacity: 1;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
-  .thinking__dot {
-    animation: none;
-    opacity: 0.5;
-  }
-  .app__thread {
-    scroll-behavior: auto;
+  .view-fade-enter-active,
+  .view-fade-leave-active {
+    transition: none;
   }
   .app__side {
     transition: none;

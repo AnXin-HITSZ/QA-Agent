@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, ref, watch } from "vue";
 
 import { useChat } from "../composables/useChat";
+import { useSidebar } from "../composables/useSidebar";
 
 const {
   conversations,
@@ -19,6 +20,15 @@ const emit = defineEmits<{ (e: "navigate"): void }>();
 
 // 行内删除确认:点垃圾桶先亮出「删 / 取消」,避免误清 Redis 记忆(不可恢复)。
 const confirmingId = ref<string | null>(null);
+
+// 搜索框:目前仅前端显示,内容检索待后端接入(点胶囊「搜索」时聚焦此框)。
+const { focusSearchSignal } = useSidebar();
+const searchRef = ref<HTMLInputElement | null>(null);
+const searchText = ref("");
+watch(focusSearchSignal, async () => {
+  await nextTick();
+  searchRef.value?.focus();
+});
 
 onMounted(loadConversations);
 
@@ -53,6 +63,20 @@ function when(iso: string | null): string {
 <template>
   <aside class="side">
     <div class="side__top">
+      <div class="side__search">
+        <svg class="side__search-ic" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="7" cy="7" r="3.5" />
+          <line x1="9.6" y1="9.6" x2="13" y2="13" />
+        </svg>
+        <input
+          ref="searchRef"
+          v-model="searchText"
+          type="search"
+          class="side__search-in"
+          placeholder="搜索对话内容"
+          aria-label="搜索对话内容"
+        />
+      </div>
       <button class="side__new" type="button" :disabled="loading" @click="onNew">
         <span class="side__plus" aria-hidden="true">＋</span> 新对话
       </button>
@@ -110,8 +134,48 @@ function when(iso: string | null): string {
   border-right: 1px solid var(--line);
 }
 .side__top {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   padding: 14px 12px;
   border-bottom: 1px solid var(--line);
+}
+.side__search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  transition: border-color 0.15s;
+}
+.side__search:focus-within {
+  border-color: var(--primary);
+}
+.side__search-ic {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.side__search-in {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+}
+.side__search-in::placeholder {
+  color: var(--muted);
 }
 .side__new {
   width: 100%;

@@ -5,62 +5,53 @@
 
 ---
 
-## RAG 知识库摄取(Step 2)—— 等文件到位后落实
+## RAG 知识库(Step 2)—— 进行中
 
-### 已确认的决定(2026-09-18)
+> **架构**:原件存**阿里云 OSS**(私有桶,唯一事实源,抗 ECS 重建);ECS 的 **Qdrant** 只放向量 + 元数据;引用来源用短时效**签名 URL** 指回原件。
+> **分类 = 用户在前端手建的 OSS 前缀节点**(人工放置,不再按关键词猜);用户**只能上传散文件**到某节点(平铺 `前缀+文件名`),不能上传目录树。
 
-- **Embeddings**:`text-embedding-v4`(默认 1024 维,OpenAI 兼容端点,代码零改)。限制:单请求 ≤ 10 条输入、单条 ≤ 8192 token → 摄取时分批。
-- **部署**:后端最终跑在**云 ECS** → 走**上传接口**,不是本地路径读盘。前端用 `<input type="file" webkitdirectory>` 上传整个文件夹,`webkitRelativePath` 会保留目录树,后端按相对路径的**顶层文件夹名**恢复"类别"。
-- **涉密红线**:已确认允许切块原文发 DashScope 云 + 向量片段存云 ECS Qdrant → 维持云方案,不需要本地 embedding / 本地 Qdrant。
-- **发票进 RAG**:典型查询是"关于 xxx 的专利发票是否存在?"(存在性/元数据查询)→ 每张发票索引**一张元数据卡片**,不把 OCR 正文硬切进去。
+### 已确认的关键决定
 
-### 管线架构:两轴分派
+- **Embeddings**:`text-embedding-v4`(默认 1024 维,OpenAI 兼容端点,换模型才改 `EMBEDDINGS_DIM`)。限制:单请求 ≤ 10 条输入、单条 ≤ 8192 token → 摄取分批。
+- **涉密红线**:已确认切块原文可发 DashScope 云 + 向量存云 ECS Qdrant + 扫描件 OCR 正文也可上云 → 维持云方案,不做本地 embedding / 本地 Qdrant。
+- **原件仓库**:阿里云 OSS 私有桶 `anxin-hitsz-qa-agent`(region cn-shenzhen,prefix `knowledge/`)+ SSE 服务端加密 + RAM 最小权限;AccessKey 只进 `backend/.env`,**绝不提交**。
+- **发票 / 报销**:文件名已编码金额(`发票6100`)、目录名已编码费用大类+实际支出+预算上限 → 报销/审计问答可直接解析文件名算账;`metadata.py` 富化字段与分类**正交、非权威**。
+- **抽取器分派**:按文件扩展名(见 2c);PDF 运行时再判电子版 / 扫描件。
 
-- **文件扩展名** → 决定用哪个**抽取器**(怎么把文字抽出来)。
-- **文件夹名(类别)** → 决定**类别策略**(要不要 OCR、怎么切块、存什么元数据、写进 payload 的 category)。
+### 步骤与进度(一步一步;不写测试进生产代码,只做独立自检)
 
-```
-上传(webkitdirectory,保留目录树)
-  → 后端按相对路径落盘  knowledge_root/<类别文件夹>/...
-重建索引  POST /admin/knowledge/reindex:
-  for 每个文件:
-      类别   = 相对路径顶层文件夹名     # 语义 → 元数据 + 策略
-      cfg    = CATEGORY_REGISTRY[类别] or DEFAULT # 该类别的配置对象
-      原文   = EXTRACTORS[扩展名](文件) # 格式 → 抽取器(PDF 再判电子版/扫描件)
-      块列表 = cfg.分块策略(原文)           # 类别 → 怎么切
-    每块 payload = {text, source文件名, category, page, ...}
-      embedding(分批 ≤10) → upsert 进 Qdrant
-```
+- **2a OSS 接入层** ✅ DONE(2026-09-19)—— `app/rag/oss.py`(oss2 薄封装:put/get/list/sign/delete + 目录标记 + `x-oss-meta-*` 下划线↔连字符对称转换)。真桶读写往返 + 私有桶签名下载自检全绿。
+- **2b 知识库树端点** ✅ DONE(2026-09-19)—— `app/api/routes/knowledge.py` + `app/schemas/knowledge.py`,挂 `/api/v1/knowledge`。5 操作:`GET /tree`、`POST /folder`、`DELETE /folder`(空 prefix→400 防清库)、`POST /upload`(多文件平铺,重名 `skipped_exists` 不覆盖,逐文件返回结果)、`DELETE /object`。处理器全用**同步 `def`**(FastAPI 丢线程池,oss2 阻塞调用不堵流式对话)。真桶 12 断言 HTTP 自检全绿。
+- **2c 抽取器 + 富化** ✅ DONE(2026-09-19)—— `app/rag/extract.py`(按扩展名抽文本:pdf/docx/xlsx/pptx/txt/xls;扫描件与图片标 `needs_ocr`;坏文件不抛异常、只标 `error`,整批不中断)+ `app/rag/metadata.py`(纯正则从路径+文件名解析 project/person/fee_category/spent/budget/invoice_amount/doc_type)。独立自检全绿。
+- **2d OCR** ⏸ **接口已预留、引擎延后接**(2026-09-19)—— `app/rag/ocr.py`:`ocr_image(bytes) -> str` + `ocr_available()`,按 `.env` 的 `OCR_ENGINE` 分发(`aliyun` / `rapidocr` 骨架)。**目前 `_IMPLEMENTED` 为空 → OCR 恒为关闭**:未接入 / 未配 → 抛 `OCRNotConfigured`,由 2e 摄取捕获后**跳过该文件并告警**(优雅降级,同 Redis/OSS 缺失风格)。**大概率选阿里云 OCR**;接入 = 补 `_ocr_aliyun` 函数体 + 把 `"aliyun"` 加进 `_IMPLEMENTED` + `.env` 设 `OCR_ENGINE=aliyun`,**调用方(extract / 2e)零改**。有空再回头做。
+- **2e 摄取管线 + reindex** ✅ DONE(2026-09-19)—— `app/rag/ingest.py`:`reindex(prefix="")` 遍历 OSS(`list_all`)→ 逐文件 `get_object` 下载 → `extract` 抽文本 →(`needs_ocr`:OCR 未接入则跳过告警;接入后仅图片直接 OCR,扫描 PDF 待 2d 渲染)→ `_pack` 切块(目标 1000 字/块、超长块带 150 重叠硬切)→ `parse_metadata` 富化 payload(`text/oss_key/source/category=手建前缀/chunk_index/ext` + project/person/fee_category/...)→ 分批 embedding(`chunk_size=10`,≤10/请求)→ `store.upsert`(每批 128)。point id = `uuid5(NS,"<key>#<i>")` 确定性(便于将来增量)。单文件异常/坏文件优雅降级(跳过记原因、不中断整批)。`store.py` 加 `recreate_collection()`+`make_point()`;`embeddings.py` 加 `chunk_size=10`。端点 `POST /api/v1/admin/knowledge/reindex`(`admin_router`,同步 `def` 走线程池;先验依赖再清库,OSS/Qdrant/Embeddings 缺 → 503)。v1 = 清空 + 全量重建;增量(hash/mtime)后置。独立自检 30 断言全绿(纯逻辑 + 全 mock 端到端,不触网、不进 tests/)。
+- **3 检索工具 + 引用来源** ✅ DONE(2026-09-19)—— `app/rag/retrieve.py`:`search_knowledge(query, top_k=5, score_threshold=0.2)`(**v1 纯语义、全库、不带过滤** —— `store.search` 一行未改)embed_query → 检索 → 丢弃低于阈值 / 空正文 → 结构化命中(text/oss_key/source/category/score/chunk_index/ext)+ `format_hits` 拼给 LLM 的编号片段。`tools.py` 加 `@tool(response_format="content_and_artifact") search_knowledge`:返回 `(给 LLM 的文本, hits artifact)`,未配置 / 零命中优雅降级,进 `TOOLS`(agent 自主决定何时调,**不加预检索节点**、图结构不变 `START→agent⇄tools→END`)。**(2026-09-20 加固)** 降级 `except` 由只兜 `RuntimeError` 放宽到 `except Exception`——原先兜不住 embedding/向量供应商的 HTTP 错误(如 DashScope 欠费 `openai.BadRequestError 400 Arrearage`),会穿透 ToolNode 把整条 SSE 流打崩 500;现在任何检索失败都降级为「知识库暂时无法访问、据常识回答」,详细异常写 `logger.warning` 便于排查,只回 LLM 一句干净提示(不把冗长报错喂给模型)。`trace.py` 加 `used_sources(messages, top_n=5)`:读 `ToolMessage.artifact`、**限定最后一个 HumanMessage 之后(本轮)**、按 `oss_key` 去重(留最高分)、按分降序 —— 避开 checkpointer 全量历史里的旧来源。`nodes.py` SYSTEM_PROMPT 微调一句(日常答疑先查库、查不到再据常识并说明)。`schemas/chat.py` 加 `SourceCitation`(oss_key/source/category/score/url)+ `ChatResponse.sources`(默认空、非破坏)。`chat.py` 加 `_sign_sources`(**emit 时**用 `oss.sign_url` 现签 15min URL、不存库;签名失败 url 留空仍返回元信息);`/chat` 回填 `sources`,`/chat/stream` 把 tools 节点消息并入 `seen` + `done{skill, sources}`。独立自检(全 mock embeddings/store/sign_url,不触网、不进 tests/)全绿。**score_threshold=0.2 为经验默认,需按真实语料再调。**
+- **4a 参考来源展示** ✅ DONE(2026-09-19)—— 消费 `ChatResponse.sources` / SSE `done` 事件的 `sources`,答案末尾**常驻列表**(不折叠)。`api.ts` 加 `Source` 接口 + `ChatResponse.sources` + `StreamHandlers.onDone(skill, sources)` + `done` 分派解析 sources;`useChat.ts` 的 `Msg.sources`、`reply` 初始 `sources:[]`、`onDone` 回填 `reply.sources`;`AnswerRecord.vue` 加 `sources` prop + `srcName`(优先文件名、退取 oss_key 末段)+ `<footer class="ar__sources">` 常驻清单(`s.url` 可点 `target=_blank rel=noopener`,url 为 null 显示「链接不可用」不可点;类别灰字 + 极淡分数)+ 发丝线分隔的 scoped CSS;`App.vue` 传 `:sources="m.sources"`。历史回放(openConversation)不带 sources → 回放答案不显来源(一致)。`npm run build` 通过。
+- **4b 前端知识库管理视图 + 增量索引**(拆 3 小步;导航 = 面包屑 + 单层列表)
+  - **4b-1 后端增量索引** ✅ DONE(2026-09-19)—— 新需求:**上传即建索引、删文件即删索引**(不再只靠全量重建)。`store.py` 加 `delete_by_oss_key(key)`(按 payload `oss_key` 精确匹配删点,collection 不存在→0,best-effort)+ `indexed_keys(prefix)`(按 `category==prefix` 分页 scroll 拿已索引 key 集合,供徽标);`ingest.py` 抽出共享 `_file_points(key,res,text)`(切块+payload+确定性 id,reindex 与增量共用),加 `index_file(key)`(先验 embeddings → 先删旧点(幂等)→ 抽取/切块/向量化/upsert;needs_ocr/unsupported/空→indexed=False+reason 仍返回;运行时错不外抛只记 reason;Embeddings/Qdrant 未配→抛 RuntimeError 交路由转 503)+ `delete_file_index(key)`;`schemas/knowledge.py` 加 `IndexFileRequest/IndexFileResult/IndexedKeysResult`;`knowledge.py` 加 logger、`_oss_call`→`_dep_503`(广涵 OSS/Qdrant/Embeddings)、`_drop_vectors`(删原件/节点后 best-effort 连带清向量,失败只告警不阻断),`delete_file`/`delete_folder`(删前先列 key 再逐个清向量)接线,新增 `POST /admin/knowledge/index`(400 拒空/以 / 结尾的 key)+ `GET /admin/knowledge/indexed`。独立自检 45 断言全绿(全 mock,不触网、不进 tests/)。
+  - **4b-2 前端浏览 + 数据层** ✅ DONE(2026-09-19)—— `api.ts` 追加知识库全套类型 + `ApiError`(带 HTTP 状态码,区分 503「未接通」与其它失败)+ `detailOr`/`kfetchJson`/`kfetchVoid` 帮手 + 8 个函数(getTree/createFolder/uploadFiles/deleteFile/deleteFolder/indexFile/indexedKeys/reindexKnowledge);新增 `composables/useKnowledge.ts`(**模块级单例**:prefix/tree/loading/error/storageEnabled/indexReady/indexedSet + loadTree/enter/up/goto/refresh/isIndexed;loadTree 先取树,503→storageEnabled=false 走空态,再**单独**取 indexedKeys,Qdrant 未接通失败则静默降级 indexReady=false 不显徽标——避免把「未索引」和「查不到」混为一谈);新增 `KnowledgeBreadcrumb.vue`(前缀拆逐级面包屑,末级 is-current 禁用)+ `KnowledgeView.vue`(只读浏览:面包屑 + 刷新 + 子分类行可进入 + 文件行含 已索引/未索引 徽标 + size/日期;存储未接通/错误/空节点三态卡片;indexReady=false 时不显徽标只留提示);`AppHeader.vue` 加「对话 | 知识库」分段切换(props `view` + emit `change-view`,☰ 菜单仅对话视图显示);`App.vue` 加 `view` ref,知识库视图下用 `<template v-if>` 隐藏历史侧栏/抽屉并渲染 `<KnowledgeView v-else>`。`npm run build` 通过(仅既有 >500KB chunk 告警,无类型错)。**本小步纯只读,不含增删改/上传。**
+  - **4b-3 前端增删改 + 自动索引状态 + 维护重建** ✅ DONE(2026-09-19)—— `useKnowledge.ts` 加写操作:`makeFolder(name)`(建分类后刷新)、`uploadAndIndex(files)`(先 `uploadFiles` 整批传 OSS,回来按逐文件结果建进度行 uploaded→indexing;刷新树让新文件即现;再**串行**逐个 `indexFile`,徽标即时点亮;**遇 503 停手把余下标失败**免连打必失败请求)、`removeFile`/`removeFolder`(删后刷新)、`runReindex(scope)`(维护兜底);状态 `uploadRows`/`uploading`/`reindexing`/`reindexResult`。新组件 `KnowledgeToolbar.vue`(「新建分类」行内表单含名字合法性前拦 + 「上传文件」隐藏 multiple input + 上传进度列表按 phase 显文案/语气 ok青·bad红·muted灰·pending)、`ReindexBar.vue`(可折叠维护区,**只提供「全量重建整库」+ 二次确认**——见下「重建陷阱」)。`KnowledgeView.vue` 重构:三态卡片保留,已接通分支挂 Toolbar + 内容面板 + ReindexBar,文件行/子分类行加行内删除确认(复用 HistorySidebar 的 ✕→删/取消 模式,删除失败就地红条不打爆整面板)。`npm run build` 通过(276 模块,仅老样子 >500KB chunk 警告)。
+    - ⚠️ **重建陷阱(已避坑,记后端待办):** [ingest.py](backend/app/rag/ingest.py) 的 `reindex(prefix)` **无论带不带前缀都先 `recreate_collection()` 清空整个 collection** 再只重建该前缀 → 带前缀重建会**误删其它节点索引**。故前端**只暴露「整库重建」**,不做「重建当前节点」。要支持按节点非破坏重建,需后端改为「先按前缀 `delete`(如新增 `delete_by_prefix`)再重嵌该前缀」——留作后端后置。
+- **后置优化** —— ① reindex 增量化(记 hash/mtime 跳过未变文件),减少全量重建开销。② **按前缀非破坏重建**(见上「重建陷阱」),之后前端可恢复「重建当前节点」选项。
 
-- `CATEGORY_REGISTRY`:代码里一个小字典,文件夹名 → 类别配置;**未知文件夹回退 general**(按扩展名抽、通用切),新建文件夹不会崩。
-- `EXTRACTORS`:扩展名 → 抽取函数。PDF 内部**运行时**再判"有文字层就直接抽 / 扫描件转 OCR"(靠内容判断,不靠文件夹)。
+---
 
-### 建议的类别表(取到文件后按实际改)
+## 前端界面打磨
 
-| 文件夹 | category | OCR | 分块策略 |
-|---|---|---|---|
-| `patents/` | patent | 视文件(扫描件才 OCR) | 文本切,保权利要求编号 |
-| `policies/` `sops/` | policy | 否 | 文本切 |
-| `forms/` `tables/` | form | 否 | 表格感知(按行,带表头) |
-| `invoices/` | invoice | 是 | 每张发票一张元数据卡片 |
-| 其它 | general | 否 | 通用文本切 |
-
-### ⚠️ 动手前待你确认的问题(取到文件后回答)
-
-1. **实际的顶层类别文件夹有哪些?** → 决定 `CATEGORY_REGISTRY`。
-2. **专利里扫描件多不多?** → 决定 OCR 是否要早接(阿里云 OCR,和 DashScope 同体系)。
-3. **发票元数据从哪来?** → 靠文件名规范抽(简单可靠) / 还是也要 OCR 版面抽字段(更自动、要接 OCR + 版面解析)。
-
-补充:发票这类,**文件命名规范**比 OCR 正文更重要(如 `invoices/某专利名-申请费-2024.pdf`),整理阶段要特别定好。
-
-### 实施顺序(一步一步)
-
-- **Step 2a**:loader 分派骨架 + 上传接口 + `/admin/knowledge/reindex`(v1 先"清空 + 全量重建")。
-- **Step 2b**:各类精细抽取(PDF 电子版/扫描件、表格按行、Word)。
-- **Step 2c**:发票元数据卡片 +(如需)OCR。
-- **Step 3**:检索器 + `search_knowledge` 工具入 `TOOLS` + `used_sources(messages)` → `done` 事件带 `sources`(不加预检索节点,保持 `START→agent⇄tools→END` 纯净,`SYSTEM_PROMPT` 不改)。
-- **Step 4**:前端"参考来源"展示 + 上传/重建 UI。
-- **后置优化**:更新按钮增量化(记 hash/mtime,只重嵌变更、删除的删向量),替代全量重建。
+- **标签卡导航 + 切换保活 + 空态居中** ✅ DONE(2026-09-20)—— 「对话 / 知识库」从分段胶囊(`.hd__seg`)改为**折页标签(方案 A)**:标签在页头右侧,活动标签白底(=内容区 `--paper` 同色)、去下边框、`margin-bottom:-1px` 压在页头底线上 + 顶部 `inset 0 2px var(--primary)` 科研青,与内容连成一体(页头改 `align-items:flex-end`,lead/theme 靠 padding/margin 抬离底线视觉齐平)。
+  - **切换保活**:对话主区抽成 [ChatView.vue](frontend/src/components/ChatView.vue);[App.vue](frontend/src/App.vue) 用 `<Transition name="view-fade" mode="out-in">` + `<KeepAlive>` 包 `<component :is>`,两视图状态 / DOM 常驻——对话滚动位置经 `onDeactivated/onActivated` 存还原(重挂 DOM 可能把 scrollTop 归零)、输入框草稿、知识库当前分类来回切换都不丢。
+  - **hash 路由**:`#/chat` / `#/knowledge`——`viewFromHash` 读取、`changeView` 写 hash(入历史,前进/后退可用)、`hashchange` 反向同步、首屏 `replaceState` 规整不增历史条目;刷新后停在当前视图、链接可分享。
+  - **淡入过渡**尊重 `prefers-reduced-motion`。
+  - **空态居中(点 2 修复)**:[EmptyState.vue](frontend/src/components/EmptyState.vue) 去掉固定 `52px` 顶距;`ChatView` 无消息时 `.chat__thread--empty` 用 flex 把邀请块垂直 + 水平居中到空画布中心。
+  - `npm run build` 通过(仅既有 >500KB chunk 警告)。
+- **两视图布局统一 · 消除切换横移(方案乙)** ✅ DONE(2026-09-20)—— 起因:对话页内容在「窗口−260px 侧栏」里居中,知识库在整窗里居中,切换时页头 + 内容一起横移,很不和谐。改法:历史侧栏由桌面常驻左栏改为**所有宽度都是固定滑出抽屉**(`position:fixed` + `translateX(-100%)`,`.app--drawer` 滑入 + 半透明遮罩),不再占布局 → `app__main` 两视图都整窗 → 内容栏(`.thread` / `.kv__wrap`,均 `max-width:860 margin:auto`)在两视图都整窗居中,**切换零横移**。
+  - [App.vue](frontend/src/App.vue):侧栏 + 遮罩不再按 `view==='chat'` 条件渲染,常挂两视图;抽屉开关 `.app--drawer` 只看 `sidebarOpen`;删掉原 `@media(max-width:860px)` 的窄屏专属抽屉规则(现为默认);新增 `onSideNavigate`——从抽屉「新对话 / 打开某通」时收起抽屉并 `changeView('chat')` 切回对话。
+  - [AppHeader.vue](frontend/src/components/AppHeader.vue):☰ 去掉 `v-if="view==='chat'"`,`.hd__menu` 默认 `display:grid`,删掉窄屏 media query → ☰ 在**两视图 + 桌面**都在,页头两视图完全一致(logo 不横移);历史抽屉全局可开,知识库里点开选会话会自动切回对话。
+  - 代价(已与用户确认):历史不再桌面常驻,需点 ☰ 打开。`npm run build` 通过(仅既有 >500KB chunk 警告)。
+- **会话工具胶囊 + 搜索框(前端)** ✅ DONE(2026-09-20)—— 把开合边栏的 ☰ 从页头挪到「页头下方、与内容栏左对齐」的分段胶囊(仿之前的 switch 胶囊),三键:**边栏**(开合抽屉)/ **搜索**(开抽屉并聚焦搜索框)/ **新对话**。胶囊**仅对话视图**出现(三动作皆会话相关;知识库无 → 两视图页头彻底一致、零横移)。
+  - 新增 [useSidebar.ts](frontend/src/composables/useSidebar.ts) 模块级单例:`open` + `focusSearchSignal` + `toggleDrawer/openSearch/closeDrawer`,把抽屉开关与搜索聚焦在 App / 胶囊 / 抽屉三处共享(避开动态 `<component>` 的 prop 透传)。
+  - [AppHeader.vue](frontend/src/components/AppHeader.vue) 去掉 ☰ 及其 `historyOpen` prop / `toggle-history` emit / `.hd__menu` 样式,页头只剩 字标 + 标签 + 主题。[App.vue](frontend/src/App.vue) 改用 `useSidebar` 的 `open`/`closeDrawer`。[ChatView.vue](frontend/src/components/ChatView.vue) 顶部加 `.tools` 胶囊(内联 SVG 图标 + 文字,分段分隔线),`.chat__thread` 顶距相应调小。
+  - **搜索:仅前端显示**(已与用户确认)—— [HistorySidebar.vue](frontend/src/components/HistorySidebar.vue) 抽屉顶部加搜索框(`type=search`,本地 `searchText` 未接过滤),点胶囊「搜索」经 `focusSearchSignal` 聚焦。**TODO(后端):真正按对话内容检索**。`npm run build` 通过。
 
 ---
 

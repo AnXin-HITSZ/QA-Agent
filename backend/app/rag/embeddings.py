@@ -32,4 +32,6 @@ def get_embeddings() -> Embeddings:
         model=s.embeddings_model,
         # 第三方(非 OpenAI)端点:关掉基于 tiktoken 的按 token 分批,按原文发送,避免误判。
         check_embedding_ctx_length=False,
+        # DashScope text-embedding-v4 单请求 ≤10 条输入 → 按 10 一批发送(embed_documents 内部分批)。
+        chunk_size=10,
     )
