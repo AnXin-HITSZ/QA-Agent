@@ -4,11 +4,6 @@
    860px 更宽,给流程正文里的材料表留空间),直接写死而非改全局 --maxw。 */
 
 /* ---------- 外壳 ---------- */
-/* SopView 的单根包裹:display:contents 不生成盒子,内部 .sv 仍是 .app__main 的直接 flex 子项。
-   目的是让被 <KeepAlive> 缓存的 SopView 只有一个根 DOM 节点(而非 Fragment),规避搬移锚点错乱导致的白屏。 */
-.sv-root {
-  display: contents;
-}
 .sv {
   flex: 1;
   overflow-y: auto;
