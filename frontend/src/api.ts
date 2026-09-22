@@ -416,7 +416,7 @@ export async function deleteSop(id: string): Promise<void> {
 export interface Todo {
   id: string;
   title: string;
-  category: string; // 如「报销」「其他」;仅用于分组展示
+  category: string; // 如「报销」「采购」;空串 = 未分类(展示层渲染为「未分类」)
   done: boolean;
   created_at: string; // ISO 8601
   due_date: string | null; // YYYY-MM-DD;null = 无截止

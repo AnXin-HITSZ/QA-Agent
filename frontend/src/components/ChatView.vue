@@ -98,6 +98,10 @@ onActivated(() => {
             <line x1="3.5" y1="8" x2="12.5" y2="8" />
           </svg>
         </button>
+      </div>
+
+      <!-- 待办键:与右侧滑出的待办抽屉同侧,置于工具条右端;图标 / 尺寸 / 悬停同左组 -->
+      <div class="tools tools--end" role="group" aria-label="待办">
         <button
           class="tools__btn"
           type="button"
@@ -158,11 +162,16 @@ onActivated(() => {
   display: flex;
   flex-direction: column;
 }
-/* 会话工具:页头「实验室问答」正下方,纯图标、无分隔线;悬停/聚焦显圆形阴影底 + 提示 */
+/* 会话工具:页头「实验室问答」正下方,纯图标、无分隔线;悬停/聚焦显圆形阴影底 + 提示。
+   两端对齐:左侧是会话工具组(边栏 / 搜索 / 新对话),右端是待办键 —— 与其右侧滑出的抽屉同侧。 */
 .chat__bar {
   position: relative;
   z-index: 2; /* 让提示气泡盖在下方滚动区之上 */
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 6px 24px 2px;
 }
 .tools {
@@ -170,6 +179,17 @@ onActivated(() => {
   align-items: center;
   gap: 4px;
   margin-left: -7px; /* 首个图标视觉左缘对齐标题 */
+}
+/* 右端组:负边距镜像左组,让末尾图标视觉右缘同样对齐内容边 */
+.tools--end {
+  margin-left: 0;
+  margin-right: -7px;
+}
+/* 最右按钮的提示气泡改为右对齐,免得居中后冒出窗口右缘 */
+.tools--end .tools__btn::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }
 .tools__btn {
   position: relative;

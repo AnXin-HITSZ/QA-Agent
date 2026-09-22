@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 class Todo(BaseModel):
     id: str = Field(..., description="待办唯一 ID(后端在创建时生成)")
     title: str = Field(..., description="待办标题 / 事项")
-    category: str = Field(default="其他", description="分类,如「报销」「其他」;仅用于分组展示,不做强校验")
+    category: str = Field(default="", description="分类,如「报销」「采购」;空 = 未分类(展示层渲染为「未分类」),不做强校验")
     done: bool = Field(default=False, description="是否已完成")
     created_at: str = Field(..., description="创建时间(ISO 8601,后端生成)")
     due_date: str | None = Field(default=None, description="截止日期(YYYY-MM-DD);留空表示无截止")
@@ -21,7 +21,7 @@ class Todo(BaseModel):
 
 class TodoCreate(BaseModel):
     title: str = Field(..., min_length=1, description="待办标题 / 事项(必填)")
-    category: str = Field(default="其他", description="分类,如「报销」「其他」")
+    category: str = Field(default="", description="分类,如「报销」「采购」;留空即未分类")
     due_date: str | None = Field(default=None, description="截止日期(YYYY-MM-DD);留空表示无截止")
 
 
@@ -29,7 +29,7 @@ class TodoUpdate(BaseModel):
     """局部更新:仅传入的字段会被改动,None / 缺省表示保持原值。"""
 
     title: str | None = Field(default=None, min_length=1, description="新标题;留空则不改")
-    category: str | None = Field(default=None, description="新分类;留空则不改")
+    category: str | None = Field(default=None, description="新分类;null / 缺省 = 不改,空串 = 改为未分类")
     done: bool | None = Field(default=None, description="完成状态;留空则不改(勾选 / 取消勾选走这里)")
     due_date: str | None = Field(default=None, description="新截止日期(YYYY-MM-DD);留空则不改")
 

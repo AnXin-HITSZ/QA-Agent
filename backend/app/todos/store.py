@@ -22,6 +22,10 @@ TODO_KEY = "qa:todos:v1"
 # 注入进 system prompt 的未完成待办上限:防止待办过多时把提示撑爆。
 PROMPT_MAX = 30
 
+# 分类为空的展示名。空分类在存储层就是空串(不是这个字面量),只有渲染时才回退成中文,
+# 免得把展示文案固化进数据 —— 前端渲染同一口径。
+CATEGORY_FALLBACK = "未分类"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -157,7 +161,7 @@ def format_for_prompt(open_items: list[dict]) -> str:
         return ""
     shown = open_items[:PROMPT_MAX]
     lines = [
-        f"- {t.get('title', '')}({t.get('category') or '其他'}{_due_note(t.get('due_date'))})"
+        f"- {t.get('title', '')}({t.get('category') or CATEGORY_FALLBACK}{_due_note(t.get('due_date'))})"
         for t in shown
     ]
     if len(open_items) > PROMPT_MAX:
