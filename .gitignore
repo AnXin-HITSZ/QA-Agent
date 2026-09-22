@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 
+# TLS 证书 / 私钥,绝不入库(阿里云签发的 nginx 证书放在这里)
+certs/
+*.key
+*.pem
+
 # Python
 __pycache__/
 *.py[cod]

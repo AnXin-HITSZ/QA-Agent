@@ -34,9 +34,12 @@ if [ "$DO_DEPS" = 1 ]; then
 fi
 
 if [ "$DO_WEB" = 1 ]; then
-  echo ">> 重建前端静态产物(nginx 直接托管 frontend/dist,无需重载)"
-  npm ci --prefix frontend
+  echo ">> 重建前端静态产物"
+  npm ci --prefix frontend --registry https://registry.npmmirror.com
   npm run build --prefix frontend
+  echo ">> 部署到 nginx 目录 /var/www/qa-agent(/root 下 www-data 读不到,必须拷出来)"
+  sudo rm -rf /var/www/qa-agent && sudo mkdir -p /var/www/qa-agent
+  sudo cp -r frontend/dist/. /var/www/qa-agent/
 fi
 
 echo ">> 关闭上次 & 启用本次(systemd 原子重启)"

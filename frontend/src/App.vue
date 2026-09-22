@@ -70,12 +70,13 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
     <div class="app__main">
       <AppHeader :view="view" @change-view="changeView" />
 
-      <!-- 三视图保活:切换即时,滚动位置 / 输入草稿 / 知识库当前分类 / SOP 浏览态都不丢 -->
-      <Transition name="view-fade" mode="out-in">
-        <KeepAlive>
-          <component :is="viewComponent" />
-        </KeepAlive>
-      </Transition>
+      <!-- 三视图保活:切换即时,滚动位置 / 输入草稿 / 知识库当前分类 / SOP 浏览态都不丢。
+           注意:此处曾用 <Transition mode="out-in"> 包裹,但它与 <KeepAlive> 组合会触发
+           Vue 3.5.3+ 的已知回归(vuejs/core#12653):生产构建下依次逛过三个视图后回到
+           首个视图会整块白屏(dev 模式不复现)。故去掉过渡、只留 KeepAlive,切换改为即时。 -->
+      <KeepAlive>
+        <component :is="viewComponent" />
+      </KeepAlive>
     </div>
   </div>
 </template>
@@ -120,21 +121,7 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
   background: color-mix(in srgb, var(--ink) 32%, transparent);
 }
 
-/* 视图切换:一次极轻的淡入 */
-.view-fade-enter-active,
-.view-fade-leave-active {
-  transition: opacity 0.18s ease;
-}
-.view-fade-enter-from,
-.view-fade-leave-to {
-  opacity: 0;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .view-fade-enter-active,
-  .view-fade-leave-active {
-    transition: none;
-  }
   .app__side {
     transition: none;
   }
