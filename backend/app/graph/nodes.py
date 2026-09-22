@@ -7,6 +7,7 @@ system prompt 只立行为护栏(何时检索、严格依据 SOP、不编造),�
 from __future__ import annotations
 
 from langchain_core.messages import SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from app.graph.state import ChatState
 from app.graph.tools import TOOLS
@@ -22,9 +23,16 @@ SYSTEM_PROMPT = (
 )
 
 
-async def agent(state: ChatState) -> dict:
-    """一步推理:产出最终回答,或产出对工具的调用请求(交给 tools 节点执行)。"""
+async def agent(state: ChatState, config: RunnableConfig) -> dict:
+    """一步推理:产出最终回答,或产出对工具的调用请求(交给 tools 节点执行)。
+
+    待办感知(只读):chat 路由在调图前把「未完成待办」渲染好放进
+    config.configurable.todos_prompt,这里追加到系统提示后 —— 不写进 state、不入
+    checkpoint,故每轮都是最新;无待办 / 未启用时为空串,系统提示零变化。
+    """
     model = get_llm().bind_tools(TOOLS)
-    messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
+    todos_prompt = (config.get("configurable") or {}).get("todos_prompt") or ""
+    system = SYSTEM_PROMPT + todos_prompt
+    messages = [SystemMessage(content=system), *state["messages"]]
     ai = await model.ainvoke(messages)
     return {"messages": [ai]}

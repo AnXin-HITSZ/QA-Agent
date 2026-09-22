@@ -6,13 +6,17 @@ import ChatView from "./components/ChatView.vue";
 import HistorySidebar from "./components/HistorySidebar.vue";
 import KnowledgeView from "./components/KnowledgeView.vue";
 import SopView from "./components/SopView.vue";
+import TodoDrawer from "./components/TodoDrawer.vue";
 import { useSidebar } from "./composables/useSidebar";
+import { useTodoDrawer } from "./composables/useTodoDrawer";
 
 type View = "chat" | "knowledge" | "sops";
 
 // 历史抽屉开关(两视图共用;侧栏为固定覆盖层,不占布局 → 内容始终整窗居中)。
 // 由对话视图的「会话工具胶囊」触发,故用模块级单例共享。
 const { open, closeDrawer } = useSidebar();
+// 右侧待办抽屉开关(与左侧对称);切视图时一并收起。
+const { open: todoOpen, close: closeTodo } = useTodoDrawer();
 
 // hash 路由:#/knowledge → 知识库,#/sops → SOP 流程,其它一律对话。刷新后停在当前视图,链接可分享。
 function viewFromHash(): View {
@@ -34,6 +38,7 @@ const viewComponent = computed(() => {
 function changeView(v: View): void {
   view.value = v;
   closeDrawer(); // 切走时收起历史抽屉
+  closeTodo(); // 一并收起待办抽屉
   const h = "#/" + v;
   if (location.hash !== h) location.hash = h; // 写入历史,浏览器前进/后退可用
 }
@@ -50,6 +55,7 @@ function onHashChange(): void {
   if (v !== view.value) {
     view.value = v;
     closeDrawer();
+    closeTodo();
   }
 }
 
@@ -63,7 +69,7 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
 </script>
 
 <template>
-  <div class="app" :class="{ 'app--drawer': open }">
+  <div class="app" :class="{ 'app--drawer': open, 'app--todo': todoOpen }">
     <HistorySidebar class="app__side" @navigate="onSideNavigate" />
     <div class="app__backdrop" @click="closeDrawer" />
 
@@ -78,6 +84,11 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
         <component :is="viewComponent" />
       </KeepAlive>
     </div>
+
+    <!-- 右侧待办抽屉(与左侧历史侧栏对称:固定覆盖层,不占布局)。常驻 DOM →
+         应用启动即拉一次待办,对话视图工具键的未完成徽标随之有数。 -->
+    <TodoDrawer class="app__todo" />
+    <div class="app__todo-backdrop" @click="closeTodo" />
   </div>
 </template>
 
@@ -121,8 +132,36 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
   background: color-mix(in srgb, var(--ink) 32%, transparent);
 }
 
+/* 待办侧栏:镜像左侧,从右滑出、不占布局 → 内容始终整窗居中,切换零横移 */
+.app__todo {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 328px;
+  max-width: 86vw;
+  z-index: 20;
+  transform: translateX(100%);
+  transition: transform 0.22s ease;
+  box-shadow: var(--shadow);
+}
+.app--todo .app__todo {
+  transform: translateX(0);
+}
+.app__todo-backdrop {
+  display: none;
+}
+.app--todo .app__todo-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: color-mix(in srgb, var(--ink) 32%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .app__side {
+  .app__side,
+  .app__todo {
     transition: none;
   }
 }

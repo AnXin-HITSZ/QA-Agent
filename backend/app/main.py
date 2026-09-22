@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import chat, conversations, health, knowledge, sops
+from app.api.routes import chat, conversations, health, knowledge, sops, todos
 from app.config import get_settings
 from app.graph import build_graph
 
@@ -54,11 +54,28 @@ async def lifespan(app: FastAPI):
     app.state.checkpointer = checkpointer
     if checkpointer is None:
         logger.info("对话记忆:单轮模式(无跨轮记忆);配置 REDIS_URL 即可开启。")
+
+    # 待办清单存储:普通 Redis(单键 GET/SET),不依赖 RedisJSON/RediSearch,与 checkpointer
+    # 各自独立 —— 即便跨轮记忆因缺模块降级,待办仍可用;失败置 None,接口层再优雅降级。
+    todo_store = None
+    if settings.redis_url:
+        try:
+            from app.todos import create_todo_store
+
+            todo_store = await create_todo_store(settings.redis_url)
+            logger.info("待办清单:Redis 存储已启用")
+        except Exception as exc:
+            logger.warning("待办清单:Redis 初始化失败(%s),待办特性降级为不可用;不影响聊天与 RAG。", exc)
+            todo_store = None
+    app.state.todos = todo_store
+
     try:
         yield
     finally:
         if saver_cm is not None:
             await saver_cm.__aexit__(None, None, None)
+        if todo_store is not None:
+            await todo_store.close()
 
 
 def create_app() -> FastAPI:
@@ -79,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.router)
     app.include_router(knowledge.admin_router)
     app.include_router(sops.router)
+    app.include_router(todos.router)
     return app
 
 

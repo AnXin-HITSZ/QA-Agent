@@ -3,19 +3,30 @@ import { computed, nextTick, onActivated, onDeactivated, ref, watch } from "vue"
 
 import { useChat } from "../composables/useChat";
 import { useSidebar } from "../composables/useSidebar";
+import { useTodoDrawer } from "../composables/useTodoDrawer";
+import { useTodos } from "../composables/useTodos";
 import AnswerRecord from "./AnswerRecord.vue";
 import Composer from "./Composer.vue";
 import EmptyState from "./EmptyState.vue";
 import UserQuery from "./UserQuery.vue";
 
 const { messages, loading, error, send, newConversation } = useChat();
-// 会话工具胶囊(仅对话视图):边栏开合 / 搜索 / 新对话。
+// 会话工具胶囊(仅对话视图):边栏开合 / 搜索 / 新对话 / 待办。
 const { toggleDrawer, openSearch, closeDrawer } = useSidebar();
+// 右侧待办抽屉开关 + 未完成计数(徽标)。
+const { toggle: toggleTodos } = useTodoDrawer();
+const { openCount: todoOpenCount } = useTodos();
 const listEl = ref<HTMLElement | null>(null);
 
 function onNewConversation(): void {
   newConversation();
   closeDrawer();
+}
+
+// 开待办抽屉前先收起左侧历史抽屉,一次只展开一侧。
+function onToggleTodos(): void {
+  closeDrawer();
+  toggleTodos();
 }
 
 // 流式时占位回答已在列表里(带自己的进度提示),此时不再显示全局「思考中」。
@@ -86,6 +97,19 @@ onActivated(() => {
             <line x1="8" y1="3.5" x2="8" y2="12.5" />
             <line x1="3.5" y1="8" x2="12.5" y2="8" />
           </svg>
+        </button>
+        <button
+          class="tools__btn"
+          type="button"
+          data-tip="待办清单"
+          aria-label="待办清单"
+          @click="onToggleTodos"
+        >
+          <svg class="tools__ic" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+            <polyline points="5,8 7,10 11,5.5" />
+          </svg>
+          <span v-if="todoOpenCount" class="tools__badge" aria-hidden="true">{{ todoOpenCount }}</span>
         </button>
       </div>
     </div>
@@ -182,6 +206,23 @@ onActivated(() => {
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+/* 待办键上的未完成计数徽标 */
+.tools__badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--seal);
+  color: #fff;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 9.5px;
+  line-height: 1;
 }
 /* 提示气泡:悬停 / 键盘聚焦时出现在图标下方 */
 .tools__btn::after {

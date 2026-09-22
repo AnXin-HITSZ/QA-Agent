@@ -410,3 +410,74 @@ export async function updateSop(id: string, body: SopWrite): Promise<SopDetail> 
 export async function deleteSop(id: string): Promise<void> {
   return kfetchVoid(`/api/v1/sops/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
+
+// ── 待办清单:全局一份,后端 Redis 为准(与历史对话同一取向)。Agent 只读,增删改一律走这里 ──
+
+export interface Todo {
+  id: string;
+  title: string;
+  category: string; // 如「报销」「其他」;仅用于分组展示
+  done: boolean;
+  created_at: string; // ISO 8601
+  due_date: string | null; // YYYY-MM-DD;null = 无截止
+}
+
+export interface TodoList {
+  enabled: boolean; // 后端待办存储(Redis)是否启用;false = 未配置
+  degraded: boolean; // 已启用但本次读取失败(超时/Redis 错误);true 时列表恒空、提示重试
+  items: Todo[];
+}
+
+// 新建请求体(category / due_date 可省)。
+export interface TodoCreate {
+  title: string;
+  category?: string;
+  due_date?: string | null;
+}
+
+// 局部更新请求体:仅传入字段生效(勾选完成只传 done)。
+export interface TodoUpdate {
+  title?: string;
+  category?: string;
+  done?: boolean;
+  due_date?: string | null;
+}
+
+// 列出全部待办(未完成在前)。失败不谎称"未启用",标记 degraded=true → 前端提示重试。
+export async function listTodos(): Promise<TodoList> {
+  try {
+    const res = await fetch("/api/v1/todos");
+    if (!res.ok) return { enabled: false, degraded: true, items: [] };
+    const data = (await res.json()) as Partial<TodoList>;
+    return {
+      enabled: data.enabled ?? false,
+      degraded: data.degraded ?? false,
+      items: data.items ?? [],
+    };
+  } catch {
+    return { enabled: false, degraded: true, items: [] };
+  }
+}
+
+// 新建一条待办。待办存储未启用 → ApiError(503)。
+export async function createTodo(body: TodoCreate): Promise<Todo> {
+  return kfetchJson<Todo>(`/api/v1/todos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// 局部更新(勾选完成 / 改标题 / 分类 / 截止)。不存在 → ApiError(404)。
+export async function updateTodo(id: string, body: TodoUpdate): Promise<Todo> {
+  return kfetchJson<Todo>(`/api/v1/todos/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// 删除一条待办(204 无 body)。不存在 → ApiError(404)。
+export async function deleteTodo(id: string): Promise<void> {
+  return kfetchVoid(`/api/v1/todos/${encodeURIComponent(id)}`, { method: "DELETE" });
+}

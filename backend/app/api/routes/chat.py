@@ -15,6 +15,7 @@ from app.graph.trace import used_sop_id, used_sources
 from app.rag import oss
 from app.schemas.chat import ChatRequest, ChatResponse, SourceCitation
 from app.skills import loader
+from app.todos import format_for_prompt
 
 router = APIRouter(prefix=get_settings().api_prefix, tags=["chat"])
 
@@ -23,6 +24,17 @@ def _graph(request: Request):
     """优先用 lifespan 注入的带记忆图(app.state.graph);未注入(如离线测试)则回退到无 checkpointer 的 get_graph()。"""
     g = getattr(request.app.state, "graph", None)
     return g if g is not None else get_graph()
+
+
+async def _todos_prompt(request: Request) -> str:
+    """读未完成待办、渲染成注入 system prompt 的一段;待办是顺带增强,任何异常都不能拖垮聊天。"""
+    store = getattr(request.app.state, "todos", None)
+    if store is None:
+        return ""
+    try:
+        return format_for_prompt(await store.list_open())
+    except Exception:  # noqa: BLE001 —— 读待办失败就当没有,照常回答
+        return ""
 
 
 def _sign_sources(hits: list[dict]) -> list[SourceCitation]:
@@ -56,7 +68,7 @@ def _sign_sources(hits: list[dict]) -> list[SourceCitation]:
 async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     """一次性返回完整回复;从 ReAct 轨迹回填本次引用的 SOP。thread_id 续接跨轮记忆。"""
     thread_id = req.thread_id or uuid4().hex
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id, "todos_prompt": await _todos_prompt(request)}}
     result = await _graph(request).ainvoke({"messages": [HumanMessage(content=req.message)]}, config=config)
     messages = result["messages"]
     ai = messages[-1]
@@ -78,7 +90,7 @@ async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse
     一段即为最终答案。后端不再判定「思考 vs 答案」,分类交给前端(见 useChat.ts)。
     """
     thread_id = req.thread_id or uuid4().hex
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id, "todos_prompt": await _todos_prompt(request)}}
     inputs = {"messages": [HumanMessage(content=req.message)]}
     graph = _graph(request)
 
