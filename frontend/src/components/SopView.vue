@@ -36,20 +36,26 @@ function recover(): void {
 </script>
 
 <template>
-  <!-- 渲染出错兜底:整块内容不再是空白,给出成因 + 一键回到列表 -->
-  <main v-if="renderFailed" class="sv">
-    <div class="sv__wrap">
-      <section class="sv__state">
-        <p class="sv__stateHd">页面渲染出错</p>
-        <p class="sv__stateBody">{{ failMessage || "发生未知错误。" }}</p>
-        <button class="sv__retry" type="button" @click="recover">返回列表</button>
-      </section>
-    </div>
-  </main>
+  <!-- 单一根节点(display:contents,不生成盒子)。
+       必须单根:本组件被 App.vue 的 <KeepAlive> 缓存,若根是 Fragment(v-if + v-else 两个
+       顶层节点),KeepAlive 在 deactivate/activate 搬移子树时锚点会错乱,导致「碰过本视图再
+       切走就整块白屏」。包一层 display:contents 的 div 即单根,又不影响内部 .sv 的 flex 布局。 -->
+  <div class="sv-root">
+    <!-- 渲染出错兜底:整块内容不再是空白,给出成因 + 一键回到列表 -->
+    <main v-if="renderFailed" class="sv">
+      <div class="sv__wrap">
+        <section class="sv__state">
+          <p class="sv__stateHd">页面渲染出错</p>
+          <p class="sv__stateBody">{{ failMessage || "发生未知错误。" }}</p>
+          <button class="sv__retry" type="button" @click="recover">返回列表</button>
+        </section>
+      </div>
+    </main>
 
-  <template v-else>
-    <SopEditor v-if="mode === 'editor'" />
-    <SopDetail v-else-if="mode === 'detail'" />
-    <SopList v-else />
-  </template>
+    <template v-else>
+      <SopEditor v-if="mode === 'editor'" />
+      <SopDetail v-else-if="mode === 'detail'" />
+      <SopList v-else />
+    </template>
+  </div>
 </template>
