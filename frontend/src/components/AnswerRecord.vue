@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted } from "vue";
 
 import type { Source, SopImageReference } from "../api";
 import type { Step, ToolActivity } from "../composables/useChat";
+import { useSops } from "../composables/useSops";
 import MarkdownView from "./MarkdownView.vue";
 import SopImageGallery from "./SopImageGallery.vue";
 
@@ -26,14 +27,15 @@ function srcName(s: Source): string {
   return base || s.oss_key || "未知来源";
 }
 
-// skill id → 中文名。未收录的 id 原样显示。
-const SKILL_NAMES: Record<string, string> = {
-  "travel-reimbursement": "差旅报销",
-  "supplies-reimbursement": "办公用品报销",
-};
+// skill id → 中文名:SOP 名字是用户自己写的(可在 SOP 视图随时新建 / 改名),
+// 这里一律以列表为准;列表还没到位(或没接通)才退回原样显示 id。
+const { list: sops, loaded: sopsLoaded, loadList: loadSops } = useSops();
+onMounted(() => {
+  if (!sopsLoaded.value) void loadSops(); // 没逛过 SOP 视图也要有名字可查
+});
 
 function label(id: string): string {
-  return SKILL_NAMES[id] ?? id;
+  return sops.value.find((s) => s.id === id)?.name ?? id;
 }
 
 // 工具活动 → 人类可读的一行说明(意图,不暴露原始工具名的技术细节)。
@@ -46,6 +48,7 @@ function actLabel(a: ToolActivity): string {
     const id = typeof a.args?.skill_id === "string" ? a.args.skill_id : "";
     return id ? `读取「${label(id)}」` : "读取 SOP";
   }
+  if (a.name === "search_knowledge") return "检索知识库";
   return a.name;
 }
 </script>

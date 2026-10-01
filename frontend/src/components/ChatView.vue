@@ -177,7 +177,7 @@ onActivated(() => {
       <div class="thread">
         <EmptyState v-if="!messages.length" @pick="send" />
 
-        <template v-for="(m, i) in messages" :key="i">
+        <template v-for="m in messages" :key="m.uid">
           <UserQuery v-if="m.role === 'user'" :text="m.content" />
           <AnswerRecord
             v-else

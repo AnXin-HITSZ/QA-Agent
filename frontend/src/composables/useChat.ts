@@ -29,6 +29,7 @@ export interface Step {
 }
 
 export interface Msg {
+  uid: number; // 列表 key:换对话时数组整体替换,用下标当 key 会让 DOM 被复用(折叠状态串台)
   images?: SopImageReference[];
   role: "user" | "assistant";
   content: string; // 用户消息文本;助手消息改用 steps,content 留空
@@ -57,6 +58,8 @@ const searching = ref(false);
 let listSeq = 0;
 // 在流的那次请求,供「停止」中断;用户主动停不算失败,只在消息上留标记。
 let inflight: AbortController | null = null;
+// 消息 uid 发号器:只在本次会话里保证唯一,足够当列表 key。
+let nextUid = 0;
 
 function stop(): void {
   inflight?.abort();
@@ -87,10 +90,11 @@ async function send(text: string): Promise<void> {
   if (!q || loading.value) return;
 
   error.value = "";
-  messages.value.push({ role: "user", content: q });
+  messages.value.push({ uid: nextUid++, role: "user", content: q });
 
   // 占位的助手消息用 reactive,流式过程中原地增量更新(引用即代理,变更可追踪)。
   const reply = reactive<Msg>({
+    uid: nextUid++,
     role: "assistant",
     content: "",
     steps: [],
@@ -178,8 +182,9 @@ async function openConversation(tid: string): Promise<void> {
     const detail = await getConversation(tid);
     messages.value = detail.messages.map((m) =>
       m.role === "user"
-        ? ({ role: "user", content: m.content } as Msg)
+        ? ({ uid: nextUid++, role: "user", content: m.content } as Msg)
         : ({
+            uid: nextUid++,
             role: "assistant",
             content: "",
             steps: [{ text: m.content, tools: [] }],

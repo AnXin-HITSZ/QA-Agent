@@ -49,7 +49,7 @@ export async function chat(message: string, threadId?: string | null): Promise<C
       body: JSON.stringify({ message, thread_id: threadId ?? null } satisfies ChatRequest),
     });
   } catch {
-    throw new Error("没连上后端。确认后端已在 127.0.0.1:8000 运行,然后重试。");
+    throw new Error("暂时连不上服务,请稍后重试。");
   }
   if (!res.ok) {
     throw new Error(`后端返回错误(HTTP ${res.status})。稍后重试,或查看后端日志。`);
@@ -84,7 +84,7 @@ export async function chatStream(
     });
   } catch {
     if (signal?.aborted) throw new StreamAborted();
-    throw new Error("没连上后端。确认后端已在 127.0.0.1:8000 运行,然后重试。");
+    throw new Error("暂时连不上服务,请稍后重试。");
   }
   if (!res.ok || !res.body) {
     throw new Error(`后端返回错误(HTTP ${res.status})。稍后重试,或查看后端日志。`);
@@ -334,7 +334,7 @@ async function kfetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(url, init);
   } catch {
-    throw new ApiError(0, "没连上后端。确认后端已在 127.0.0.1:8000 运行,然后重试。");
+    throw new ApiError(0, "暂时连不上服务,请稍后重试。");
   }
   if (!res.ok) throw new ApiError(res.status, await detailOr(res, "请求失败"));
   return (await res.json()) as T;
@@ -345,7 +345,7 @@ async function kfetchVoid(url: string, init?: RequestInit): Promise<void> {
   try {
     res = await fetch(url, init);
   } catch {
-    throw new ApiError(0, "没连上后端。确认后端已在 127.0.0.1:8000 运行,然后重试。");
+    throw new ApiError(0, "暂时连不上服务,请稍后重试。");
   }
   if (!res.ok) throw new ApiError(res.status, await detailOr(res, "操作失败"));
 }
