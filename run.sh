@@ -46,11 +46,19 @@ echo ">> 关闭上次 & 启用本次(systemd 原子重启)"
 sudo systemctl restart "$SERVICE"
 
 echo ">> 健康自检"
-sleep 2
-if curl -fsS "$HEALTH_URL" >/dev/null; then
-  echo "✓ 本次服务已上线,后端健康(/health 200)"
-else
-  echo "✗ 健康检查未通过,最近 30 行日志:"
+# 轮询到就绪为止(最多 15 秒),而不是死等 2 秒:双 worker 冷启动偶尔要几秒才绑上端口,
+# 死等会把它误报成启动失败(2026-10-01 连撞两次假失败)。
+OK=0
+for i in $(seq 1 15); do
+  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+    OK=1
+    echo "✓ 本次服务已上线,后端健康(/health 200,${i} 秒就绪)"
+    break
+  fi
+  sleep 1
+done
+if [ "$OK" != 1 ]; then
+  echo "✗ 健康检查 15 秒内未通过,最近 30 行日志:"
   sudo journalctl -u "$SERVICE" -n 30 --no-pager
   exit 1
 fi
