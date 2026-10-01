@@ -13,9 +13,15 @@ def used_sop_id(messages: list) -> str | None:
 
     取消息轨迹里最后一次 ``get_sop`` 工具调用的 ``skill_id``,且该 id 必须对应
     真实存在的 SOP(过滤掉模型调用了不存在 id 的情况);若最后一次无效则回退到
-    更早的有效调用。纯答疑、未读任何 SOP 时返回 None。
+    本轮更早的有效调用。仅扫描最后一个 HumanMessage 起的消息,避免引用历史轮次的 SOP。
+    流式 seen 不含 HumanMessage 且仅含本轮消息时扫描全部。纯答疑、未读任何 SOP 时返回 None。
     """
-    for msg in reversed(messages):
+    start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            start = i
+            break
+    for msg in reversed(messages[start:]):
         for call in reversed(getattr(msg, "tool_calls", None) or []):
             if call.get("name") != get_sop.name:
                 continue

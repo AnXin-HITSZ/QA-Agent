@@ -1,6 +1,7 @@
 """ReAct 轨迹回读 used_sop_id 的离线单测(不涉及 LLM;SOP 经内存假仓库注入)。"""
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+import pytest
 
 from app.graph.trace import used_sop_id
 
@@ -93,3 +94,33 @@ def test_used_sop_id_falls_back_past_invalid_last(install_sops):
         AIMessage(content="按差旅流程……"),
     ]
     assert used_sop_id(messages) == "travel"
+
+
+@pytest.mark.parametrize("current_calls", [[], [_list()], [_get_sop("nope", "c2")]])
+def test_used_sop_id_does_not_fall_back_to_previous_turn(install_sops, current_calls):
+    install_sops(_FILES)
+    messages = [
+        HumanMessage(content="差旅怎么报销"),
+        AIMessage(content="", tool_calls=[_get_sop("travel")]),
+        ToolMessage(content="差旅正文", tool_call_id="c1"),
+        AIMessage(content="差旅指引"),
+        HumanMessage(content="新的问题"),
+        AIMessage(content="本轮回复", tool_calls=current_calls),
+    ]
+    assert used_sop_id(messages) is None
+
+
+def test_used_sop_id_uses_last_valid_in_current_turn(install_sops):
+    install_sops(_FILES)
+    messages = [
+        HumanMessage(content="差旅问题"),
+        AIMessage(content="", tool_calls=[_get_sop("travel", "c1")]),
+        HumanMessage(content="办公用品问题"),
+        AIMessage(content="", tool_calls=[_get_sop("supplies", "c2")]),
+        AIMessage(content="", tool_calls=[_get_sop("nope", "c3")]),
+    ]
+    assert used_sop_id(messages) == "supplies"
+
+
+def test_used_sop_id_empty_messages():
+    assert used_sop_id([]) is None
