@@ -8,6 +8,7 @@ import {
   deleteConversation,
   getConversation,
   listConversations,
+  StreamAborted,
   type ConversationSummary,
   type Source,
   type SopImageReference,
@@ -35,6 +36,7 @@ export interface Msg {
   skill?: string | null;
   sources?: Source[]; // 本次回答引用的知识库来源(done 事件回填)
   streaming?: boolean;
+  stopped?: boolean; // 用户点了「停止」而中断(与出错区分:不报错,只在答案末尾留一句说明)
 }
 
 // ── 模块级单例状态 ──
@@ -48,6 +50,12 @@ const threadId = ref<string | null>(null);
 const conversations = ref<ConversationSummary[]>([]);
 const historyEnabled = ref(false);
 const historyDegraded = ref(false);
+// 在流的那次请求,供「停止」中断;用户主动停不算失败,只在消息上留标记。
+let inflight: AbortController | null = null;
+
+function stop(): void {
+  inflight?.abort();
+}
 
 // 拉取历史会话列表;失败时进入 degraded(可重试)而非误报"未启用"。
 async function loadConversations(): Promise<void> {
@@ -83,6 +91,9 @@ async function send(text: string): Promise<void> {
     return steps[i];
   };
 
+  const ac = new AbortController();
+  inflight = ac;
+
   try {
     await chatStream(
       q,
@@ -109,25 +120,32 @@ async function send(text: string): Promise<void> {
         },
       },
       threadId.value,
+      ac.signal,
     );
     // 一轮结束刷新历史:首轮让新对话冒出来,后续更新标题 / 条数 / 时间。
     void loadConversations();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-    // 全程没吐出任何内容 → 移除空占位,避免留一条空回答。
-    const empty = !reply.steps?.some((s) => s.text || s.tools.length);
-    if (empty) {
-      messages.value = messages.value.filter((m) => m !== reply);
+    if (e instanceof StreamAborted) {
+      // 用户自己按的停止:保留已生成的部分,不当失败报错。
+      reply.stopped = true;
+    } else {
+      error.value = e instanceof Error ? e.message : String(e);
+      // 全程没吐出任何内容 → 移除空占位,避免留一条空回答。
+      const empty = !reply.steps?.some((s) => s.text || s.tools.length);
+      if (empty) {
+        messages.value = messages.value.filter((m) => m !== reply);
+      }
     }
   } finally {
     reply.streaming = false;
     loading.value = false;
+    if (inflight === ac) inflight = null;
   }
 }
 
-// 开一通新对话:丢掉线程 ID(后端下次自动新开一个记忆桶)并清空界面。
+// 开一通新对话:先中断在流的回答,再丢掉线程 ID(后端下次自动新开一个记忆桶)并清空界面。
 function newConversation(): void {
-  if (loading.value) return;
+  stop();
   threadId.value = null;
   messages.value = [];
   error.value = "";
@@ -136,7 +154,8 @@ function newConversation(): void {
 // 打开一通历史会话:拉后端最新状态回放成 Q&A,并续接其线程记忆。
 // 回放只还原最终答案文本(把每条助手答案塞进单一 step),不重建当时的工具时间线。
 async function openConversation(tid: string): Promise<void> {
-  if (loading.value || threadId.value === tid) return;
+  if (threadId.value === tid) return;
+  stop(); // 有回答正在流 → 先中断,免得旧流继续往已经切走的消息上写
   error.value = "";
   try {
     const detail = await getConversation(tid);
@@ -180,6 +199,7 @@ export function useChat() {
     historyEnabled,
     historyDegraded,
     send,
+    stop,
     newConversation,
     openConversation,
     removeConversation,

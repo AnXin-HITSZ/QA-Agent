@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import AsyncIterator
 from uuid import uuid4
 
 from fastapi import APIRouter, Request
@@ -16,6 +18,8 @@ from app.rag import oss
 from app.schemas.chat import ChatRequest, ChatResponse, SourceCitation
 from app.skills import loader
 from app.todos import format_for_prompt
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix=get_settings().api_prefix, tags=["chat"])
 
@@ -82,6 +86,21 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     )
 
 
+async def _guarded(agen: AsyncIterator[dict], thread_id: str) -> AsyncIterator[dict]:
+    """给 SSE 事件流兜底:中途异常若直接冒出,连接会静默断开 —— 前端只拿到半截答案却毫无提示。
+
+    这里补发一条 error 事件,让前端能明说「回答中断」。CancelledError 继承自 BaseException,
+    客户端主动断开(或前端点「停止」)时不会被这里吞掉,仍按取消处理。
+    """
+    try:
+        async for item in agen:
+            yield item
+    except Exception:  # noqa: BLE001 —— 任何异常都要让前端知道,不能无声收场
+        logger.exception("流式回答中断(thread_id=%s)", thread_id)
+        msg = "回答中断:后端处理出错,请重试。"
+        yield {"event": "error", "data": json.dumps({"message": msg}, ensure_ascii=False)}
+
+
 @router.post("/chat/stream")
 async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse:
     """SSE 流式:先发 meta(带 thread_id),随后 token/tool_call/tool_result 均带 step(agent 轮次号)+ done(附 skill)。
@@ -129,7 +148,7 @@ async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse
         sources = [s.model_dump() for s in _sign_sources(used_sources(seen))]
         yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen), "sources": sources, "images": used_images(seen)}, ensure_ascii=False)}
 
-    return EventSourceResponse(event_gen())
+    return EventSourceResponse(_guarded(event_gen(), thread_id))
 
 
 @router.post("/admin/sops/reload")

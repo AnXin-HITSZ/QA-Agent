@@ -1,8 +1,12 @@
 """流式 /chat/stream 多事件 SSE 的离线单测:用假图喂合成流,不接 LLM。"""
 
+import asyncio
+
+import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
+from app.api.routes.chat import _guarded
 from app.config import get_settings
 from app.main import app
 
@@ -105,3 +109,42 @@ def test_stream_done_carries_skill(install_sops, monkeypatch):
     body = _body(install_sops, monkeypatch)
     assert "event: done" in body
     assert '"skill": "travel"' in body
+
+
+class _BoomGraph:
+    """先正常吐一段再中途炸掉:模拟 LLM / 工具链在后半程出错。"""
+
+    def astream(self, inputs, stream_mode=None, config=None):
+        async def gen():
+            yield ("messages", (_Chunk(content="答了一半"), {"langgraph_node": "agent"}))
+            raise RuntimeError("boom")
+
+        return gen()
+
+
+def test_stream_emits_error_event_when_midstream_fails(install_sops, monkeypatch):
+    """中途异常必须补发 error 事件:否则连接静默断开,前端只拿到半截答案却毫无提示。"""
+    install_sops({"travel.md": _TRAVEL})
+    monkeypatch.setattr("app.api.routes.chat.get_graph", lambda: _BoomGraph())
+    prefix = get_settings().api_prefix
+    client = TestClient(app)
+    r = client.post(f"{prefix}/chat/stream", json={"message": "差旅怎么报销"})
+    assert r.status_code == 200
+    assert "答了一半" in r.text  # 出错前已生成的照常送达
+    assert "event: error" in r.text
+    assert "回答中断" in r.text
+    assert "event: done" not in r.text  # 中断了就不能假装完成
+
+
+async def test_guarded_lets_cancellation_through():
+    """客户端断开时生成器会被取消:CancelledError 不能被兜底吞掉,否则会被当成普通错误回一句「后端出错」。"""
+
+    async def agen():
+        yield {"event": "meta", "data": "{}"}
+        raise asyncio.CancelledError()
+
+    seen: list[dict] = []
+    with pytest.raises(asyncio.CancelledError):
+        async for item in _guarded(agen(), "t1"):
+            seen.append(item)
+    assert seen  # 取消之前已经产出的帧照常透传

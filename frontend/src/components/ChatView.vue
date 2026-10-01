@@ -10,7 +10,7 @@ import Composer from "./Composer.vue";
 import EmptyState from "./EmptyState.vue";
 import UserQuery from "./UserQuery.vue";
 
-const { messages, loading, error, send, newConversation } = useChat();
+const { messages, loading, error, send, stop, newConversation } = useChat();
 // 会话工具胶囊(仅对话视图):边栏开合 / 搜索 / 新对话 / 待办。
 const { toggleDrawer, openSearch, closeDrawer } = useSidebar();
 // 右侧待办抽屉开关 + 未完成计数(徽标)。
@@ -135,6 +135,7 @@ onActivated(() => {
             :sources="m.sources"
             :images="m.images"
             :streaming="m.streaming"
+            :stopped="m.stopped"
           />
         </template>
 
@@ -150,7 +151,7 @@ onActivated(() => {
     <footer class="chat__dock">
       <div class="thread">
         <p v-if="error" class="chat__error" role="alert">{{ error }}</p>
-        <Composer :loading="loading" @send="send" />
+        <Composer :loading="loading" @send="send" @stop="stop" />
       </div>
     </footer>
   </div>

@@ -2,7 +2,7 @@
 import { nextTick, ref } from "vue";
 
 const props = defineProps<{ loading: boolean }>();
-const emit = defineEmits<{ (e: "send", text: string): void }>();
+const emit = defineEmits<{ (e: "send", text: string): void; (e: "stop"): void }>();
 
 const input = ref("");
 const ta = ref<HTMLTextAreaElement | null>(null);
@@ -34,7 +34,12 @@ function submit(): void {
       @input="autogrow"
       @keydown.enter.exact.prevent="submit"
     />
-    <button class="cp__send" type="submit" :disabled="loading || !input.trim()">发送</button>
+    <!-- 正在回答时,主操作就是「停止」:与其给一个灰掉的发送键,不如把位置让给它 -->
+    <button v-if="loading" class="cp__stop" type="button" @click="emit('stop')">
+      <span class="cp__stop-ic" aria-hidden="true" />
+      停止
+    </button>
+    <button v-else class="cp__send" type="submit" :disabled="!input.trim()">发送</button>
   </form>
 </template>
 
@@ -88,5 +93,31 @@ function submit(): void {
 .cp__send:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+/* 「停止」用描边次级样式:它是打断,不该和「发送」抢主色的分量 */
+.cp__stop {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.cp__stop:hover {
+  color: var(--seal);
+  border-color: color-mix(in srgb, var(--seal) 45%, transparent);
+}
+.cp__stop-ic {
+  width: 9px;
+  height: 9px;
+  border-radius: 1.5px;
+  background: currentColor;
 }
 </style>

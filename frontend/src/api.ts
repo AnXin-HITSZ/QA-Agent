@@ -57,11 +57,22 @@ export async function chat(message: string, threadId?: string | null): Promise<C
   return (await res.json()) as ChatResponse;
 }
 
+// 用户点「停止」造成的中断:与失败区分开,调用方据此不弹错误提示。
+export class StreamAborted extends Error {
+  constructor() {
+    super("已停止生成");
+    this.name = "StreamAborted";
+  }
+}
+
 // EventSource 不支持 POST,这里用 fetch + ReadableStream 手动解析 SSE 帧(无新依赖)。
+// signal 供「停止」中断;后端中途出错会补发 error 事件。两者之外,流必须以 done 收尾 ——
+// 少了 done 就是被静默截断,这里抛错,不让半截答案冒充完整回答。
 export async function chatStream(
   message: string,
   handlers: StreamHandlers,
   threadId?: string | null,
+  signal?: AbortSignal,
 ): Promise<void> {
   let res: Response;
   try {
@@ -69,13 +80,18 @@ export async function chatStream(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, thread_id: threadId ?? null } satisfies ChatRequest),
+      signal,
     });
   } catch {
+    if (signal?.aborted) throw new StreamAborted();
     throw new Error("没连上后端。确认后端已在 127.0.0.1:8000 运行,然后重试。");
   }
   if (!res.ok || !res.body) {
     throw new Error(`后端返回错误(HTTP ${res.status})。稍后重试,或查看后端日志。`);
   }
+
+  let doneSeen = false;
+  let streamError = "";
 
   const dispatch = (frame: string): void => {
     let event = "message";
@@ -113,11 +129,15 @@ export async function chatStream(
         break;
       }
       case "done":
+        doneSeen = true;
         handlers.onDone?.(
           (payload?.skill as string) ?? null,
           (payload?.sources as Source[]) ?? [],
           (payload?.images as SopImageReference[]) ?? [],
         );
+        break;
+      case "error":
+        streamError = String(payload?.message ?? "") || "回答中断,请重试。";
         break;
     }
   };
@@ -126,18 +146,32 @@ export async function chatStream(
   const decoder = new TextDecoder();
   const sep = /\r?\n\r?\n/;
   let buf = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let m: RegExpExecArray | null;
-    while ((m = sep.exec(buf)) !== null) {
-      const frame = buf.slice(0, m.index);
-      buf = buf.slice(m.index + m[0].length);
-      if (frame.trim()) dispatch(frame);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let m: RegExpExecArray | null;
+      while ((m = sep.exec(buf)) !== null) {
+        const frame = buf.slice(0, m.index);
+        buf = buf.slice(m.index + m[0].length);
+        if (frame.trim()) dispatch(frame);
+      }
+      if (streamError) {
+        await reader.cancel(); // 后端已明说失败,不必再等后续帧
+        break;
+      }
     }
+    if (!streamError && buf.trim()) dispatch(buf); // flush 尾帧
+  } catch (e) {
+    if (signal?.aborted || (e instanceof DOMException && e.name === "AbortError")) {
+      throw new StreamAborted();
+    }
+    throw new Error("回答未完成:与后端的连接在收尾前断开,请重试。");
   }
-  if (buf.trim()) dispatch(buf); // flush 尾帧
+
+  if (streamError) throw new Error(streamError);
+  if (!doneSeen) throw new Error("回答未完成:与后端的连接在收尾前断开,请重试。");
 }
 
 // ── 历史对话:后端以 Redis 为准,扫描 / 读取 / 删除会话 ──

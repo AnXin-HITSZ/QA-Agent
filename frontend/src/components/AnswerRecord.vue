@@ -12,6 +12,7 @@ const props = defineProps<{
   sources?: Source[];
   images?: SopImageReference[];
   streaming?: boolean;
+  stopped?: boolean;
 }>();
 
 const list = computed<Step[]>(() => props.steps ?? []);
@@ -85,6 +86,7 @@ function actLabel(a: ToolActivity): string {
       </template>
 
       <p v-if="streaming && !hasContent" class="ar__pending" aria-live="polite">正在整理答案…</p>
+      <p v-else-if="stopped" class="ar__stopped">已停止生成</p>
     </div>
 
     <SopImageGallery :images="images ?? []" />
@@ -242,6 +244,14 @@ height: 6px;
   margin: 8px 0 2px;
   color: var(--muted);
   font-size: 13.5px;
+}
+/* 用户自己按了停止:留一句安静的说明,免得半截答案被当成完整回答 */
+.ar__stopped {
+  margin: 8px 0 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 /* 参考来源:答案末尾的常驻清单,与正文以发丝线分隔,安静不抢戏 */
