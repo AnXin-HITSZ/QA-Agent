@@ -4,7 +4,7 @@ SOP 原件与知识库同桶、分属不同前缀(见 app/rag/oss.py 的 sops_st
 清单 → get_object 取正文 → frontmatter 解析。全部只读。
 
 优雅降级:OSS 未配置(get_bucket 抛 RuntimeError)/ 不可达时返回空目录(get_catalog 空、
-get_skill None),不抛异常打断上层——图里的 search_sops / get_sop 工具据此各自返回「没找到」
+get_skill None),不抛异常打断上层——图里的 list_sops / get_sop 工具据此各自返回「没找到」
 提示,不致命。单篇坏文件只跳过并告警,不影响整表(同摄取管线的降级风格)。
 """
 

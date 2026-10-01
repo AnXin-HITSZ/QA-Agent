@@ -13,39 +13,39 @@ from langchain_core.tools import tool
 from app.rag.retrieve import format_hits
 from app.rag.retrieve import search_knowledge as _search_knowledge
 from app.skills import loader
-from app.skills.search import search_sops as _search_sops
 
 logger = logging.getLogger(__name__)
 
 
 @tool
-def search_sops(query: str, top_k: int = 5) -> str:
-    """搜索实验室所有 SOP(标准作业流程),按相关度返回候选清单。
+def list_sops() -> str:
+    """列出全部 SOP(标准作业流程)的元信息,供你选择适合用户问题的流程。
 
     何时用:用户想知道有哪些流程 / 某类事项怎么办,或你需要判断哪篇 SOP 适用。
-    query:关键词或用户问题;留空则列出全部 SOP。
-    返回每条候选的 id、名称、简介与命中片段;拿到合适的 id 后再用 get_sop 读全文。
+    无需参数。返回全部 SOP 的 id、名称、简介和触发词,不包含正文、不做关键词筛选。
+    根据用户问题与元信息选择合适的 id,再用 get_sop 读取完整正文后给出流程指引。
+    没有合适的 SOP 时如实说明,不要编造流程。
     """
-    hits = _search_sops(query, top_k=top_k)
-    if not hits:
-        return "没有找到匹配的 SOP。可留空 query 调用一次以查看全部可用 SOP。"
+    catalog = loader.get_catalog()
+    if not catalog:
+        return "当前没有可用的 SOP。"
     blocks = [
-        f"- id: {h.id}\n  名称: {h.name}\n  简介: {h.description}\n  片段: {h.snippet}"
-        for h in hits
+        f"- id: {meta.id}\n  名称: {meta.name}\n  简介: {meta.description}\n  触发词: {', '.join(meta.triggers)}"
+        for meta in catalog
     ]
-    return "找到以下 SOP:\n" + "\n".join(blocks)
+    return "以下是全部可用 SOP:\n" + "\n".join(blocks)
 
 
 @tool
 def get_sop(skill_id: str) -> str:
     """按 id 读取某篇 SOP 的完整正文,据此给出分步指引。
 
-    skill_id:来自 search_sops 返回的 id。
-    找不到时返回提示,可改用 search_sops 重新查找;不要编造 SOP 中没有的内容。
+    skill_id:来自 list_sops 返回的 id。
+    找不到时返回提示,可改用 list_sops 重新查看目录;不要编造 SOP 中没有的内容。
     """
     found = loader.get_skill(skill_id)
     if not found:
-        return f"找不到 id 为 '{skill_id}' 的 SOP。请用 search_sops 查看可用的 SOP。"
+        return f"找不到 id 为 '{skill_id}' 的 SOP。请用 list_sops 查看可用的 SOP。"
     meta, body = found
     return f"# {meta.name}(id: {meta.id})\n\n{body}"
 
@@ -75,4 +75,4 @@ def search_knowledge(query: str, top_k: int = 5):
 
 
 # 供图绑定到 LLM(builder.ToolNode 执行 + nodes.bind_tools 绑定,均从此导入)。
-TOOLS = [search_sops, get_sop, search_knowledge]
+TOOLS = [list_sops, get_sop, search_knowledge]

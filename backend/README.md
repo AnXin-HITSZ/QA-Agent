@@ -1,10 +1,10 @@
 # Lab QA Assistant — 后端
 
 实验室问答 + 财务报销 SOP 引导 Agent 的后端。核心机制:**手搭 ReAct agent —— 模型
-自行调用工具检索 / 读取 `sops/` 里的 SOP,再依据正文生成分步指引**;日常答疑类问题
+自行调用工具列出 OSS 中的 SOP 元信息目录、选择并读取正文,再依据正文生成分步指引**;日常答疑类问题
 直接回答。
 
-- Skill 就是 `backend/sops/` 下的一个 Markdown(frontmatter 记元信息 + 正文写 SOP),
+- Skill 就是 OSS `sops/` 前缀下的一个 Markdown(frontmatter 记元信息 + 正文写 SOP),
   **新增一个流程只需丢一个 md 文件,无需改代码**。
 - LLM 不手写适配层,由 `.env` 驱动、用 LangChain 的 `ChatOpenAI` 创建(OpenAI 兼容端点)。
   选哪篇 SOP 交给模型的 tool-calling 推理,不再由代码里硬编码的意图识别或选择节点决定。
@@ -19,10 +19,9 @@ backend/
     llm.py                get_llm():从 .env 建 ChatOpenAI(需真实 LLM_API_KEY)
     skills/
       loader.py           从 OSS sops/ 前缀读 *.md → get_catalog() / get_skill(id) / reload()
-      search.py           search_sops(query, top_k):字段加权打分的纯检索函数
     graph/
       state.py            ChatState(messages:add_messages 累积 ReAct 轨迹)
-      tools.py            @tool search_sops / get_sop + TOOLS(经 bind_tools 注入)
+      tools.py            @tool list_sops / get_sop + TOOLS(经 bind_tools 注入)
       nodes.py            agent 节点(LLM 绑定工具 + 行为护栏 SYSTEM_PROMPT)
       builder.py          START → agent ⇄ tools → END(tools_condition 判定)
       trace.py            used_sop_id(messages):从轨迹回读本次引用的 SOP
@@ -31,10 +30,10 @@ backend/
       chat.py             POST /chat、/chat/stream(SSE)、/admin/sops/reload
     schemas/
       chat.py             ChatRequest / ChatResponse
-      skill.py            SkillMeta(目录项) / SopHit(检索命中项)
+      skill.py            SkillMeta(目录项)
   tests/
     test_health.py · test_graph.py · test_skills.py
-    test_search.py · test_trace.py · test_stream.py
+    test_catalog.py · test_trace.py · test_stream.py
   requirements.txt · .env.example · pytest.ini
 ```
 
@@ -54,11 +53,13 @@ START → agent ──(无 tool_calls)────────────→ EN
 
 ### 工具
 
-- `search_sops(query, top_k=5)`:按名称 / 触发词 / id / 简介 / 正文加权打分检索,返回候选
-  的 id + 名称 + 简介 + 命中片段。`query` 留空则列出全部 SOP。
+- `list_sops()`:无需参数,返回全部 SOP 的 id、名称、简介和触发词;不筛选、不打分、不返回正文。
 - `get_sop(skill_id)`:按 id 读取某篇 SOP 的完整正文供模型依据作答;找不到返回可恢复提示。
 
-典型链路:`search_sops` 发现候选 →(可选)`get_sop` 读全文 → 依据正文作答。
+典型链路:`list_sops` 查看全部目录 → LLM 选择 → `get_sop` 读全文 → 依据正文作答。
+
+加载器首次仍下载并缓存全部 Markdown;按需展开指只把所选正文交给模型,不是按需从 OSS 下载。
+工具顺序由提示词引导模型选择,图中没有新增强制路由。
 
 ## Skill / SOP 文件格式
 
@@ -66,8 +67,8 @@ START → agent ──(无 tool_calls)────────────→ EN
 ---
 id: travel-reimbursement          # 唯一标识(缺省用文件名)
 name: 差旅费报销                    # 人类可读名称
-description: 出差交通住宿费用报销    # 供检索打分 / 展示
-triggers: [差旅, 出差, 高铁]        # 触发提示词(参与检索打分)
+description: 出差交通住宿费用报销    # 供模型选择 / 展示
+triggers: [差旅, 出差, 高铁]        # 触发提示词(供模型选择)
 ---
 # 正文即 SOP:流程、材料、注意事项……
 ```
@@ -139,6 +140,6 @@ curl -X POST http://127.0.0.1:8000/api/v1/admin/sops/reload
 python -m pytest
 ```
 
-测试**离线、不联网、不接真实 LLM**,覆盖:图能否编译且节点 / 边齐全、SOP 加载器与检索
-纯函数、`used_sop_id` 轨迹回读、流式 SSE 的事件形状(用假图喂合成流)。**真实推理与工具
+测试**离线、不联网、不接真实 LLM**,覆盖:图能否编译且节点 / 边齐全、SOP 加载器与目录
+工具、`used_sop_id` 轨迹回读、流式 SSE 的事件形状(用假图喂合成流)。**真实推理与工具
 选择的准确度需配 `LLM_API_KEY` 做端到端冒烟**——离线不覆盖。

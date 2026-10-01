@@ -33,8 +33,8 @@ def _get_sop(skill_id: str, cid: str = "c1") -> dict:
     return {"name": "get_sop", "args": {"skill_id": skill_id}, "id": cid, "type": "tool_call"}
 
 
-def _search(query: str, cid: str = "c0") -> dict:
-    return {"name": "search_sops", "args": {"query": query}, "id": cid, "type": "tool_call"}
+def _list(cid: str = "c0") -> dict:
+    return {"name": "list_sops", "args": {}, "id": cid, "type": "tool_call"}
 
 
 def test_used_sop_id_from_last_get_sop(install_sops):
@@ -48,11 +48,11 @@ def test_used_sop_id_from_last_get_sop(install_sops):
     assert used_sop_id(messages) == "travel"
 
 
-def test_used_sop_id_none_when_only_search(install_sops):
+def test_used_sop_id_none_when_only_list(install_sops):
     install_sops(_FILES)
     messages = [
         HumanMessage(content="有哪些报销"),
-        AIMessage(content="", tool_calls=[_search("报销")]),
+        AIMessage(content="", tool_calls=[_list()]),
         ToolMessage(content="找到以下 SOP……", tool_call_id="c0"),
         AIMessage(content="目前有差旅和办公用品两类"),
     ]

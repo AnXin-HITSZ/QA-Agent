@@ -35,9 +35,8 @@ function label(id: string): string {
 
 // 工具活动 → 人类可读的一行说明(意图,不暴露原始工具名的技术细节)。
 function actLabel(a: ToolActivity): string {
-  if (a.name === "search_sops") {
-    const q = typeof a.args?.query === "string" ? a.args.query : "";
-    return q ? `检索 SOP:${q}` : "检索全部 SOP";
+  if (a.name === "list_sops") {
+    return "查看 SOP 目录";
   }
   if (a.name === "get_sop") {
     const id = typeof a.args?.skill_id === "string" ? a.args.skill_id : "";
