@@ -665,7 +665,8 @@ function overdue(t: Todo): boolean {
   opacity: 0;
   transition: opacity 0.12s, color 0.12s, background 0.12s;
 }
-.todo:hover .todo__del {
+.todo:hover .todo__del,
+.todo__del:focus-visible {
   opacity: 1;
 }
 .todo__del:hover {

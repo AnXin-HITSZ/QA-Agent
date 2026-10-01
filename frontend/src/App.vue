@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
 import AppHeader from "./components/AppHeader.vue";
 import ChatView from "./components/ChatView.vue";
@@ -59,18 +59,63 @@ function onHashChange(): void {
   }
 }
 
+// ── 抽屉可达性 ──
+// 抽屉只是被 translate 推到屏外,内容仍在 DOM 里可聚焦:键盘一路 Tab 会走进看不见的抽屉,
+// 读屏也会念到它们。关着时整块 inert + aria-hidden,开着时把焦点请进去、关掉再还给触发键。
+const sideEl = ref<{ $el: HTMLElement } | null>(null);
+const todoEl = ref<{ $el: HTMLElement } | null>(null);
+let lastFocused: HTMLElement | null = null;
+
+async function syncDrawer(isOpen: boolean, drawer: { $el: HTMLElement } | null): Promise<void> {
+  if (isOpen) {
+    lastFocused = (document.activeElement as HTMLElement | null) ?? null;
+    await nextTick(); // 等 inert 摘掉、抽屉滑到位
+    const el = drawer?.$el;
+    // 若抽屉内部已自己拿到焦点(如「搜索」把光标送进输入框),不去抢。
+    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    return;
+  }
+  const back = lastFocused;
+  lastFocused = null;
+  // 触发键可能已随视图切走 / 被重建;还挂在文档上才还焦点。
+  if (back?.isConnected) back.focus({ preventScroll: true });
+}
+
+watch(open, (isOpen) => void syncDrawer(isOpen, sideEl.value));
+watch(todoOpen, (isOpen) => void syncDrawer(isOpen, todoEl.value));
+
+// Esc 收起抽屉:键盘用户除「再点一次」之外的另一条出口。
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  if (open.value) closeDrawer();
+  else if (todoOpen.value) closeTodo();
+}
+
 onMounted(() => {
   window.addEventListener("hashchange", onHashChange);
+  window.addEventListener("keydown", onKeydown);
   // 首屏把 hash 规整到当前视图(不新增历史条目)。
   const h = "#/" + view.value;
   if (location.hash !== h) history.replaceState(null, "", h);
 });
-onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
+onUnmounted(() => {
+  window.removeEventListener("hashchange", onHashChange);
+  window.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <template>
   <div class="app" :class="{ 'app--drawer': open, 'app--todo': todoOpen }">
-    <HistorySidebar class="app__side" @navigate="onSideNavigate" />
+    <!-- id / tabindex 落到抽屉根 <aside> 上:前者给工具键的 aria-controls,后者让抽屉能承接焦点 -->
+    <HistorySidebar
+      id="history-drawer"
+      ref="sideEl"
+      class="app__side"
+      tabindex="-1"
+      :inert="!open"
+      :aria-hidden="!open"
+      @navigate="onSideNavigate"
+    />
     <div class="app__backdrop" @click="closeDrawer" />
 
     <div class="app__main">
@@ -87,7 +132,14 @@ onUnmounted(() => window.removeEventListener("hashchange", onHashChange));
 
     <!-- 右侧待办抽屉(与左侧历史侧栏对称:固定覆盖层,不占布局)。常驻 DOM →
          应用启动即拉一次待办,对话视图工具键的未完成徽标随之有数。 -->
-    <TodoDrawer class="app__todo" />
+    <TodoDrawer
+      id="todo-drawer"
+      ref="todoEl"
+      class="app__todo"
+      tabindex="-1"
+      :inert="!todoOpen"
+      :aria-hidden="!todoOpen"
+    />
     <div class="app__todo-backdrop" @click="closeTodo" />
   </div>
 </template>

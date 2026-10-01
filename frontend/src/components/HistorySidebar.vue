@@ -408,7 +408,8 @@ function when(iso: string | null): string {
   transition: opacity 0.12s, color 0.12s, background 0.12s;
 }
 .side__item:hover .side__del,
-.side__item.is-active .side__del {
+.side__item.is-active .side__del,
+.side__del:focus-visible {
   opacity: 1;
 }
 .side__del:hover {

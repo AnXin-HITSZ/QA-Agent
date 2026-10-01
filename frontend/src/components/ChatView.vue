@@ -12,9 +12,9 @@ import UserQuery from "./UserQuery.vue";
 
 const { messages, loading, error, send, stop, newConversation } = useChat();
 // 会话工具胶囊(仅对话视图):边栏开合 / 搜索 / 新对话 / 待办。
-const { toggleDrawer, openSearch, closeDrawer } = useSidebar();
+const { open: sidebarOpen, toggleDrawer, openSearch, closeDrawer } = useSidebar();
 // 右侧待办抽屉开关 + 未完成计数(徽标)。
-const { toggle: toggleTodos } = useTodoDrawer();
+const { open: todoOpen, toggle: toggleTodos } = useTodoDrawer();
 const { openCount: todoOpenCount } = useTodos();
 const listEl = ref<HTMLElement | null>(null);
 
@@ -40,12 +40,55 @@ const contentLen = computed(() =>
   }, 0),
 );
 
-async function scrollToBottom(): Promise<void> {
-  await nextTick();
-  listEl.value?.scrollTo({ top: listEl.value.scrollHeight, behavior: "smooth" });
+// 自动跟随:只在用户本来就贴着底部时才跟着滚 —— 往前翻旧内容时,新 token 不能把人拽回底部。
+const NEAR_BOTTOM_PX = 80;
+const stickBottom = ref(true);
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+let lastList: typeof messages.value | null = null;
+
+function atBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
 }
 
-watch([() => messages.value.length, contentLen, loading], scrollToBottom);
+// 只看「位置」不够:程序化平滑滚动同样会派发 scroll 事件,动画途中还没到底,
+// 会被误判成用户想往回看。改判方向 —— 往上滑才算脱离跟随,往下滑到底就重新跟随。
+let lastTop = 0;
+function onScroll(): void {
+  const el = listEl.value;
+  if (!el) return;
+  const top = el.scrollTop;
+  const movingUp = top < lastTop;
+  lastTop = top;
+  if (atBottom(el)) stickBottom.value = true;
+  else if (movingUp) stickBottom.value = false;
+}
+
+// 「回到最新」是用户明确要求 → 恢复跟随并滚到底(平滑),不再被 stickBottom 拦下。
+function jumpToLatest(): void {
+  stickBottom.value = true;
+  void scrollToBottom();
+}
+
+// instant=true 用于逐 token 的跟随:内容本来就在连续长,即时定位最稳,
+// 免得一次动画没跑完就被下一次打断(旧写法每 token 一次 smooth,又慢又晕)。
+async function scrollToBottom(instant = false): Promise<void> {
+  const el = listEl.value;
+  if (!el || !stickBottom.value) return;
+  await nextTick();
+  el.scrollTo({
+    top: el.scrollHeight,
+    behavior: instant || reduceMotion.matches ? "auto" : "smooth",
+  });
+}
+
+watch([() => messages.value, contentLen, loading], ([list]) => {
+  // 消息数组被整体替换 = 换了一通对话 → 重新回到跟随底部。
+  if (list !== lastList) {
+    lastList = list;
+    stickBottom.value = true;
+  }
+  void scrollToBottom(isStreaming.value);
+});
 
 // 被 KeepAlive 缓存:切走前记下滚动位置,切回时还原(重新挂载 DOM 可能把 scrollTop 归零)。
 let savedScroll = 0;
@@ -53,7 +96,10 @@ onDeactivated(() => {
   savedScroll = listEl.value?.scrollTop ?? savedScroll;
 });
 onActivated(() => {
-  if (listEl.value) listEl.value.scrollTop = savedScroll;
+  if (!listEl.value) return;
+  listEl.value.scrollTop = savedScroll;
+  lastTop = savedScroll;
+  stickBottom.value = atBottom(listEl.value); // 还原到的位置就在半中间 → 别跟着滚
 });
 </script>
 
@@ -66,6 +112,8 @@ onActivated(() => {
           type="button"
           data-tip="打开边栏"
           aria-label="打开历史边栏"
+          aria-controls="history-drawer"
+          :aria-expanded="sidebarOpen"
           @click="toggleDrawer"
         >
           <svg class="tools__ic" viewBox="0 0 16 16" aria-hidden="true">
@@ -107,6 +155,8 @@ onActivated(() => {
           type="button"
           data-tip="待办清单"
           aria-label="待办清单"
+          aria-controls="todo-drawer"
+          :aria-expanded="todoOpen"
           @click="onToggleTodos"
         >
           <svg class="tools__ic" viewBox="0 0 16 16" aria-hidden="true">
@@ -122,6 +172,7 @@ onActivated(() => {
       ref="listEl"
       class="chat__thread"
       :class="{ 'chat__thread--empty': !messages.length }"
+      @scroll.passive="onScroll"
     >
       <div class="thread">
         <EmptyState v-if="!messages.length" @pick="send" />
@@ -148,6 +199,16 @@ onActivated(() => {
       </div>
     </main>
 
+    <!-- 往回翻看时回答还在下面长:给一条回到底部的路,而不是硬把人拽下去 -->
+    <button
+      v-if="messages.length && !stickBottom"
+      class="chat__jump"
+      type="button"
+      @click="jumpToLatest"
+    >
+      回到最新
+    </button>
+
     <footer class="chat__dock">
       <div class="thread">
         <p v-if="error" class="chat__error" role="alert">{{ error }}</p>
@@ -159,6 +220,7 @@ onActivated(() => {
 
 <style scoped>
 .chat {
+  position: relative; /* 「回到最新」按钮的定位基准 */
   flex: 1;
   min-height: 0;
   display: flex;
@@ -286,6 +348,27 @@ onActivated(() => {
 .thread {
   max-width: var(--maxw);
   margin: 0 auto;
+}
+/* 回到底部:浮在滚动区右下、输入坞之上;纸底细线,不抢回答的视线 */
+.chat__jump {
+  position: absolute;
+  right: 26px;
+  bottom: 96px;
+  z-index: 3;
+  padding: 6px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--primary-strong);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--ink) 14%, transparent);
+  transition: border-color 0.15s, color 0.15s;
+}
+.chat__jump:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 .chat__dock {
   padding: 12px 20px 18px;
