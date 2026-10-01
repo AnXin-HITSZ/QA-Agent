@@ -1,19 +1,23 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 import { useChat } from "../composables/useChat";
 import { useSidebar } from "../composables/useSidebar";
+import { highlightSegments } from "../lib/highlight";
 
 const {
   conversations,
   historyEnabled,
   historyDegraded,
+  searchQuery,
+  searching,
   threadId,
   loading,
   newConversation,
   openConversation,
   removeConversation,
   loadConversations,
+  setSearch,
 } = useChat();
 
 // 切走(新对话 / 打开某通)时通知父级,移动端顺手收起抽屉。
@@ -22,7 +26,7 @@ const emit = defineEmits<{ (e: "navigate"): void }>();
 // 行内删除确认:点垃圾桶先亮出「删 / 取消」,避免误清 Redis 记忆(不可恢复)。
 const confirmingId = ref<string | null>(null);
 
-// 搜索框:目前仅前端显示,内容检索待后端接入(点胶囊「搜索」时聚焦此框)。
+// 搜索框:内容检索走后端(点胶囊「搜索」时聚焦此框)。
 const { focusSearchSignal } = useSidebar();
 const searchRef = ref<HTMLInputElement | null>(null);
 const searchText = ref("");
@@ -30,6 +34,14 @@ watch(focusSearchSignal, async () => {
   await nextTick();
   searchRef.value?.focus();
 });
+
+// 输入防抖:后端每趟搜索都要扫全部 checkpoint,逐字触发太费;220ms 足够跟上手速。
+let searchTimer: number | undefined;
+watch(searchText, (v) => {
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => setSearch(v), 220);
+});
+onBeforeUnmount(() => window.clearTimeout(searchTimer));
 
 onMounted(loadConversations);
 
@@ -77,6 +89,7 @@ function when(iso: string | null): string {
           placeholder="搜索对话内容"
           aria-label="搜索对话内容"
         />
+        <span v-if="searching" class="side__spin" aria-hidden="true" />
       </div>
       <button class="side__new" type="button" :disabled="loading" @click="onNew">
         <span class="side__plus" aria-hidden="true">＋</span> 新对话
@@ -92,8 +105,13 @@ function when(iso: string | null): string {
     </div>
 
     <nav v-else-if="historyEnabled" class="side__list" aria-label="历史对话">
-      <p v-if="!conversations.length" class="side__empty">还没有历史对话。</p>
-      <ul v-else class="side__ul">
+      <p v-if="!conversations.length" class="side__empty">
+        {{ searchQuery ? "没有匹配的对话。" : "还没有历史对话。" }}
+      </p>
+      <p v-else-if="searchQuery" class="side__hits" aria-live="polite">
+        找到 {{ conversations.length }} 通相关对话
+      </p>
+      <ul v-if="conversations.length" class="side__ul">
         <li
           v-for="c in conversations"
           :key="c.thread_id"
@@ -108,7 +126,15 @@ function when(iso: string | null): string {
             @click="onOpen(c.thread_id)"
           >
             <span class="side__title">{{ c.title }}</span>
-            <span class="side__meta">{{ c.message_count }} 条 · {{ when(c.updated_at) }}</span>
+            <!-- 搜索命中:给出片段 + 是提问还是回答命中 + 本通命中几处 -->
+            <span v-if="c.match" class="side__snip">
+              <span class="side__role">{{ c.match.role === "user" ? "问" : "答" }}</span>
+              <span class="side__snip-txt"><template v-for="(seg, i) in highlightSegments(c.match.snippet, searchQuery)" :key="i"><mark v-if="seg.hit">{{ seg.t }}</mark><span v-else>{{ seg.t }}</span></template></span>
+            </span>
+            <span class="side__meta">
+              <template v-if="c.match">{{ c.match.count }} 处命中 · </template>
+              {{ c.message_count }} 条 · {{ when(c.updated_at) }}
+            </span>
           </button>
 
           <div class="side__act">
@@ -186,6 +212,21 @@ function when(iso: string | null): string {
 .side__search-in::placeholder {
   color: var(--muted);
 }
+/* 搜索在途的细环:贴着输入框右缘,不占位、不抖动 */
+.side__spin {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--line);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: side-spin 0.7s linear infinite;
+}
+@keyframes side-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
 .side__new {
   width: 100%;
   display: flex;
@@ -227,6 +268,13 @@ function when(iso: string | null): string {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.6;
+}
+.side__hits {
+  margin: 0;
+  padding: 4px 10px 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
 }
 .side__off--warn {
   display: flex;
@@ -305,6 +353,40 @@ function when(iso: string | null): string {
   font-size: 11.5px;
   color: var(--muted);
 }
+/* 命中片段:两行封顶,关键词用科研青淡底点亮(安静但一眼能扫到) */
+.side__snip {
+  display: flex;
+  gap: 5px;
+  margin: 1px 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.side__role {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 1px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--surface);
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 15px;
+}
+.side__snip-txt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.side__snip-txt mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--primary-tint);
+  color: var(--primary-strong);
+}
 .side__act {
   display: flex;
   align-items: center;
@@ -354,5 +436,11 @@ function when(iso: string | null): string {
 .side__no:hover {
   border-color: var(--primary);
   color: var(--primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side__spin {
+    animation: none;
+  }
 }
 </style>

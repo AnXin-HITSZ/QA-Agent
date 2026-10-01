@@ -19,6 +19,7 @@ from app.skills.images import image_attachments
 from app.schemas.conversation import (
     ConversationDetail,
     ConversationList,
+    ConversationMatch,
     ConversationMessage,
     ConversationSummary,
 )
@@ -109,13 +110,55 @@ def _messages_of(tup) -> list:
     return (tup.checkpoint.get("channel_values") or {}).get("messages") or []
 
 
+_SNIPPET_PAD = 34  # 命中词前后各留的字数
+
+
+def _terms(q: str) -> list[str]:
+    """查询串按空白切成关键词;多个词是「都要出现」(AND),而不是任一出现。"""
+    return q.split()
+
+
+def _snippet(text: str, terms: list[str]) -> str:
+    """截命中处上下文:先摊平换行,再在最早出现的关键词前后各留一段,截断端补 …。"""
+    flat = text.replace("\n", " ")
+    low = flat.lower()
+    best: tuple[int, int] | None = None  # (位置, 词长)
+    for t in terms:
+        i = low.find(t.lower())
+        if i >= 0 and (best is None or i < best[0]):
+            best = (i, len(t))
+    if best is None:
+        return ""
+    i, n = best
+    start = max(0, i - _SNIPPET_PAD)
+    end = min(len(flat), i + n + _SNIPPET_PAD)
+    core = flat[start:end].strip()
+    return f"{'…' if start > 0 else ''}{core}{'…' if end < len(flat) else ''}"
+
+
+def _match_of(replay: list[ConversationMessage], terms: list[str]) -> ConversationMatch | None:
+    """在一通对话里找关键词组:同一条消息里全部出现才算命中(跨消息不算,免得片段解释不了为什么命中)。
+
+    命中条数 = 这样的消息条数;片段取自第一条命中消息。
+    """
+    hits = [m for m in replay if all(t.lower() in m.content.lower() for t in terms)]
+    if not hits:
+        return None
+    return ConversationMatch(role=hits[0].role, snippet=_snippet(hits[0].content, terms), count=len(hits))
+
+
 @router.get("/conversations", response_model=ConversationList)
-async def list_conversations(request: Request) -> ConversationList:
-    """扫描 checkpointer 里的全部线程,按最近活跃排序列出摘要。Redis 未启用则 enabled=false。"""
+async def list_conversations(request: Request, q: str = "") -> ConversationList:
+    """扫描 checkpointer 里的全部线程,按最近活跃排序列出摘要。Redis 未启用则 enabled=false。
+
+    带 q 时顺带做内容检索:只留命中的对话,并在 match 里给出片段 / 条数。检索吃的是这次扫描
+    本来就要读出来的回放文本,不额外访问 Redis(discard 掉的那份正好拿来用)。
+    """
     cp = _checkpointer(request)
     if cp is None:
         return ConversationList(enabled=False, items=[])
 
+    terms = _terms(q)
     items: list[ConversationSummary] = []
     seen: set[str] = set()
     # alist(None) 返回所有线程的 checkpoint,按 checkpoint_id(ULID,内含时间)倒序 ——
@@ -130,12 +173,16 @@ async def list_conversations(request: Request) -> ConversationList:
             replay = _replay(messages)
             if not replay:
                 continue  # 只有系统 / 半截消息、无可展示内容的空壳线程不列
+            match = _match_of(replay, terms) if terms else None
+            if terms and match is None:
+                continue  # 搜索时只留命中的对话
             items.append(
                 ConversationSummary(
                     thread_id=tid,
                     title=_title(messages),
                     message_count=len(replay),
                     updated_at=tup.checkpoint.get("ts"),
+                    match=match,
                 )
             )
     except Exception as exc:  # noqa: BLE001 —— 仅降级 Redis 不可用,其余原样上抛

@@ -176,11 +176,19 @@ export async function chatStream(
 
 // ── 历史对话:后端以 Redis 为准,扫描 / 读取 / 删除会话 ──
 
+// 搜索命中说明:命中的是提问还是回答、命中处的上下文片段、这通对话里命中几条。
+export interface ConversationMatch {
+  role: "user" | "assistant";
+  snippet: string; // 命中处上下文;被截断的一端带 …
+  count: number;
+}
+
 export interface ConversationSummary {
   thread_id: string;
   title: string;
   message_count: number;
   updated_at: string | null; // 最新 checkpoint 的 ISO 时间;null = 无
+  match?: ConversationMatch | null; // 带 q 搜索时才有;未搜索为 null
 }
 
 export interface ConversationList {
@@ -200,11 +208,15 @@ export interface ConversationDetail {
   messages: ConversationMessage[];
 }
 
-// 列出全部历史会话(最近活跃在前)。
+// 列出历史会话(最近活跃在前);带 q 时由后端做内容检索,只返回命中的对话并附 match。
 // 请求失败(后端不可用 / 非 2xx)不谎称"未启用",而是标记 degraded=true → 前端提示可重试。
-export async function listConversations(): Promise<ConversationList> {
+export async function listConversations(q = ""): Promise<ConversationList> {
+  const query = q.trim();
+  const url = query
+    ? `/api/v1/conversations?q=${encodeURIComponent(query)}`
+    : "/api/v1/conversations";
   try {
-    const res = await fetch("/api/v1/conversations");
+    const res = await fetch(url);
     if (!res.ok) return { enabled: false, degraded: true, items: [] };
     const data = (await res.json()) as Partial<ConversationList>;
     return {

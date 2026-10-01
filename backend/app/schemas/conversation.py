@@ -12,11 +12,18 @@ class ConversationMessage(BaseModel):
     content: str = Field(..., description="消息文本")
 
 
+class ConversationMatch(BaseModel):
+    role: str = Field(..., description="命中的是提问(user)还是回答(assistant)")
+    snippet: str = Field(..., description="命中处上下文片段,被截断的一端带 …")
+    count: int = Field(..., description="这通对话里命中关键词组的消息条数")
+
+
 class ConversationSummary(BaseModel):
     thread_id: str = Field(..., description="会话线程 ID,即列表项的钥匙")
     title: str = Field(..., description="标题:首条用户提问截断")
     message_count: int = Field(..., description="可回放的消息条数(用户提问 + 助手回答)")
     updated_at: str | None = Field(default=None, description="最新 checkpoint 的 ISO 时间;用于展示与排序")
+    match: ConversationMatch | None = Field(default=None, description="带 q 搜索时的命中说明;未搜索为 null")
 
 
 class ConversationList(BaseModel):

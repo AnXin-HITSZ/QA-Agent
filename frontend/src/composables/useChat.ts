@@ -50,6 +50,11 @@ const threadId = ref<string | null>(null);
 const conversations = ref<ConversationSummary[]>([]);
 const historyEnabled = ref(false);
 const historyDegraded = ref(false);
+// 搜索:关键词由后端做内容检索(前端只有标题与条数,搜不了正文);空串 = 全部。
+const searchQuery = ref("");
+const searching = ref(false);
+// 列表请求序号:搜索与刷新共用 —— 打字快时后发请求会作废先前在途的响应,避免旧结果盖新结果。
+let listSeq = 0;
 // 在流的那次请求,供「停止」中断;用户主动停不算失败,只在消息上留标记。
 let inflight: AbortController | null = null;
 
@@ -57,12 +62,24 @@ function stop(): void {
   inflight?.abort();
 }
 
-// 拉取历史会话列表;失败时进入 degraded(可重试)而非误报"未启用"。
+// 拉取历史会话列表(带当前关键词);失败时进入 degraded(可重试)而非误报"未启用"。
 async function loadConversations(): Promise<void> {
-  const { enabled, degraded, items } = await listConversations();
+  const seq = ++listSeq;
+  searching.value = true;
+  const { enabled, degraded, items } = await listConversations(searchQuery.value);
+  if (seq !== listSeq) return; // 期间又发起了新的加载 / 搜索,这份结果已过期
   historyEnabled.value = enabled;
   historyDegraded.value = degraded;
   conversations.value = items;
+  searching.value = false;
+}
+
+// 设置搜索关键词并重拉列表;防抖交给输入框(后端每趟都要扫全部 checkpoint,不能逐字打)。
+function setSearch(q: string): void {
+  const next = q.trim();
+  if (next === searchQuery.value) return;
+  searchQuery.value = next;
+  void loadConversations();
 }
 
 async function send(text: string): Promise<void> {
@@ -198,6 +215,9 @@ export function useChat() {
     conversations,
     historyEnabled,
     historyDegraded,
+    searchQuery,
+    searching,
+    setSearch,
     send,
     stop,
     newConversation,
