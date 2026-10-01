@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from app.schemas.image import SopImageReference
 
 
 class ChatRequest(BaseModel):
@@ -19,6 +20,7 @@ class SourceCitation(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    images: list[SopImageReference] = Field(default_factory=list)
     skill: str | None = Field(default=None, description="命中的 Skill id;None 表示走通用问答")
     content: str = Field(..., description="助手回复文本")
     thread_id: str = Field(..., description="本次会话线程 ID;前端应存下并在后续提问回传以续接记忆")

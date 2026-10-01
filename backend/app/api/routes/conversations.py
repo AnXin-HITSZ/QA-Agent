@@ -15,6 +15,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from app.config import get_settings
+from app.skills.images import image_attachments
 from app.schemas.conversation import (
     ConversationDetail,
     ConversationList,
@@ -73,15 +74,21 @@ def _text(content) -> str:
 def _replay(messages: list) -> list[ConversationMessage]:
     """把状态里的消息轨迹压成干净的 Q&A:用户提问 + 有正文的助手回答;工具 / 系统 / 半截消息跳过。"""
     out: list[ConversationMessage] = []
+    turn: list = []
     for m in messages:
         mtype = getattr(m, "type", None)
+        if mtype == "human":
+            turn = []
+        turn.append(m)
         text = _text(getattr(m, "content", "")).strip()
         if not text:
             continue
         if mtype == "human":
             out.append(ConversationMessage(role="user", content=text))
         elif mtype == "ai":
-            out.append(ConversationMessage(role="assistant", content=text))
+            # 工具调用前的铺垫不附图片;最终回答从本轮工具轨迹恢复旧引用。
+            images = [] if getattr(m, "tool_calls", None) else image_attachments(turn)
+            out.append(ConversationMessage(role="assistant", content=text, images=images))
     return out
 
 

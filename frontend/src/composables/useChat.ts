@@ -10,6 +10,7 @@ import {
   listConversations,
   type ConversationSummary,
   type Source,
+  type SopImageReference,
 } from "../api";
 
 // 一次工具调用的活动项。
@@ -27,6 +28,7 @@ export interface Step {
 }
 
 export interface Msg {
+  images?: SopImageReference[];
   role: "user" | "assistant";
   content: string; // 用户消息文本;助手消息改用 steps,content 留空
   steps?: Step[]; // 助手 ReAct 时间线,按 step 顺序
@@ -100,9 +102,10 @@ async function send(text: string): Promise<void> {
         onToken: (content, step) => {
           ensureStep(step).text += content;
         },
-        onDone: (skill, sources) => {
+        onDone: (skill, sources, images) => {
           reply.skill = skill;
           reply.sources = sources;
+          reply.images = images;
         },
       },
       threadId.value,
@@ -144,6 +147,7 @@ async function openConversation(tid: string): Promise<void> {
             role: "assistant",
             content: "",
             steps: [{ text: m.content, tools: [] }],
+            images: m.images ?? [],
             skill: null,
             streaming: false,
           } as Msg),

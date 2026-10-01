@@ -11,7 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.config import get_settings
 from app.graph import get_graph
-from app.graph.trace import used_sop_id, used_sources
+from app.graph.trace import used_sop_id, used_sources, used_images
 from app.rag import oss
 from app.schemas.chat import ChatRequest, ChatResponse, SourceCitation
 from app.skills import loader
@@ -78,6 +78,7 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
         content=content,
         thread_id=thread_id,
         sources=_sign_sources(used_sources(messages)),
+        images=used_images(messages),
     )
 
 
@@ -126,7 +127,7 @@ async def chat_stream(req: ChatRequest, request: Request) -> EventSourceResponse
                     # 工具跑完 → 下一轮 agent 属于新的 step。
                     step += 1
         sources = [s.model_dump() for s in _sign_sources(used_sources(seen))]
-        yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen), "sources": sources}, ensure_ascii=False)}
+        yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen), "sources": sources, "images": used_images(seen)}, ensure_ascii=False)}
 
     return EventSourceResponse(event_gen())
 

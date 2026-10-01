@@ -14,7 +14,17 @@ export interface Source {
   url: string | null; // 15 分钟有效的签名下载 URL;为 null 时不可点
 }
 
+export interface SopImageReference {
+  skill_id: string;
+  sop_name: string;
+  image_id: string;
+  oss_key: string;
+  alt: string;
+  url: string;
+}
+
 export interface ChatResponse {
+  images: SopImageReference[];
   skill: string | null; // 命中的 Skill id;null 表示走通用问答
   content: string;
   thread_id: string; // 本次会话线程 ID;续接记忆时回传
@@ -27,7 +37,7 @@ export interface StreamHandlers {
   onToolCall?: (name: string, args: Record<string, unknown>, step: number) => void;
   onToolResult?: (name: string | null, step: number) => void;
   onToken?: (content: string, step: number) => void;
-  onDone?: (skill: string | null, sources: Source[]) => void;
+  onDone?: (skill: string | null, sources: Source[], images: SopImageReference[]) => void;
 }
 
 export async function chat(message: string, threadId?: string | null): Promise<ChatResponse> {
@@ -106,6 +116,7 @@ export async function chatStream(
         handlers.onDone?.(
           (payload?.skill as string) ?? null,
           (payload?.sources as Source[]) ?? [],
+          (payload?.images as SopImageReference[]) ?? [],
         );
         break;
     }
@@ -145,6 +156,7 @@ export interface ConversationList {
 }
 
 export interface ConversationMessage {
+  images?: SopImageReference[];
   role: "user" | "assistant";
   content: string;
 }
@@ -378,7 +390,17 @@ export interface SopWrite {
   body: string;
 }
 
-// 列出全部 SOP(不含正文,按 id 升序)。OSS 未配置 → 抛 ApiError(status 503)。
+// 上传 SOP 图片，返回正文可长期保存的同源访问路径。
+export async function uploadSopImage(file: File): Promise<{ key: string; url: string }> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return kfetchJson<{ key: string; url: string }>("/api/v1/sops/images", {
+    method: "POST",
+    body: form,
+  });
+}
+
+// 列出全部 SOP(不含正文,按 id 升序)。
 export async function listSops(): Promise<SopSummary[]> {
   return kfetchJson<SopSummary[]>(`/api/v1/sops`);
 }

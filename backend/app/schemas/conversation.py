@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from app.schemas.image import SopImageReference
 
 
 class ConversationMessage(BaseModel):
+    images: list[SopImageReference] = Field(default_factory=list)
     role: str = Field(..., description="user 或 assistant")
     content: str = Field(..., description="消息文本")
 

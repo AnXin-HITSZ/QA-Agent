@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import logging
 import re
+import io
+import warnings
 from contextlib import contextmanager
+from uuid import uuid4
 
 import frontmatter
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi.responses import RedirectResponse
+from PIL import Image, UnidentifiedImageError
 
 from app.config import get_settings
 from app.rag import oss
@@ -29,6 +34,14 @@ router = APIRouter(prefix=get_settings().api_prefix + "/sops", tags=["sops"])
 
 # id 白名单:字母/数字/下划线/连字符,且以字母或数字开头 —— 顺带挡掉 '.' / '..' / 带 '/' 的穿越。
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_IMAGE_ID_RE = re.compile(r"^[a-f0-9]{32}\.(png|jpg|gif|webp)$")
+_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+_IMAGE_FORMATS = {
+    "PNG": ("png", "image/png"),
+    "JPEG": ("jpg", "image/jpeg"),
+    "GIF": ("gif", "image/gif"),
+    "WEBP": ("webp", "image/webp"),
+}
 
 
 @contextmanager
@@ -123,6 +136,45 @@ def list_sops() -> list[SopSummary]:
         detail = _parse(sop_id, store.prefix + key, raw, obj.get("last_modified"))
         out.append(SopSummary(**detail.model_dump(exclude={"body"})))
     return out
+
+
+@router.post("/images", status_code=status.HTTP_201_CREATED)
+def upload_image(file: UploadFile = File(...)) -> dict[str, str]:
+    """上传正文图片;返回稳定访问路径,不把临时签名 URL 写进正文。"""
+    data = file.file.read(_IMAGE_MAX_BYTES + 1)
+    if len(data) > _IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="图片不能超过 10 MB")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as img:
+                image_format = img.format
+                img.verify()
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError,
+            Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise HTTPException(status_code=400, detail="图片无效或尺寸过大") from exc
+    if image_format not in _IMAGE_FORMATS:
+        raise HTTPException(status_code=400, detail="仅支持 PNG、JPEG、GIF、WebP 图片")
+    ext, content_type = _IMAGE_FORMATS[image_format]
+    image_id = f"{uuid4().hex}.{ext}"
+    key = f"images/{image_id}"
+    with _dep_503():
+        oss.sops_store().put_object(key, data, content_type=content_type)
+    return {"key": key, "url": f"{router.prefix}/images/{image_id}"}
+
+
+@router.get("/images/{image_id}")
+def get_image(image_id: str) -> RedirectResponse:
+    """每次访问重新签名并跳转到私有 OSS 原件。"""
+    if not _IMAGE_ID_RE.fullmatch(image_id):
+        raise HTTPException(status_code=400, detail="图片标识无效")
+    store = oss.sops_store()
+    key = f"images/{image_id}"
+    with _dep_503():
+        if not store.object_exists(key):
+            raise HTTPException(status_code=404, detail="图片不存在")
+        url = store.sign_url(key)
+    return RedirectResponse(url, status_code=307, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/{sop_id}", response_model=SopDetail)

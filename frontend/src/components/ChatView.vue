@@ -133,6 +133,7 @@ onActivated(() => {
             :steps="m.steps"
             :skill="m.skill"
             :sources="m.sources"
+            :images="m.images"
             :streaming="m.streaming"
           />
         </template>

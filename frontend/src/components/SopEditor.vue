@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 
 import type { SopWrite } from "../api";
+import { uploadSopImage } from "../api";
 import { useSops } from "../composables/useSops";
 import MarkdownView from "./MarkdownView.vue";
 
@@ -35,11 +36,61 @@ const bodyMode = ref<"edit" | "preview">("edit");
 const formError = ref("");
 const confirmDel = ref(false);
 const deleting = ref(false);
+const bodyInput = ref<HTMLTextAreaElement | null>(null);
+const imageInput = ref<HTMLInputElement | null>(null);
+const imageUploading = ref(false);
+const imageError = ref("");
+let formVersion = 0;
+onBeforeUnmount(() => { formVersion += 1; });
+
+async function insertImage(file: File): Promise<void> {
+  if (imageUploading.value || saving.value) return;
+  imageError.value = "";
+  if (file.size > 10 * 1024 * 1024) {
+    imageError.value = "图片不能超过 10 MB。";
+    return;
+  }
+  const version = formVersion;
+  const start = bodyInput.value?.selectionStart ?? fBody.value.length;
+  const end = bodyInput.value?.selectionEnd ?? start;
+  imageUploading.value = true;
+  try {
+    const { url } = await uploadSopImage(file);
+    if (version !== formVersion) return;
+    const markdown = `\n![图片](${url})\n`;
+    fBody.value = fBody.value.slice(0, start) + markdown + fBody.value.slice(end);
+    bodyMode.value = "edit";
+    await nextTick();
+    bodyInput.value?.focus();
+    bodyInput.value?.setSelectionRange(start + markdown.length, start + markdown.length);
+  } catch (e) {
+    if (version === formVersion) imageError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    imageUploading.value = false;
+  }
+}
+
+function onImageSelected(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (file) void insertImage(file);
+}
+
+function onBodyPaste(e: ClipboardEvent): void {
+  const item = Array.from(e.clipboardData?.items ?? []).find((item) => item.type.startsWith("image/"));
+  const file = item?.getAsFile();
+  if (!file) return;
+  e.preventDefault();
+  void insertImage(file);
+}
 
 // 依 current / editingNew 灌入表单:新建→空白;编辑→等 current 载入后填充。
 watch(
   [current, editingNew],
   () => {
+    formVersion += 1;
+    imageError.value = "";
     formError.value = "";
     bodyMode.value = "edit";
     confirmDel.value = false;
@@ -88,6 +139,7 @@ function insertTemplate(): void {
 }
 
 async function onSave(): Promise<void> {
+  if (imageUploading.value) return;
   formError.value = "";
   const id = (editingNew.value ? fId.value : current.value?.id ?? "").trim();
   const name = fName.value.trim();
@@ -196,7 +248,7 @@ async function onDelete(): Promise<void> {
                   @blur="addTrigger"
                 />
               </div>
-              <p class="hint">用户提问命中这些关键词时,更容易匹配到本流程。回车添加,点 ✕ 删除。</p>
+              <p class="hint">作为目录元信息提供给模型，帮助判断流程是否适用，不进行关键词匹配或打分。回车添加，点 ✕ 删除。</p>
             </div>
           </div>
 
@@ -205,7 +257,11 @@ async function onDelete(): Promise<void> {
             <div class="ed__legendrow">
               <p class="ed__legend">正文(Markdown)</p>
               <div class="ed__tools">
-                <button class="link-btn" type="button" @click="insertTemplate">插入标准章节</button>
+                <button class="link-btn" type="button" :disabled="imageUploading" @click="insertTemplate">插入标准章节</button>
+                <button class="link-btn" type="button" :disabled="imageUploading || saving" @click="imageInput?.click()">
+                  {{ imageUploading ? "图片上传中…" : "插入图片" }}
+                </button>
+                <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden @change="onImageSelected" />
                 <div class="seg" role="tablist" aria-label="正文视图">
                   <button
                     class="seg__btn"
@@ -227,11 +283,16 @@ async function onDelete(): Promise<void> {
               </div>
             </div>
             <textarea
+              ref="bodyInput"
               v-show="bodyMode === 'edit'"
               v-model="fBody"
+              :readonly="imageUploading"
+              @paste="onBodyPaste"
               class="ta"
               placeholder="用 Markdown 书写流程正文……"
             />
+            <p class="hint">支持插入图片或在正文中粘贴截图（PNG、JPEG、GIF、WebP，最大 10 MB）。上传后自动插入图片链接。</p>
+            <p v-if="imageError" class="ed__error" role="alert">{{ imageError }}</p>
             <MarkdownView v-if="bodyMode === 'preview'" class="preview" :source="fBody" />
           </div>
         </div>
@@ -265,7 +326,7 @@ async function onDelete(): Promise<void> {
 
           <div class="ed__save">
             <button class="btn-ghost" type="button" :disabled="saving" @click="onCancel">取消</button>
-            <button class="btn-primary" type="button" :disabled="saving" @click="onSave">
+            <button class="btn-primary" type="button" :disabled="saving || imageUploading" @click="onSave">
               {{ saving ? "保存中…" : "保存" }}
             </button>
           </div>

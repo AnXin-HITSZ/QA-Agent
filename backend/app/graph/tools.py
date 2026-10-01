@@ -13,6 +13,7 @@ from langchain_core.tools import tool
 from app.rag.retrieve import format_hits
 from app.rag.retrieve import search_knowledge as _search_knowledge
 from app.skills import loader
+from app.skills.images import referenced_images, register_images
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,25 @@ def get_sop(skill_id: str) -> str:
     if not found:
         return f"找不到 id 为 '{skill_id}' 的 SOP。请用 list_sops 查看可用的 SOP。"
     meta, body = found
-    return f"# {meta.name}(id: {meta.id})\n\n{body}"
+    refs = referenced_images(body)
+    images = ""
+    if refs:
+        images = "\n\n可按需查看的图片（调用 read_sop_image）：\n" + "\n".join(
+            f"- image_id: {i}; 说明: {alt}" for i, alt in refs.items()
+        )
+    return f"# {meta.name}(id: {meta.id})\n\n{body}{images}"
+
+
+@tool(response_format="content_and_artifact")
+def read_sop_image(skill_id: str, image_ids: list[str]):
+    """查看 SOP 正文中的图片,用于理解操作截图、流程图、表格等。
+
+    先调用 get_sop 读取正文及图片清单,只有需要图片信息时才调用本工具。
+    skill_id 是 SOP 标识;image_ids 是该正文清单中的图片 ID,每次 1 至 4 张。
+    系统会将原图作为多模态工具消息提供给你,无需另外调用 OCR 或视觉模型。
+    图片加载失败时如实说明;区分截图内容与政策正文,不要凭图片猜测政策。
+    """
+    return register_images(skill_id, image_ids)
 
 
 @tool(response_format="content_and_artifact")
@@ -75,4 +94,4 @@ def search_knowledge(query: str, top_k: int = 5):
 
 
 # 供图绑定到 LLM(builder.ToolNode 执行 + nodes.bind_tools 绑定,均从此导入)。
-TOOLS = [list_sops, get_sop, search_knowledge]
+TOOLS = [list_sops, get_sop, read_sop_image, search_knowledge]

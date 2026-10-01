@@ -6,6 +6,17 @@ from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.graph.tools import get_sop, search_knowledge
 from app.skills import loader
+from app.skills.images import image_attachments
+
+
+def used_images(messages: list) -> list[dict]:
+    """本轮图片引用,流式 seen 无 HumanMessage 时全扫。"""
+    start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            start = i
+            break
+    return image_attachments(messages[start:])
 
 
 def used_sop_id(messages: list) -> str | None:

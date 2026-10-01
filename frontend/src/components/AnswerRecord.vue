@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-import type { Source } from "../api";
+import type { Source, SopImageReference } from "../api";
 import type { Step, ToolActivity } from "../composables/useChat";
 import MarkdownView from "./MarkdownView.vue";
+import SopImageGallery from "./SopImageGallery.vue";
 
 const props = defineProps<{
   steps?: Step[];
   skill?: string | null;
   sources?: Source[];
+  images?: SopImageReference[];
   streaming?: boolean;
 }>();
 
@@ -35,6 +37,7 @@ function label(id: string): string {
 
 // 工具活动 → 人类可读的一行说明(意图,不暴露原始工具名的技术细节)。
 function actLabel(a: ToolActivity): string {
+  if (a.name === "read_sop_image") return "查看 SOP 图片";
   if (a.name === "list_sops") {
     return "查看 SOP 目录";
   }
@@ -84,6 +87,7 @@ function actLabel(a: ToolActivity): string {
       <p v-if="streaming && !hasContent" class="ar__pending" aria-live="polite">正在整理答案…</p>
     </div>
 
+    <SopImageGallery :images="images ?? []" />
     <footer v-if="sources.length" class="ar__sources">
       <p class="ar__srchead">参考来源</p>
       <ul class="ar__srclist">

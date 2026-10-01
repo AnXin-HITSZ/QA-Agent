@@ -82,6 +82,11 @@ body {
   color: var(--muted);
 }
 
+.md img {
+  max-width: 100%;
+  height: auto;
+}
+
 .md p {
   margin: 0.7em 0;
 }
