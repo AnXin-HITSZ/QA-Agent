@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 
 import { useKnowledge } from "../composables/useKnowledge";
+import { errorText, formatWhen } from "../lib/format";
 import KnowledgeBreadcrumb from "./KnowledgeBreadcrumb.vue";
 import KnowledgeToolbar from "./KnowledgeToolbar.vue";
 import ReindexBar from "./ReindexBar.vue";
@@ -36,10 +37,6 @@ const deleting = ref<string | null>(null);
 // 删除失败的就地提示(不把整个面板打成错误态)。
 const opError = ref("");
 
-function msg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 async function delFile(key: string): Promise<void> {
   confirmKey.value = null;
   deleting.value = "f:" + key;
@@ -47,7 +44,7 @@ async function delFile(key: string): Promise<void> {
   try {
     await removeFile(key);
   } catch (e) {
-    opError.value = msg(e);
+    opError.value = errorText(e);
   } finally {
     deleting.value = null;
   }
@@ -60,7 +57,7 @@ async function delFolder(name: string): Promise<void> {
   try {
     await removeFolder(prefix.value + name + "/");
   } catch (e) {
-    opError.value = msg(e);
+    opError.value = errorText(e);
   } finally {
     deleting.value = null;
   }
@@ -73,12 +70,6 @@ function formatSize(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
-function formatWhen(sec: number | null): string {
-  if (!sec) return "";
-  const d = new Date(sec * 1000);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" });
-}
 </script>
 
 <template>

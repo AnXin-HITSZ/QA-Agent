@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 
 import { useSops } from "../composables/useSops";
+import { errorText, formatWhen } from "../lib/format";
 
 const { list, loading, error, storageEnabled, openDetail, openEditor, loadList, remove } = useSops();
 
@@ -12,10 +13,6 @@ const opError = ref("");
 
 const count = computed(() => list.value.length);
 
-function msg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 async function onDelete(id: string): Promise<void> {
   confirmId.value = null;
   deleting.value = id;
@@ -23,17 +20,10 @@ async function onDelete(id: string): Promise<void> {
   try {
     await remove(id);
   } catch (e) {
-    opError.value = msg(e);
+    opError.value = errorText(e);
   } finally {
     deleting.value = null;
   }
-}
-
-function formatWhen(sec: number | null): string {
-  if (!sec) return "";
-  const d = new Date(sec * 1000);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" });
 }
 </script>
 

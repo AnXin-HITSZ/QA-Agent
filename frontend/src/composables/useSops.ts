@@ -13,6 +13,7 @@ import {
   type SopSummary,
   type SopWrite,
 } from "../api";
+import { errorText } from "../lib/format";
 
 // 三态:列表 / 详情(只读)/ 编辑(新建或改)。
 export type SopMode = "list" | "detail" | "editor";
@@ -37,10 +38,6 @@ const detailError = ref("");
 const saving = ref(false);
 const saveError = ref("");
 
-function msg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 // 载入 SOP 列表。503 → 存储未接通(走空态,不当错误)。
 async function loadList(): Promise<void> {
   loading.value = true;
@@ -53,7 +50,7 @@ async function loadList(): Promise<void> {
       storageEnabled.value = false;
       list.value = [];
     } else {
-      error.value = msg(e);
+      error.value = errorText(e);
     }
   } finally {
     loaded.value = true;
@@ -74,7 +71,7 @@ async function openDetail(id: string): Promise<void> {
   try {
     current.value = await getSop(id);
   } catch (e) {
-    detailError.value = msg(e);
+    detailError.value = errorText(e);
   } finally {
     detailLoading.value = false;
   }
@@ -98,7 +95,7 @@ async function openEditor(id?: string): Promise<void> {
   try {
     current.value = await getSop(id);
   } catch (e) {
-    detailError.value = msg(e);
+    detailError.value = errorText(e);
   } finally {
     detailLoading.value = false;
   }
@@ -116,7 +113,7 @@ async function save(payload: SopWrite): Promise<boolean> {
     mode.value = "detail"; // 保存后回到详情,直接看落盘结果
     return true;
   } catch (e) {
-    saveError.value = msg(e);
+    saveError.value = errorText(e);
     return false;
   } finally {
     saving.value = false;

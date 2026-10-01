@@ -2,16 +2,10 @@
 import { computed } from "vue";
 
 import { useSops } from "../composables/useSops";
+import { formatWhen } from "../lib/format";
 import MarkdownView from "./MarkdownView.vue";
 
 const { current, detailLoading, detailError, showList, openEditor } = useSops();
-
-function formatWhen(sec: number | null): string {
-  if (!sec) return "";
-  const d = new Date(sec * 1000);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" });
-}
 
 // 更新于 X · 存于 sops/id.md;时间未知时只显存放位置。
 const meta = computed(() => {
