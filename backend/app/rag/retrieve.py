@@ -14,7 +14,6 @@ DEFAULT_TOP_K = 5
 # 余弦相似度阈值:低于此判为「不相关」丢弃。经验默认,需按真实语料再调
 # (text-embedding-v4 余弦下,弱相关常落在 0.2 上下)。
 SCORE_THRESHOLD = 0.2
-_SNIPPET_CHARS = 300
 
 
 def search_knowledge(
@@ -55,13 +54,11 @@ def search_knowledge(
     return hits
 
 
-def format_hits(hits: list[dict], snippet_chars: int = _SNIPPET_CHARS) -> str:
-    """把命中列表拼成给 LLM 阅读的文本(编号 + 来源文件名 + 片段)。"""
+def format_hits(hits: list[dict]) -> str:
+    """把命中列表拼成给 LLM 阅读的文本(编号 + 来源文件名 + 完整切块正文)。"""
     blocks: list[str] = []
     for i, h in enumerate(hits, start=1):
-        snippet = h.get("text") or ""
-        if len(snippet) > snippet_chars:
-            snippet = snippet[:snippet_chars].rstrip() + "…"
+        text = h.get("text") or ""
         src = h.get("source") or h.get("oss_key") or "未知来源"
-        blocks.append(f"[{i}] 来源:{src}\n{snippet}")
+        blocks.append(f"[{i}] 来源:{src}\n{text}")
     return "\n\n".join(blocks)
