@@ -2,7 +2,7 @@
 
 原件存阿里云 OSS(见 app/rag/oss.py);**分类树 = OSS key 前缀,由用户在前端手建**。
 用户只能把散文件塞进某个节点(平铺,`prefix + 文件名`),不能上传目录结构 —— 分类
-完全由手建的树定义。本步只做原件仓库的增删列,不触碰 Qdrant 向量 / 摄取 / 鉴权。
+完全由手建的树定义。admin 侧另有索引任务(/index-jobs,唯一的索引入口)与版本回退。
 
 所有 key / prefix 均为「知识库相对」(OSS_PREFIX 根前缀在 oss.py 内部拼接)。
 OSS 未配置(get_bucket 抛 RuntimeError)时返回 503,前端据此提示"知识库存储未接通"。
@@ -12,24 +12,28 @@ OSS 未配置(get_bucket 抛 RuntimeError)时返回 503,前端据此提示"知�
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import contextmanager
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
 
 from app.config import get_settings
-from app.rag import ingest, oss, store
+from app.rag import documents, ingest, ocr_jobs, oss, store
+from app.rag.cache_store import ensure_available
+from app.rag.embeddings import get_embeddings
 from app.schemas.knowledge import (
     CreateFolderRequest,
     CreateFolderResult,
     DeleteFolderResult,
     IndexedKeysResult,
-    IndexFileRequest,
-    IndexFileResult,
+    IndexJobFiles,
+    IndexJobRequest,
+    IndexJobStatus,
+    IndexManifestInfo,
+    IndexVersionInfo,
     KnowledgeFile,
     KnowledgeTree,
-    ReindexRequest,
-    ReindexResult,
     UploadResult,
     UploadResultItem,
 )
@@ -69,16 +73,61 @@ def _dep_503():
         raise
 
 
-def _drop_vectors(key: str) -> None:
-    """best-effort 删除某原件的向量(删原件时顺带清索引)。
+def _drop_vectors(key: str) -> bool:
+    """best-effort 删除某原件的向量(删原件时顺带清索引);真正删掉返回 True。
 
     失败只告警、不阻断 OSS 删除 —— OSS 原件是唯一事实源,索引是派生物,残留可事后
-    用全量重建清掉;更不该因 Qdrant 没接通就让"删文件"失败。
+    用全量重建清掉;更不该因 Qdrant 没接通就让"删文件"失败。返回值只用于如实记录
+    阶段(失败留待启动对账再试),不改变"不阻断"这一取舍。
     """
     try:
         ingest.delete_file_index(key)
+        return True
     except Exception as exc:  # Qdrant 未配 / 连接失败等,吞掉只记日志
         logger.warning("删除原件后清理向量失败 %s:%s", key, exc)
+        return False
+
+
+def _register_file(key: str, data: bytes) -> None:
+    """上传成功后登记文件身份(§6)。失败只告警:登记不依赖上传 / 索引成功,下次索引会补登记。"""
+    try:
+        documents.register(key, content_sha256=hashlib.sha256(data).hexdigest())
+    except Exception as exc:  # 缓存未接通 / 网络抖动都不该让上传失败
+        logger.warning("文件身份登记失败(下次索引会重新登记)%s:%s", key, exc)
+
+
+def _finish_deletion(pending: dict | None) -> None:
+    """删原件后按恢复记录清缓存、清单与登记(§8)。
+
+    失败只告警:记录已落盘,启动对账会补完剩下的阶段(不重跑 OCR)。
+    """
+    if pending is None:      # 未登记 / 缓存关闭:没有需要清理的东西
+        return
+    try:
+        documents.finish_deletion(pending)
+    except Exception as exc:
+        logger.warning("删除后清理缓存与登记失败(记录已保留,启动对账会补完)%s:%s",
+                       pending.get("oss_key"), exc)
+
+
+def _delete_one(kb, key: str) -> dict | None:
+    """删一个原件:恢复记录**先落盘**再删;删除失败就撤销记录,文件保持完整可用(§8)。"""
+    pending = documents.prepare_deletion(key)   # 读不到登记 / 清单 → 抛,原件不动
+    try:
+        kb.delete_object(key)
+    except Exception:
+        documents.abort_deletion(pending)
+        raise
+    documents.mark_deletion(pending, object_deleted=True)
+    return pending
+
+
+def _settle_deletion(pending: dict | None, key: str) -> None:
+    """删完原件后的收尾:向量(best-effort,失败如实记阶段)→ 缓存 / 清单 / 登记。"""
+    if pending is None:
+        _drop_vectors(key)
+    else:
+        _finish_deletion(pending)  # 统一由恢复流程校验身份并推进阶段
 
 
 @router.get("/tree", response_model=KnowledgeTree)
@@ -135,13 +184,18 @@ def upload_files(
                 continue
             data = f.file.read()  # 同步处理器,直接读底层文件对象(FastAPI 已在线程池中跑本函数)
             kb.put_object(key, data, content_type=f.content_type or None, meta={"title": name})
+            _register_file(key, data)  # 身份在最早的时刻登记,不等索引成功(§6)
             items.append(UploadResultItem(name=name, key=key, status="uploaded"))
     return UploadResult(prefix=p, items=items)
 
 
 @router.delete("/object", status_code=status.HTTP_204_NO_CONTENT)
 def delete_file(key: str) -> Response:
-    """删单个文件。key 为知识库相对;拒绝以 / 结尾(那是节点,应走 /folder)。"""
+    """删单个文件。key 为知识库相对;拒绝以 / 结尾(那是节点,应走 /folder)。
+
+    顺序(§8):先把登记与清单读齐、落下恢复记录,再删原件 —— 缓存 / Redis 读不到必要
+    信息时直接 503,**不删原件**,否则会出现"原件已删、却没有恢复凭据"的缺口。
+    """
     k = (key or "").strip().lstrip("/")
     if not k or k.endswith("/"):
         raise HTTPException(
@@ -149,14 +203,19 @@ def delete_file(key: str) -> Response:
             detail="key 不能为空、且不能以 / 结尾(删分类节点请用 DELETE /folder)",
         )
     with _dep_503():
-        oss.knowledge_store().delete_object(k)
-    _drop_vectors(k)  # 连带清该文件的向量(best-effort,不阻断)
+        pending = _delete_one(oss.knowledge_store(), k)
+    _settle_deletion(pending, k)   # 向量(best-effort)→ 缓存 → 清单 → 登记 / 路径映射
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete("/folder", response_model=DeleteFolderResult)
 def delete_folder(prefix: str) -> DeleteFolderResult:
-    """删整个分类节点:递归清掉该前缀下的全部对象。必须指定非空 prefix。"""
+    """删整个分类节点:递归清掉该前缀下的全部对象。必须指定非空 prefix。
+
+    先给子树里每个已登记文件落恢复记录,再批量删原件(§8)。记录阶段失败时全部撤销、
+    一个对象都不删;批量删除本身失败则**保留记录** —— 批量接口无法知道哪些对象已经
+    删掉,撤销会让已删对象永远失去清理凭据,启动对账会核对后把剩下的补删、再清缓存。
+    """
     p = _norm(prefix)
     if not p:
         raise HTTPException(
@@ -165,29 +224,20 @@ def delete_folder(prefix: str) -> DeleteFolderResult:
         )
     with _dep_503():
         kb = oss.knowledge_store()
-        keys = [f["key"] for f in kb.list_all(p)]  # 删前拿到子树文件清单,供连带清向量
+        keys = [f["key"] for f in kb.list_all(p)]  # 删前拿到子树文件清单
+        prepared: list[dict | None] = []
+        try:
+            for k in keys:
+                prepared.append(documents.prepare_deletion(k))
+        except Exception:
+            for rec in prepared:                   # 还没动原件:全部撤销,保持原样
+                documents.abort_deletion(rec)
+            raise
         n = kb.delete_prefix(p)
-    for k in keys:  # best-effort 清理每个文件的向量(不阻断)
-        _drop_vectors(k)
+    for k, rec in zip(keys, prepared):
+        documents.mark_deletion(rec, object_deleted=True)
+        _settle_deletion(rec, k)
     return DeleteFolderResult(prefix=p, deleted=n)
-
-
-@admin_router.post("/index", response_model=IndexFileResult)
-def index_object(body: IndexFileRequest) -> IndexFileResult:
-    """增量索引单个原件(前端上传成功后逐个调用)。
-
-    幂等:先删该 key 旧向量再写。needs_ocr / unsupported / 空正文 → indexed=False + reason
-    (仍 200,前端据此标"索引失败:原因")。Embeddings / Qdrant 未配置 → 503。
-    """
-    key = (body.key or "").strip().lstrip("/")
-    if not key or key.endswith("/"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="key 不能为空、且不能以 / 结尾(那是节点,不是文件)",
-        )
-    with _dep_503():
-        result = ingest.index_file(key)
-    return IndexFileResult(**result)
 
 
 @admin_router.get("/indexed", response_model=IndexedKeysResult)
@@ -202,17 +252,97 @@ def list_indexed(prefix: str = "") -> IndexedKeysResult:
     return IndexedKeysResult(prefix=p, keys=sorted(keys))
 
 
-@admin_router.post("/reindex", response_model=ReindexResult)
-def reindex_knowledge(body: ReindexRequest | None = None) -> ReindexResult:
-    """重建向量索引(v1:清空 + 全量重建):遍历 OSS 原件 → 抽取 → 切块 → 向量化 → 写 Qdrant。
+# ---- 索引任务(唯一的索引入口:202 + 轮询进度)----
 
-    OSS / Qdrant / Embeddings 任一未配置 → 503(依赖未接通;摄取内部先验依赖再清库,
-    避免清空后才失败)。处理器用同步 def(FastAPI 丢线程池)—— 摄取是重阻塞操作,
-    否则会堵住并发的流式对话。
+def _require_deps() -> None:
+    """任务创建前的依赖自检:缺 OSS / Qdrant / Embeddings / 缓存配置时立刻 503,别等任务跑起来才失败。"""
+    oss.knowledge_store()
+    store.get_client()
+    get_embeddings()
+    ensure_available()   # 缓存未配置 / 连不上:这里就报错(CACHE_BACKEND=none 除外)
+
+
+@admin_router.post("/index-jobs", response_model=IndexJobStatus, status_code=status.HTTP_202_ACCEPTED)
+def create_index_job(body: IndexJobRequest) -> IndexJobStatus:
+    """创建索引任务:立即返回 202 + job_id,后台单工作者执行,前端轮询进度。
+
+    同一时刻只允许一个任务(否则两个发布互相覆盖)→ 已有任务在跑返回 409。
+    范围用 kind 区分 prefix(子树)/ keys(显式清单),两者互斥。
     """
-    prefix = (body.prefix if body else "") or ""
-    try:
-        result = ingest.reindex(prefix)
-    except RuntimeError as exc:  # OSS / Qdrant / Embeddings 未配置
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    return ReindexResult(**result)
+    scope = ingest.Scope(
+        kind=body.scope.kind,
+        prefix=_norm(body.scope.prefix) if body.scope.kind == "prefix" else "",
+        keys=tuple(k.strip().lstrip("/") for k in body.scope.keys if k and k.strip()),
+    )
+    opts = ingest.Options(extraction_mode=body.options.extraction_mode,
+                          mixed_invoice=body.options.mixed_invoice,
+                          refresh_ocr=body.options.refresh_ocr)
+    with _dep_503():
+        _require_deps()
+        try:
+            job = ocr_jobs.new_job(scope, opts)
+        except ocr_jobs.JobBusy as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    ocr_jobs.start_job(job)
+    return IndexJobStatus(**job)
+
+
+@admin_router.get("/index-jobs/current", response_model=IndexJobStatus | None)
+def get_current_job() -> IndexJobStatus | None:
+    """正在跑的任务(没有则返回最近一个任务),供前端进入页面时恢复进度显示。"""
+    job = ocr_jobs.current_job()
+    return IndexJobStatus(**job) if job else None
+
+
+@admin_router.get("/index-jobs/{job_id}", response_model=IndexJobStatus)
+def get_index_job(job_id: str) -> IndexJobStatus:
+    """查询任务状态与进度。"""
+    job = ocr_jobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"任务不存在:{job_id}")
+    return IndexJobStatus(**job)
+
+
+@admin_router.get("/index-jobs/{job_id}/files", response_model=IndexJobFiles)
+def get_index_job_files(job_id: str, offset: int = 0, limit: int = 100) -> IndexJobFiles:
+    """分页读取任务的文件明细(含页码统计、失败页、跳过原因)。"""
+    if not ocr_jobs.get_job(job_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"任务不存在:{job_id}")
+    return IndexJobFiles(job_id=job_id, **ocr_jobs.files_page(job_id, offset, limit))
+
+
+@admin_router.get("/index-manifest", response_model=IndexManifestInfo)
+def get_index_manifest() -> IndexManifestInfo:
+    """当前生效的索引版本与本地版本集合(排查 / 回退前确认用)。"""
+    with _dep_503():
+        m = store.read_manifest()
+        versions = store.versions()
+    return IndexManifestInfo(
+        active=store.active_collection(),
+        previous=m.get("previous"),
+        staging=m.get("staging"),
+        updated_at=m.get("updated_at"),
+        versions=[IndexVersionInfo(**v) for v in versions],
+    )
+
+
+@admin_router.post("/index-manifest/rollback", response_model=IndexManifestInfo)
+def rollback_index() -> IndexManifestInfo:
+    """回退到上一版本(只切指针,不删任何集合)。有任务在跑时拒绝,避免与发布互相覆盖。"""
+    lock = ocr_jobs.job_running()
+    if lock:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"有索引任务在运行({lock.get('job_id')}),请先等它结束再回退",
+        )
+    with _dep_503():
+        store.rollback()
+        versions = store.versions()
+    m = store.read_manifest()
+    return IndexManifestInfo(
+        active=store.active_collection(),
+        previous=m.get("previous"),
+        staging=m.get("staging"),
+        updated_at=m.get("updated_at"),
+        versions=[IndexVersionInfo(**v) for v in versions],
+    )

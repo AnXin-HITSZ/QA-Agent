@@ -69,6 +69,15 @@ async def lifespan(app: FastAPI):
             todo_store = None
     app.state.todos = todo_store
 
+    # 索引任务对账:上次进程留下的 queued / running 任务不可能自己复活,标记为中断失败,
+    # 让前端看到明确状态(已识别页面都在 OCR 缓存里,重新排队不会重复付费)。
+    try:
+        from app.rag import ocr_jobs
+
+        ocr_jobs.reconcile()
+    except Exception as exc:
+        logger.warning("索引任务对账失败(不影响启动):%s", exc)
+
     try:
         yield
     finally:

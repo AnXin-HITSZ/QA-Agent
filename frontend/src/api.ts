@@ -282,30 +282,107 @@ export interface DeleteFolderResult {
   deleted: number; // 删除的对象个数(含目录标记)
 }
 
-// 单文件增量索引结果。indexed=false 时 reason 说明未索引原因(needs_ocr / unsupported / error…)。
-export interface IndexFileResult {
-  key: string;
-  indexed: boolean;
-  chunks: number; // 写入的切块 / 向量数
-  reason: string | null;
-}
-
 export interface IndexedKeysResult {
   prefix: string;
   keys: string[]; // 该节点下已建立索引的原件 key
 }
 
-// 全量重建结果(维护兜底用)。
-export interface ReindexResult {
-  collection: string;
-  prefix: string;
-  total_files: number;
-  indexed_files: number;
-  skipped_files: number;
+// ── 提取方式与索引任务(OCR 接入,见 docs/OCR接入技术方案.md §8)──
+//
+// 提取方式由用户显式选择,不做自动分类 / 前缀路由 / 自动切换:
+//   native_only  不使用 OCR,只取原生文本层(不产生付费调用)
+//   general      通用文字识别
+//   invoice      发票识别(可加 mixed_invoice = 「混贴票据页」)
+//   payment_record 付款详情识别
+export type ExtractionMode = "native_only" | "general" | "invoice" | "payment_record";
+
+// 一次索引 / 重建的提取选项。非法组合(混贴非发票、刷新缓存配原生提取)后端返回 422。
+export interface IndexOptions {
+  extraction_mode: ExtractionMode;
+  mixed_invoice?: boolean;
+  refresh_ocr?: boolean;
+}
+
+// 任务范围:前缀子树与显式 key 清单互斥(两种都传后端返回 422)。
+export interface IndexJobScope {
+  kind: "prefix" | "keys";
+  prefix?: string; // kind=prefix:知识库相对前缀;空 = 整库
+  keys?: string[]; // kind=keys:显式文件清单
+}
+
+export interface JobPageStats {
+  total: number; // 该文件总页数
+  ok: number; // 成功提取的页
+  blank: number; // 判定为空白页
+  failed: number; // 识别失败 / 不完整的页
+  cached: number; // 命中 OCR 缓存的页(未重复付费)
+}
+
+// 逐文件明细(任务进行中逐个追加,分页读取)。
+export interface IndexJobFileRow {
+  key: string;
+  status: "indexed" | "skipped" | "failed";
   chunks: number;
-  vectors: number;
-  skipped: { key: string; reason: string }[];
-  skipped_truncated: boolean;
+  reason: string | null;
+  method: string; // 实际用的提取方法:native / ocr(逗号分隔)
+  ext: string;
+  pages: JobPageStats;
+  failed_pages: number[];
+  warnings: string[];
+}
+
+export interface IndexJobFiles {
+  job_id: string;
+  total: number;
+  offset: number;
+  limit: number;
+  items: IndexJobFileRow[];
+}
+
+export interface IndexJobSummary {
+  index_version?: string;
+  previous?: string;
+  published?: boolean;
+  total_files?: number;
+  indexed_files?: number;
+  skipped_files?: number;
+  failed_files?: number;
+  chunks?: number;
+  vectors?: number;
+  copied_out_of_scope?: number;
+  replaced_in_scope?: number;
+  pages?: JobPageStats;
+  message?: string;
+  skipped?: { key: string; reason: string }[];
+  files_truncated?: boolean;
+}
+
+export interface IndexJobStatus {
+  job_id: string;
+  status: "queued" | "running" | "published" | "failed";
+  scope: { kind?: string; prefix?: string; keys?: string[] };
+  options: IndexOptions;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  progress: { done: number; total: number; current: string | null };
+  published: boolean | null; // null = 尚未结束
+  error: string | null; // 未发布时的原因
+  summary: IndexJobSummary | null;
+}
+
+export interface IndexVersionInfo {
+  name: string;
+  role: string; // active / previous / staging / version / legacy
+  points: number;
+}
+
+export interface IndexManifestInfo {
+  active: string; // 当前生效的物理集合名
+  previous: string | null; // 上一版本(回退目标)
+  staging: string | null; // 正在构建的候选集合
+  updated_at: string | null;
+  versions: IndexVersionInfo[];
 }
 
 // 带 HTTP 状态码的错误,便于区分「存储/索引未接通」(503)与其它失败。
@@ -385,15 +462,6 @@ export async function deleteFolder(prefix: string): Promise<DeleteFolderResult> 
   );
 }
 
-// 增量索引单个原件(上传成功后逐个调用)。Embeddings/Qdrant 未配 → ApiError(503)。
-export async function indexFile(key: string): Promise<IndexFileResult> {
-  return kfetchJson<IndexFileResult>(`/api/v1/admin/knowledge/index`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key }),
-  });
-}
-
 // 列出某节点下已建立索引的原件 key(供浏览时显示已/未索引徽标)。Qdrant 未配 → ApiError(503)。
 export async function indexedKeys(prefix = ""): Promise<IndexedKeysResult> {
   return kfetchJson<IndexedKeysResult>(
@@ -401,12 +469,51 @@ export async function indexedKeys(prefix = ""): Promise<IndexedKeysResult> {
   );
 }
 
-// 全量重建索引(维护兜底):留空 prefix = 整库,否则只重建该子树。
-export async function reindexKnowledge(prefix = ""): Promise<ReindexResult> {
-  return kfetchJson<ReindexResult>(`/api/v1/admin/knowledge/reindex`, {
+// ── 索引任务(唯一的索引入口:长任务异步执行,202 + 轮询)──
+
+// 创建索引任务:立即返回 202 + job_id;已有任务在跑 → ApiError(409)。
+// 提取方式必须显式传(后端强制),不隐式补默认值 —— 避免误产生付费 OCR 调用。
+export async function createIndexJob(
+  scope: IndexJobScope,
+  options: IndexOptions,
+): Promise<IndexJobStatus> {
+  return kfetchJson<IndexJobStatus>(`/api/v1/admin/knowledge/index-jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prefix }),
+    body: JSON.stringify({ scope, options }),
+  });
+}
+
+// 查任务状态与进度。
+export async function getIndexJob(jobId: string): Promise<IndexJobStatus> {
+  return kfetchJson<IndexJobStatus>(`/api/v1/admin/knowledge/index-jobs/${encodeURIComponent(jobId)}`);
+}
+
+// 正在跑的任务(没有则返回最近一个任务;从未跑过 → null),进入页面时恢复进度显示。
+export async function getCurrentIndexJob(): Promise<IndexJobStatus | null> {
+  return kfetchJson<IndexJobStatus | null>(`/api/v1/admin/knowledge/index-jobs/current`);
+}
+
+// 分页读任务的文件明细(含页码统计、失败页、跳过原因)。
+export async function getIndexJobFiles(
+  jobId: string,
+  offset = 0,
+  limit = 100,
+): Promise<IndexJobFiles> {
+  return kfetchJson<IndexJobFiles>(
+    `/api/v1/admin/knowledge/index-jobs/${encodeURIComponent(jobId)}/files?offset=${offset}&limit=${limit}`,
+  );
+}
+
+// 当前生效的索引版本与本地版本集合(回退前确认用)。
+export async function getIndexManifest(): Promise<IndexManifestInfo> {
+  return kfetchJson<IndexManifestInfo>(`/api/v1/admin/knowledge/index-manifest`);
+}
+
+// 回退到上一版本(只切指针,不删集合)。有任务在跑 → ApiError(409)。
+export async function rollbackIndex(): Promise<IndexManifestInfo> {
+  return kfetchJson<IndexManifestInfo>(`/api/v1/admin/knowledge/index-manifest/rollback`, {
+    method: "POST",
   });
 }
 

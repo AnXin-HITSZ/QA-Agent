@@ -1,9 +1,20 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import { useKnowledge, type UploadRow } from "../composables/useKnowledge";
+import IndexModePicker from "./IndexModePicker.vue";
 
-const { uploading, uploadRows, makeFolder, uploadAndIndex, clearUploads } = useKnowledge();
+const {
+  uploading,
+  jobRunning,
+  uploadRows,
+  modeChosen,
+  makeFolder,
+  uploadAndIndex,
+  clearUploads,
+  retryUploadRow,
+  indexPendingUploads,
+} = useKnowledge();
 
 // 新建分类的行内表单状态。
 const creating = ref(false);
@@ -12,6 +23,10 @@ const createError = ref("");
 const creatingBusy = ref(false);
 const nameInput = ref<HTMLInputElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
+
+const pendingIndex = computed(() => uploadRows.value.filter((r) => r.phase === "need_mode").length);
+// 索引任务在跑时不能再建新任务(后端单工作者会 409),所以上传 / 重试一并禁用。
+const busy = computed(() => uploading.value || jobRunning.value);
 
 function openCreate(): void {
   creating.value = true;
@@ -58,6 +73,11 @@ async function onFiles(e: Event): Promise<void> {
   if (files.length) await uploadAndIndex(files);
 }
 
+// 上传行里可重试的:索引失败 / 还没选提取方式(选好后补索引)。
+function canRetry(r: UploadRow): boolean {
+  return r.phase === "index_failed" || r.phase === "need_mode";
+}
+
 // 进度行 → 展示文案 + 语气(ok 青 / bad 红 / muted 灰 / pending 进行中)。
 function phaseText(r: UploadRow): string {
   switch (r.phase) {
@@ -69,6 +89,8 @@ function phaseText(r: UploadRow): string {
       return r.chunks ? `已索引 · ${r.chunks} 块` : "已索引";
     case "index_failed":
       return `索引失败:${r.reason ?? "未知原因"}`;
+    case "need_mode":
+      return "待索引:先选提取方式";
     case "skipped_exists":
       return "同名已存在,未覆盖";
     case "rejected":
@@ -98,17 +120,30 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
 
 <template>
   <div class="tb">
+    <IndexModePicker />
+
     <div class="tb__actions">
       <button
         class="tb__btn"
         type="button"
-        :disabled="creating || uploading"
+        :disabled="creating || busy"
         @click="openCreate"
       >
         <span aria-hidden="true">＋</span> 新建分类
       </button>
-      <button class="tb__btn" type="button" :disabled="uploading" @click="pickFiles">
-        <span aria-hidden="true">↑</span> {{ uploading ? "上传中…" : "上传文件" }}
+      <button class="tb__btn" type="button" :disabled="busy" @click="pickFiles">
+        <span aria-hidden="true">↑</span>
+        {{ uploading ? "上传中…" : jobRunning ? "索引中…" : "上传文件" }}
+      </button>
+      <button
+        v-if="pendingIndex"
+        class="tb__btn"
+        type="button"
+        :disabled="busy || !modeChosen"
+        :title="modeChosen ? '用当前提取方式索引已上传但未索引的文件' : '先在上方选择提取方式'"
+        @click="indexPendingUploads"
+      >
+        继续索引 {{ pendingIndex }} 个待处理
       </button>
       <input
         ref="fileInput"
@@ -118,6 +153,9 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
         @change="onFiles"
       />
     </div>
+    <p v-if="!modeChosen" class="tb__note">
+      上传不受影响;选好提取方式后才会建索引(不替你隐式选择,避免误产生付费 OCR 调用)。
+    </p>
 
     <form v-if="creating" class="tb__create" @submit.prevent="submitCreate">
       <input
@@ -141,12 +179,22 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
     <div v-if="uploadRows.length" class="tb__uploads">
       <div class="tb__uphead">
         <span>上传进度</span>
-        <button v-if="!uploading" class="tb__clear" type="button" @click="clearUploads">清除</button>
+        <button v-if="!busy" class="tb__clear" type="button" @click="clearUploads">清除</button>
       </div>
       <ul class="tb__uplist">
         <li v-for="(r, i) in uploadRows" :key="i" class="tb__uprow">
           <span class="tb__upname" :title="r.name">{{ r.name }}</span>
           <span class="tb__upstat" :class="'is-' + phaseTone(r)">{{ phaseText(r) }}</span>
+          <button
+            v-if="canRetry(r)"
+            class="tb__retry"
+            type="button"
+            :disabled="busy || !modeChosen"
+            :title="modeChosen ? '用当前提取方式重试这个文件' : '先在上方选择提取方式'"
+            @click="retryUploadRow(r)"
+          >
+            重试
+          </button>
         </li>
       </ul>
     </div>
@@ -160,6 +208,7 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
 .tb__actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .tb__btn {
   display: inline-flex;
@@ -185,6 +234,12 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
 }
 .tb__file {
   display: none;
+}
+.tb__note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .tb__create {
@@ -280,7 +335,6 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
 .tb__uprow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
@@ -289,6 +343,7 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
   border-bottom: 0;
 }
 .tb__upname {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -311,5 +366,25 @@ function phaseTone(r: UploadRow): "ok" | "bad" | "muted" | "pending" {
 }
 .tb__upstat.is-pending {
   color: var(--primary);
+}
+.tb__retry {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tb__retry:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.tb__retry:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

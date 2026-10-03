@@ -3,6 +3,10 @@
 v1 纯语义检索,不带分类 / 元数据过滤(全库);低于分数阈值的命中丢弃以降噪。
 命中同时服务两个通道:给 LLM 阅读的正文片段,与给 API 层的引用元数据(oss_key →
 后续在 API 层签成短时效 URL,不在此处签、也不存库)。
+
+查询向量**不落缓存**(§4.3 修订):每个问题都直接调 embedding 客户端,检索链路的可用性
+不依赖 Redis / 缓存锁 —— 缓存只用于索引侧对同一批文本的重复向量化。Redis 故障时
+这里既不静默降级、也不误报未命中,只是与缓存无关地照常工作。索引侧仍走 embedding_cache。
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ def search_knowledge(
     q = (query or "").strip()
     if not q:
         return []
-    vector = get_embeddings().embed_query(q)
+    vector = get_embeddings().embed_query(q)   # 查询向量不进缓存:检索不依赖 Redis(§4.3 修订)
     points = store.search(vector, top_k=top_k)
     hits: list[dict] = []
     for p in points:

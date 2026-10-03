@@ -21,10 +21,17 @@ const {
   isIndexed,
   removeFile,
   removeFolder,
+  resumeJob,
+  refreshManifest,
 } = useKnowledge();
 
-// 进入知识库视图即载入当前节点(单例保留了上次位置)。
-onMounted(() => void loadTree(prefix.value));
+// 进入知识库视图即载入当前节点(单例保留了上次位置);
+// 同时恢复索引任务进度(可能由别的标签页 / 上次访问发起)与版本信息。
+onMounted(() => {
+  void loadTree(prefix.value);
+  void resumeJob();
+  void refreshManifest();
+});
 
 const folders = computed(() => tree.value?.folders ?? []);
 const files = computed(() => tree.value?.files ?? []);

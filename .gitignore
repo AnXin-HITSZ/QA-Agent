@@ -24,6 +24,9 @@ node_modules/
 dist/
 *.local
 
+# OCR 缓存 / 索引任务 / 版本指针(backend/data/ocr,含识别出的票据正文,绝不入库)
+backend/data/
+
 # OS / IDE
 .DS_Store
 .idea/
