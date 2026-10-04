@@ -19,6 +19,10 @@ npm run dev
 > ```bash
 > cd backend && python -m uvicorn app.main:app --reload
 > ```
+> 8000 被占用时(常见:VS Code 把 ECS 的 8000 转发到了本机),`bash start-dev.sh` 会自动
+> 向上找空闲端口(8000–8019)并把前端代理同步过去,无需手动干预;想钉死某个端口用
+> `QA_AGENT_BACK_PORT=8001 bash start-dev.sh`(被占则直接报错)。
+> 单独跑前端时可设 `QA_AGENT_API_TARGET=http://127.0.0.1:8001 npm run dev`(默认仍是 8000)。
 
 ## 目录结构
 ```
