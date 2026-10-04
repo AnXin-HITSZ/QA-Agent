@@ -25,13 +25,13 @@ import {
 import { errorText } from "../lib/format";
 import { addDaysIso, todayIso } from "../lib/todoDate";
 
-// 时间范围预设。自定义时用两个日期选择器 + 精确到分的时刻输入(合成 datetime-local 串)。
-export type RangeKey = "24h" | "7d" | "30d" | "custom";
+// 时间范围预设。自定义时用「日期 + 时刻」组合框选起止(合成 datetime-local 串)。
+export type RangeKey = "24h" | "today" | "7d" | "30d" | "custom";
 export type ServiceKey = "" | "embedding" | "ocr";
 export type PurposeKey = "" | "document_index" | "query";
 export type StatusKey = "" | "success" | "failure";
 
-const RANGE_HOURS: Record<Exclude<RangeKey, "custom">, number> = {
+const RANGE_HOURS: Record<Exclude<RangeKey, "custom" | "today">, number> = {
   "24h": 24,
   "7d": 24 * 7,
   "30d": 24 * 30,
@@ -103,6 +103,11 @@ function buildQuery(withPage: boolean): MeteringQuery | string {
     if (new Date(since) >= new Date(until)) return "起始时间必须早于结束时间。";
     q.since = since;
     q.until = until;
+  } else if (range.value === "today") {
+    // 「今天」= 今日 00:00(本地)→ 现在:按日历日算,不是「近 24 小时」。
+    const now = new Date();
+    q.until = now.toISOString();
+    q.since = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
   } else {
     const until = new Date();
     q.until = until.toISOString();

@@ -19,7 +19,9 @@ import {
 import { formatMs, formatStamp, formatStampFull, trimDecimal } from "../lib/format";
 import { todayIso } from "../lib/todoDate";
 import DateField from "./DateField.vue";
+import DateTimeField from "./DateTimeField.vue";
 import MeteringDetail from "./MeteringDetail.vue";
+import SelectField from "./SelectField.vue";
 
 const {
   range,
@@ -72,36 +74,49 @@ onErrorCaptured((err) => {
   failMessage.value = err instanceof Error ? err.message : String(err);
 });
 
+// 标签写整条:胶囊与触发器共用同一份文案(「今天」放进后缀模板会拼成「最近 今天」)。
 const RANGES: { key: RangeKey; label: string }[] = [
-  { key: "24h", label: "24 小时" },
-  { key: "7d", label: "7 天" },
-  { key: "30d", label: "30 天" },
+  { key: "24h", label: "最近 24 小时" },
+  { key: "today", label: "今天" },
+  { key: "7d", label: "最近 7 天" },
+  { key: "30d", label: "最近 30 天" },
   { key: "custom", label: "自定义" },
 ];
-const SERVICE_FILTERS: { key: ServiceKey; label: string; title: string }[] = [
-  { key: "", label: "全部", title: "不限服务" },
-  { key: "embedding", label: "embedding", title: "embedding(向量化)" },
-  { key: "ocr", label: "ocr", title: "ocr(文字 / 票据识别)" },
+// 三个筛选下拉的选项:首项值都是空串 = 不过滤(后端口径:不传即不限)。
+// 列表是自绘的,不再有原生 title 提示,所以文案直接写全(如「索引(写库)」)。
+const serviceOptions: { value: ServiceKey; label: string }[] = [
+  { value: "", label: "全部服务" },
+  { value: "embedding", label: "embedding(向量化)" },
+  { value: "ocr", label: "ocr(文字 / 票据识别)" },
 ];
-const PURPOSE_FILTERS: { key: PurposeKey; label: string; title: string }[] = [
-  { key: "", label: "全部", title: "不限用途" },
-  { key: "document_index", label: "索引", title: "索引(写库)" },
-  { key: "query", label: "检索", title: "检索(问答)" },
+const purposeOptions: { value: PurposeKey; label: string }[] = [
+  { value: "", label: "全部用途" },
+  { value: "document_index", label: "索引(写库)" },
+  { value: "query", label: "检索(问答)" },
 ];
-const STATUS_FILTERS: { key: StatusKey; label: string; title: string }[] = [
-  { key: "", label: "全部", title: "不限状态" },
-  { key: "success", label: "成功", title: "业务调用成功" },
-  { key: "failure", label: "失败", title: "业务调用失败(与日志补写失败无关)" },
+const statusOptions: { value: StatusKey; label: string }[] = [
+  { value: "", label: "全部状态" },
+  { value: "success", label: "成功" },
+  { value: "failure", label: "失败(业务调用失败,与日志补写失败无关)" },
 ];
 
 const activeTab = ref("logs");
 const rangeDialog = ref<HTMLDialogElement | null>(null);
-const draft = reactive({ since: "", until: "" });
+// 自定义范围的草稿:日期与时刻分开存(与组合框的两个 v-model 一一对应),
+// 应用时再合成 datetime-local 串;日期可以清空(null)回到占位,由校验拦下。
+const draft = reactive<{
+  sinceDate: string | null; sinceTime: string; untilDate: string | null; untilTime: string;
+}>({ sinceDate: null, sinceTime: "00:00", untilDate: null, untilTime: "23:59" });
 const rangeError = ref("");
-const rangeLabel = computed(() => range.value === "custom" ? `${customSinceDate.value} — ${customUntilDate.value}` : `最近 ${RANGES.find(r => r.key === range.value)?.label}`);
+// 对话框每次关窗 +1,给两个组合框当 key 强制重挂载:浮层(日历 / 时刻)的展开状态
+// 跟着对话框走,不然取消后重开会看到上次没关的浮层还挂在那里。
+const rangeEpoch = ref(0);
+const rangeLabel = computed(() => range.value === "custom" ? `${customSinceDate.value} — ${customUntilDate.value}` : RANGES.find(r => r.key === range.value)?.label ?? "自定义");
 function openRange(): void {
-  draft.since = `${customSinceDate.value}T${customSinceTime.value}`;
-  draft.until = `${customUntilDate.value}T${customUntilTime.value}`;
+  draft.sinceDate = customSinceDate.value;
+  draft.sinceTime = customSinceTime.value;
+  draft.untilDate = customUntilDate.value;
+  draft.untilTime = customUntilTime.value;
   rangeError.value = "";
   rangeDialog.value?.showModal();
 }
@@ -109,11 +124,13 @@ function onRangeBackdrop(event: MouseEvent): void { if (event.target === rangeDi
 function closeRange(): void { rangeDialog.value?.close(); }
 function chooseRange(key: RangeKey): void { setRange(key); closeRange(); }
 function applyRange(): void {
-  if (!draft.since || !draft.until || !Number.isFinite(Date.parse(draft.since)) || !Number.isFinite(Date.parse(draft.until)) || new Date(draft.since) >= new Date(draft.until)) {
+  const since = draft.sinceDate ? `${draft.sinceDate}T${draft.sinceTime}` : "";
+  const until = draft.untilDate ? `${draft.untilDate}T${draft.untilTime}` : "";
+  if (!since || !until || !Number.isFinite(Date.parse(since)) || !Number.isFinite(Date.parse(until)) || new Date(since) >= new Date(until)) {
     rangeError.value = "请选择有效时间，结束时间须晚于开始时间。"; return;
   }
-  [customSinceDate.value, customSinceTime.value] = draft.since.split("T") as [string, string];
-  [customUntilDate.value, customUntilTime.value] = draft.until.split("T") as [string, string];
+  customSinceDate.value = draft.sinceDate; customSinceTime.value = draft.sinceTime;
+  customUntilDate.value = draft.untilDate; customUntilTime.value = draft.untilTime;
   range.value = "custom"; applyFilters(); closeRange();
 }
 function resetFilters(): void { service.value = ""; purpose.value = ""; status.value = ""; setRange("7d"); }
@@ -305,19 +322,42 @@ async function onRemovePrice(id: number | null): Promise<void> {
       </header>
 
       <div class="mt__filters">
-        <button class="mt__btn mt__dateTrigger" aria-haspopup="dialog" @click="openRange">◷ {{ rangeLabel }} ⌄</button>
-        <label class="mt__selectLabel">服务<select v-model="service" class="mt__input" @change="applyFilters"><option v-for="s in SERVICE_FILTERS" :key="s.key" :value="s.key">{{ s.key ? s.title : '全部服务' }}</option></select></label>
-        <label class="mt__selectLabel">用途<select v-model="purpose" class="mt__input" @change="applyFilters"><option v-for="p in PURPOSE_FILTERS" :key="p.key" :value="p.key">{{ p.key ? p.label : '全部用途' }}</option></select></label>
-        <label class="mt__selectLabel">状态<select v-model="status" class="mt__input" @change="applyFilters"><option v-for="s in STATUS_FILTERS" :key="s.key" :value="s.key">{{ s.key ? s.label : '全部状态' }}</option></select></label>
+        <button class="mt__btn mt__dateTrigger" type="button" aria-haspopup="dialog" @click="openRange">
+          <span class="mt__dateTriggerT">
+            <svg class="mt__dtIc" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="5.6" />
+              <polyline points="8,4.8 8,8 10.4,9.6" />
+            </svg>
+            {{ rangeLabel }}
+          </span>
+          <svg class="mt__dtCv" viewBox="0 0 12 12" aria-hidden="true">
+            <polyline points="2.5,4.5 6,8 9.5,4.5" />
+          </svg>
+        </button>
+        <SelectField v-model="service" label="服务" :options="serviceOptions" @change="applyFilters" />
+        <SelectField v-model="purpose" label="用途" :options="purposeOptions" @change="applyFilters" />
+        <SelectField v-model="status" label="状态" :options="statusOptions" @change="applyFilters" />
         <button class="mt__textBtn" :disabled="!filtersActive && range === '7d'" @click="resetFilters">重置</button>
       </div>
-      <dialog ref="rangeDialog" class="mt__dateDialog" aria-labelledby="range-title" @click="onRangeBackdrop">
+      <dialog ref="rangeDialog" class="mt__dateDialog" aria-labelledby="range-title" @click="onRangeBackdrop" @close="rangeEpoch++">
         <div class="mt__dateContent">
           <div class="mt__dialogHead"><h3 id="range-title">选择时间范围</h3><button class="mt__textBtn" aria-label="关闭时间选择" @click="closeRange">✕</button></div>
-          <div class="flt__chips"><button v-for="r in RANGES.filter(r => r.key !== 'custom')" :key="r.key" class="flt__chip" :class="{ 'is-on': range === r.key }" @click="chooseRange(r.key)">最近 {{ r.label }}</button></div>
+          <div class="flt__chips"><button v-for="r in RANGES.filter(r => r.key !== 'custom')" :key="r.key" class="flt__chip" :class="{ 'is-on': range === r.key }" @click="chooseRange(r.key)">{{ r.label }}</button></div>
           <p class="mt__sub">自定义范围 · 本地时间</p>
-          <label class="mt__dateLabel">开始时间<input v-model="draft.since" class="mt__input" type="datetime-local" /></label>
-          <label class="mt__dateLabel">结束时间<input v-model="draft.until" class="mt__input" type="datetime-local" /></label>
+          <div class="mt__field">
+            <div class="mt__fieldLabel">
+              <span class="mt__fieldName">开始时间</span>
+              <button v-if="draft.sinceDate" class="mt__fieldClear" type="button" @click="draft.sinceDate = null">清除</button>
+            </div>
+            <DateTimeField :key="rangeEpoch" v-model:date="draft.sinceDate" v-model:time="draft.sinceTime" />
+          </div>
+          <div class="mt__field">
+            <div class="mt__fieldLabel">
+              <span class="mt__fieldName">结束时间</span>
+              <button v-if="draft.untilDate" class="mt__fieldClear" type="button" @click="draft.untilDate = null">清除</button>
+            </div>
+            <DateTimeField :key="rangeEpoch" v-model:date="draft.untilDate" v-model:time="draft.untilTime" eod />
+          </div>
           <p class="mt__sub">统计至结束时刻之前；修改后点击应用生效。</p>
           <p v-if="rangeError" class="mt__err" role="alert">{{ rangeError }}</p>
           <div class="mt__dialogActions"><button class="mt__cancel" @click="closeRange">取消</button><button class="mt__save" @click="applyRange">应用范围</button></div>
