@@ -30,10 +30,10 @@ async function onDelete(id: string): Promise<void> {
 <template>
   <main class="sv">
     <div class="sv__wrap">
-      <div class="sv__bar">
+      <header class="pghead">
         <div>
-          <h2 class="sv__title">SOP 流程</h2>
-          <p class="sv__count">
+          <h2 class="pghead__title">SOP 流程</h2>
+          <p class="pghead__sub">
             <template v-if="loading">载入中…</template>
             <template v-else-if="storageEnabled && count">
               共 {{ count }} 篇流程 · 存于 OSS「sops/」前缀
@@ -49,7 +49,7 @@ async function onDelete(id: string): Promise<void> {
         >
           <span aria-hidden="true">＋</span> 新建 SOP
         </button>
-      </div>
+      </header>
 
       <!-- 存储未接通:走空态,给配置方向,不当报错 -->
       <section v-if="!storageEnabled" class="sv__state">

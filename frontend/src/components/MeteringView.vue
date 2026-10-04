@@ -310,10 +310,10 @@ async function onRemovePrice(id: number | null): Promise<void> {
 
   <main v-else class="mt">
     <div class="mt__wrap">
-      <header class="mt__bar">
+      <header class="pghead">
         <div>
-          <h2 class="mt__title">调用与费用</h2>
-          <p class="mt__sub">追踪 Embedding 与 OCR 调用，了解用量与估算费用。</p>
+          <h2 class="pghead__title">调用与费用</h2>
+          <p class="pghead__sub">追踪 Embedding 与 OCR 调用，了解用量与估算费用。</p>
         </div>
         <button class="mt__btn" type="button" :disabled="loading" @click="refresh">
           {{ loading ? "刷新中…" : "刷新" }}
@@ -457,12 +457,12 @@ async function onRemovePrice(id: number | null): Promise<void> {
           </div>
           <div class="panel__body">
             <p v-if="!serviceRows.length" class="panel__none">该窗口内没有调用记录。</p>
-            <div v-for="s in serviceRows" :key="s.service" class="kv">
-              <span class="kv__k">
+            <div v-for="s in serviceRows" :key="s.service" class="mt__kv">
+              <span class="mt__kvK">
                 {{ s.service }}
                 <small>{{ SERVICE_TEXT[s.service] ?? "" }}</small>
               </span>
-              <span class="kv__v">
+              <span class="mt__kvV">
                 {{ s.calls }} / {{ s.failure }} / {{ s.http_attempts }}
                 <span v-if="s.unknown_cost" class="mt__unknown">({{ s.unknown_cost }} 未知费用)</span>
               </span>
@@ -479,19 +479,19 @@ async function onRemovePrice(id: number | null): Promise<void> {
             <p v-if="!usageRows.length && !costRows.length" class="panel__none">
               没有可汇总的用量或金额。
             </p>
-            <div v-for="u in usageRows" :key="u.service + u.unit" class="kv">
-              <span class="kv__k">
+            <div v-for="u in usageRows" :key="u.service + u.unit" class="mt__kv">
+              <span class="mt__kvK">
                 {{ SERVICE_TEXT[u.service] ?? u.service }}
                 <small>用量</small>
               </span>
-              <span class="kv__v">{{ trimDecimal(u.quantity, 0) }} {{ u.unit }}</span>
+              <span class="mt__kvV">{{ trimDecimal(u.quantity, 0) }} {{ u.unit }}</span>
             </div>
-            <div v-for="c in costRows" :key="c.service + c.currency" class="kv">
-              <span class="kv__k">
+            <div v-for="c in costRows" :key="c.service + c.currency" class="mt__kv">
+              <span class="mt__kvK">
                 {{ SERVICE_TEXT[c.service] ?? c.service }}
                 <small>估算费用</small>
               </span>
-              <span class="kv__v">{{ c.currency }} {{ trimDecimal(c.amount) }}</span>
+              <span class="mt__kvV">{{ c.currency }} {{ trimDecimal(c.amount) }}</span>
             </div>
           </div>
         </section>
@@ -503,12 +503,12 @@ async function onRemovePrice(id: number | null): Promise<void> {
           </div>
           <div class="panel__body">
             <p v-if="!cacheRows.length" class="panel__none">该窗口内没有缓存统计记录。</p>
-            <div v-for="c in cacheRows" :key="c.layer" class="kv">
-              <span class="kv__k">
+            <div v-for="c in cacheRows" :key="c.layer" class="mt__kv">
+              <span class="mt__kvK">
                 {{ c.layer }}
                 <small>{{ LAYER_TEXT[c.layer] ?? "" }}</small>
               </span>
-              <span class="kv__v">
+              <span class="mt__kvV">
                 {{ c.hit }} / {{ c.miss }} / {{ c.shared }} / {{ c.skipped }}
               </span>
             </div>

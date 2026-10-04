@@ -11,21 +11,7 @@
   max-width: var(--maxw);
   margin: 0 auto;
 }
-.mt__bar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-.mt__title {
-  margin: 0;
-  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-}
+/* 页头(标题 + 副标题)用全局 .pghead,与知识库 / SOP 同一口径;这里只留对话框里的 .mt__sub */
 .mt__sub {
   margin: 4px 0 0;
   color: var(--muted);
@@ -324,8 +310,11 @@
   font-family: "IBM Plex Mono", ui-monospace, monospace;
 }
 
-/* 分组的行式明细(按服务 / 按单位 / 按币种) */
-.kv {
+/* 分组的行式明细(按服务 / 按单位 / 按币种)。
+   必须带 mt__ 前缀:本文件是不加 :scope 的全局样式,裸 `.kv` 会漏到知识库页,
+   把 KnowledgeView 的 <main class="kv"> 变成 flex 行容器 —— 正文栏退化成按内容收缩,
+   比别的标签页窄一大截(且 max-width 再改也救不回来)。 */
+.mt__kv {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -334,23 +323,23 @@
   font-size: 12.5px;
   border-bottom: 1px dashed color-mix(in srgb, var(--line) 70%, transparent);
 }
-.kv:last-child {
+.mt__kv:last-child {
   border-bottom: 0;
 }
-.kv__k {
+.mt__kvK {
   color: var(--ink);
 }
-.kv__k small {
+.mt__kvK small {
   color: var(--muted);
   font-size: 11px;
   margin-left: 6px;
 }
-.kv__v {
+.mt__kvV {
   color: var(--ink);
   font-family: "IBM Plex Mono", ui-monospace, monospace;
   text-align: right;
 }
-.kv__v--muted {
+.mt__kvV--muted {
   color: var(--muted);
 }
 
@@ -950,8 +939,6 @@
 
 /* Dashboard layout: stable filters, progressive disclosure, responsive overlays. */
 .mt { padding: 32px clamp(16px, 3vw, 48px) 48px; }
-.mt__bar { margin-bottom: 26px; align-items: center; }
-.mt__title { font-size: 26px; letter-spacing: -.035em; }
 .mt__sub { font-size: 13px; max-width: none; line-height: 1.8; }
 .mt__filters { display: flex; justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px 20px; margin-bottom: 22px; border-radius: 12px; }
 .mt__dateTrigger { height: 38px; min-width: 170px; margin-right: auto; display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; }

@@ -42,6 +42,32 @@ body {
   }
 }
 
+/* ============ 页面标题区(知识库 / SOP 流程 / 调用与费用共用) ============
+   三个标签页的「标题 + 标题下解释」口径只写在这里,各视图只挂类名、不再各写一份,
+   免得字号 / 间距再慢慢漂开。 */
+.pghead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 26px;
+}
+.pghead__title {
+  margin: 0;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  color: var(--ink);
+}
+.pghead__sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
 /* ============ Markdown 渲染 ============ */
 .md {
   font-size: 15px;

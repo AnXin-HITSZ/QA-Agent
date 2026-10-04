@@ -1,6 +1,7 @@
 /* SOP 流程视图的共享样式:由 SopView 一次性引入,列表 / 详情 / 编辑三个子组件共用。
    取自 mockups/sop-view.html(已批准原型)。刻意不定义 .md(全局 style.css 已有)、
-   页头 .hd(AppHeader 内)与设计令牌(tokens.css)。内容栏宽取全局 --maxw,四个标签页统一。 */
+   页头 .hd(AppHeader 内)与设计令牌(tokens.css)。内容栏宽取全局 --maxw,四个标签页统一;
+   页面标题区(标题 + 标题下解释)走全局 .pghead(style.css),本文件不再自带一套。 */
 
 /* ---------- 外壳 ---------- */
 .sv {
@@ -11,25 +12,6 @@
 .sv__wrap {
   max-width: var(--maxw);
   margin: 0 auto;
-}
-.sv__bar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.sv__title {
-  margin: 0;
-  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--ink);
-}
-.sv__count {
-  margin: 3px 0 0;
-  color: var(--muted);
-  font-size: 12.5px;
 }
 
 /* ---------- 按钮(SOP 视图局部;非全局) ---------- */

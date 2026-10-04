@@ -82,12 +82,22 @@ function formatSize(n: number): string {
 <template>
   <main class="kv">
     <div class="kv__wrap">
-      <div class="kv__bar">
-        <KnowledgeBreadcrumb :prefix="prefix" @navigate="goto" />
-        <div class="kv__baraside">
+      <header class="pghead">
+        <div>
+          <h2 class="pghead__title">知识库</h2>
+          <p class="pghead__sub">
+            管理各分类下的原件;上传 / 删除自动维护索引,重建与版本回退在页面底部。
+          </p>
+        </div>
+        <div class="kv__aside">
           <span v-if="loading" class="kv__loading" aria-live="polite">载入中…</span>
           <button class="kv__refresh" type="button" :disabled="loading" @click="refresh">刷新</button>
         </div>
+      </header>
+
+      <!-- 只在进入子分类后需要面包屑;根节点与页标题同名,不再重复一行 -->
+      <div v-if="prefix" class="kv__crumb">
+        <KnowledgeBreadcrumb :prefix="prefix" @navigate="goto" />
       </div>
 
       <!-- 存储未接通:走空态,给出配置方向,不当报错 -->
@@ -196,6 +206,9 @@ function formatSize(n: number): string {
 </template>
 
 <style scoped>
+/* 页面标题区走全局 .pghead(style.css)。注意 .kv 这个类名是全局可见的:
+   别的样式文件里不许出现裸 `.kv { ... }` 规则(metering.css 曾误留一条,
+   把这里变成 flex 行容器,正文栏收缩、比别的标签页窄一截)。 */
 .kv {
   flex: 1;
   overflow-y: auto;
@@ -205,14 +218,10 @@ function formatSize(n: number): string {
   max-width: var(--maxw);
   margin: 0 auto;
 }
-.kv__bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.kv__crumb {
   margin-bottom: 14px;
 }
-.kv__baraside {
+.kv__aside {
   display: flex;
   align-items: center;
   gap: 10px;
