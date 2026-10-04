@@ -1,7 +1,6 @@
 /* SOP 流程视图的共享样式:由 SopView 一次性引入,列表 / 详情 / 编辑三个子组件共用。
    取自 mockups/sop-view.html(已批准原型)。刻意不定义 .md(全局 style.css 已有)、
-   页头 .hd(AppHeader 内)与设计令牌(tokens.css)。SOP 视图内容栏宽 960px(比对话 / 知识库的
-   860px 更宽,给流程正文里的材料表留空间),直接写死而非改全局 --maxw。 */
+   页头 .hd(AppHeader 内)与设计令牌(tokens.css)。内容栏宽取全局 --maxw,四个标签页统一。 */
 
 /* ---------- 外壳 ---------- */
 .sv {
@@ -10,7 +9,7 @@
   padding: 18px 20px 40px;
 }
 .sv__wrap {
-  max-width: 960px;
+  max-width: var(--maxw);
   margin: 0 auto;
 }
 .sv__bar {

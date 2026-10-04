@@ -1,5 +1,5 @@
 /* 调用与费用视图的共享样式:由 MeteringView 一次性引入,视图 / 详情抽屉 / 价目表共用。
-   沿用全局设计令牌(tokens.css),不重定义字体与配色;内容栏比对话视图宽(表格列多)。 */
+   沿用全局设计令牌(tokens.css),不重定义字体与配色;内容栏取全局 --maxw,四个标签页统一。 */
 
 /* ---------- 外壳 ---------- */
 .mt {
@@ -8,7 +8,7 @@
   padding: 18px 20px 48px;
 }
 .mt__wrap {
-  max-width: 1120px;
+  max-width: var(--maxw);
   margin: 0 auto;
 }
 .mt__bar {
@@ -950,7 +950,6 @@
 
 /* Dashboard layout: stable filters, progressive disclosure, responsive overlays. */
 .mt { padding: 32px clamp(16px, 3vw, 48px) 48px; }
-.mt__wrap { max-width: 1360px; }
 .mt__bar { margin-bottom: 26px; align-items: center; }
 .mt__title { font-size: 26px; letter-spacing: -.035em; }
 .mt__sub { font-size: 13px; max-width: none; line-height: 1.8; }
