@@ -6,6 +6,7 @@ OCR 打桩 ocr._post_once(网络边界)。缓存层用内存缓存,数据库用�
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import httpx
@@ -228,15 +229,25 @@ def test_embedding_without_vendor_usage_is_unknown_not_guessed(metering_env):
     assert "usage" in row["usage_note"]
 
 
-def test_usage_probe_reads_real_httpx_responses():
-    """探针与真实 httpx 响应对象兼容(生产链路正是这么装的)。"""
+@pytest.mark.parametrize("eager", [True, False], ids=["content-ready", "stream-unread"])
+def test_usage_probe_reads_real_httpx_responses(eager):
+    """探针与真实 httpx 响应对象兼容(生产链路正是这么装的)。
+
+    eager=True 是构造时就带 content 的响应;真 transport 不这样 —— body 留在流里
+    (stream=ResponseStream),而 httpx 在钩子**之后**才 read,所以钩子里 response.json()
+    会抛 ResponseNotRead,用量只能丢(2026-10-04 线上 embedding 调用全是这个形状)。
+    两种构造方式都要覆盖:只测前者的话这个 bug 测不出来。
+    """
     from app.metering.probe import prompt_tokens
 
     probe = UsageProbe()
     payload = {"usage": {"prompt_tokens": 21, "total_tokens": 21}, "data": [{"embedding": [0.1]}]}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=payload)
+        if eager:
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, headers={"content-type": "application/json"},
+                              stream=httpx.ByteStream(json.dumps(payload).encode()))
 
     client = httpx.Client(transport=httpx.MockTransport(handler),
                           event_hooks={"response": [probe.hook]})
@@ -245,6 +256,26 @@ def test_usage_probe_reads_real_httpx_responses():
 
     assert len(seen) == 1 and seen[0]["status"] == 200
     assert prompt_tokens(seen) == 21
+
+
+def test_probe_leaves_streaming_bodies_to_the_caller():
+    """非 JSON(SSE 之类)响应的 body 归调用方:探针只记状态码,不替它把流提前读了。"""
+    probe = UsageProbe()
+    body = b'data: {"usage": {"prompt_tokens": 1}}\n\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                              stream=httpx.ByteStream(body))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler),
+                          event_hooks={"response": [probe.hook]})
+    with probe.collecting() as seen:
+        response = client.send(client.build_request("POST", "https://example.com/v1/chat"),
+                               stream=True)
+
+    assert not response.is_stream_consumed          # 流还在,没被探针提前吞掉
+    assert b"".join(response.iter_bytes()) == body
+    assert seen == [{"status": 200}]
 
 
 def test_logging_failure_does_not_retry_the_paid_call(metering_env, monkeypatch):

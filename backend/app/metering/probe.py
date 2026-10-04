@@ -36,8 +36,8 @@ class UsageProbe:
             return
         entry: dict = {"status": int(response.status_code)}
         try:
-            payload = response.json()
-        except Exception:  # noqa: BLE001 —— 非 JSON / 未读 body:只记状态码
+            payload = self._json(response)
+        except Exception:  # noqa: BLE001 —— 非 JSON / 读不了 body:只记状态码
             payload = None
         if isinstance(payload, dict):
             usage = payload.get("usage")
@@ -47,6 +47,27 @@ class UsageProbe:
                     if k in _TOKEN_KEYS and isinstance(v, (int, float))
                 }
         sink.append(entry)
+
+    @staticmethod
+    def _json(response):
+        """取响应 JSON;真链路上 body 还没读时补读一次。
+
+        httpx 的顺序是「先调响应钩子,Client.send 之后才 response.read()」,而真 transport
+        构造响应时 body 留在流里(stream=ResponseStream),所以钩子里直接 response.json()
+        会抛 ResponseNotRead —— 用量就是这么丢的,只在真实网络下发生(测试里手工构造的
+        响应 content 已就绪,读得到)。补读只对 JSON 响应做:流式(SSE 等)响应的 body
+        归调用方,不在这里替它吞掉。
+        """
+        import httpx
+
+        try:
+            return response.json()
+        except httpx.ResponseNotRead:
+            content_type = (response.headers.get("content-type") or "").lower()
+            if content_type and "json" not in content_type:
+                raise
+            response.read()      # 读完 body 落地,_content 就位;读失败由 hook 兜住
+            return response.json()
 
     @contextmanager
     def collecting(self) -> Iterator[list[dict]]:
