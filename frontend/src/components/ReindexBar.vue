@@ -1,15 +1,15 @@
 <script setup lang="ts">
-// 索引任务与维护:整库 / 当前分类的批量索引(202 + 轮询进度)、失败重试与版本回退。
-// 页面进度、实际提取方式、缓存命中、未提取原因、旧索引是否仍可用都在这里展示。
+// 索引任务与版本:进度(202 + 轮询)、文件明细、失败重试与版本回退。
+// 批量重建的入口已从这里移除 —— 一次重建可能跨多种提取方式,一个手动选择器表达不了;
+// 计划改为给每个索引任务记提取方式,重建时按任务原方式整批复用。任务的起点现在只有
+// 上传(工具条),这里展示进度与结果,并允许按当前提取方式重试失败的文件。
 import { computed, ref, watch } from "vue";
 
 import type { IndexJobFileRow, JobPageStats } from "../api";
 import { useKnowledge } from "../composables/useKnowledge";
 import { errorText, formatStampFull } from "../lib/format";
-import IndexModePicker from "./IndexModePicker.vue";
 
 const {
-  prefix,
   job,
   jobFiles,
   jobFilesTotal,
@@ -19,16 +19,14 @@ const {
   manifest,
   modeChosen,
   modeLabel,
-  extractionMode,
   startJob,
   retryJobFile,
   rollbackToPrevious,
   refreshManifest,
 } = useKnowledge();
 
-// 展开维护区 + 二次确认(批量任务会重新提取并发布新版本,先确认范围与方式)。
+// 展开详情 + 二次确认(回退会切换检索用的版本,先确认)。
 const open = ref(false);
-const confirming = ref(false);
 const confirmingRollback = ref(false);
 const rollbackErr = ref("");
 // 回退成功后的提示(切到了哪个版本)。没有它,回退只表现为版本行两个名字对调,看不出做没做。
@@ -41,8 +39,6 @@ watch(jobRunning, (running) => {
   if (running) rollbackOk.value = "";
 });
 
-const scopeKind = ref<"all" | "prefix">("all");
-
 // 最近几条发布 / 回退记录:manifest 给的是旧→新,面板按新→旧展示(最近一次在最上)。
 const history = computed(() => [...(manifest.value?.history ?? [])].reverse());
 
@@ -51,16 +47,6 @@ function actionText(a: string): string {
   if (a === "rollback") return "回退";
   return a || "—";
 }
-
-const scopeText = computed(() =>
-  scopeKind.value === "all" ? "整库" : `分类「${prefix.value || "根目录"}」`,
-);
-const modeText = computed(() => {
-  const base = modeLabel(extractionMode.value || null);
-  return extractionMode.value === "invoice" && job.value?.options?.mixed_invoice
-    ? `${base} · 混贴票据页`
-    : base;
-});
 
 const statusText = computed(() => {
   switch (job.value?.status) {
@@ -142,15 +128,6 @@ function statusOf(r: IndexJobFileRow): { text: string; tone: "ok" | "bad" | "mut
   return { text: "跳过", tone: "muted" };
 }
 
-async function doStart(): Promise<void> {
-  confirming.value = false;
-  const scope =
-    scopeKind.value === "all"
-      ? ({ kind: "prefix" as const, prefix: "" })
-      : ({ kind: "prefix" as const, prefix: prefix.value });
-  await startJob(scope);
-}
-
 // 只用当前提取方式重试这批失败文件(显式 key 清单,不再重跑整个范围)。
 async function retryFailed(): Promise<void> {
   const keys = failedRows.value.map((f) => f.key);
@@ -189,58 +166,6 @@ function toggle(): void {
     </button>
 
     <div v-if="open" class="rb__body">
-      <IndexModePicker />
-
-      <p class="rb__desc">
-        批量索引用当前提取方式重新提取,写入<strong>新版本集合</strong>后整体发布;有文件失败就不发布,
-        <strong>旧索引继续可用</strong>,检索不受影响。日常上传 / 删除已自动维护索引,
-        这里用于整库或整棵分类树的维护与补索引。
-      </p>
-
-      <div class="rb__scope" role="radiogroup" aria-label="索引范围">
-        <label class="rb__radio">
-          <input v-model="scopeKind" type="radio" value="all" :disabled="jobRunning" />
-          整库
-        </label>
-        <label class="rb__radio" :class="{ 'is-off': !prefix }">
-          <input
-            v-model="scopeKind"
-            type="radio"
-            value="prefix"
-            :disabled="jobRunning || !prefix"
-          />
-          当前分类「{{ prefix || "根目录" }}」
-        </label>
-      </div>
-
-      <div class="rb__actions">
-        <template v-if="confirming">
-          <span class="rb__ask">用「{{ modeText }}」索引{{ scopeText }}?</span>
-          <button
-            class="rb__yes"
-            type="button"
-            :disabled="jobStarting || jobRunning"
-            @click="doStart"
-          >
-            {{ jobStarting ? "正在创建…" : "确认开始" }}
-          </button>
-          <button class="rb__no" type="button" :disabled="jobStarting" @click="confirming = false">
-            取消
-          </button>
-        </template>
-        <template v-else>
-          <button
-            class="rb__run"
-            type="button"
-            :disabled="!modeChosen || jobRunning || jobStarting"
-            @click="confirming = true"
-          >
-            {{ jobRunning ? "任务进行中…" : "开始索引任务" }}
-          </button>
-          <span v-if="!modeChosen" class="rb__hint">先选择提取方式</span>
-        </template>
-      </div>
-
       <p v-if="jobError" class="rb__err" role="alert">{{ jobError }}</p>
 
       <!-- 任务进度与结果 -->
@@ -448,36 +373,6 @@ function toggle(): void {
 .rb__body {
   margin-top: 10px;
 }
-.rb__desc {
-  margin: 0 0 12px;
-  color: var(--muted);
-  font-size: 12.5px;
-  line-height: 1.7;
-}
-.rb__desc strong {
-  color: var(--ink);
-  font-weight: 600;
-}
-.rb__scope {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 10px;
-}
-.rb__radio {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--ink);
-  font-size: 13px;
-  cursor: pointer;
-}
-.rb__radio.is-off {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.rb__radio input {
-  accent-color: var(--primary);
-}
 .rb__actions {
   display: flex;
   align-items: center;
@@ -488,10 +383,6 @@ function toggle(): void {
 .rb__ask {
   color: var(--ink);
   font-size: 13px;
-}
-.rb__hint {
-  color: var(--muted);
-  font-size: 12.5px;
 }
 .rb__run,
 .rb__yes,

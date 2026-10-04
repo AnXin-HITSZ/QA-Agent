@@ -86,7 +86,7 @@ function formatSize(n: number): string {
         <div>
           <h2 class="pghead__title">知识库</h2>
           <p class="pghead__sub">
-            管理各分类下的原件;上传 / 删除自动维护索引,重建与版本回退在页面底部。
+            管理各分类下的原件;上传 / 删除自动维护索引,版本回退在页面底部。
           </p>
         </div>
         <div class="kv__aside">
@@ -116,7 +116,7 @@ function formatSize(n: number): string {
         <button class="kv__retry" type="button" @click="refresh">重试</button>
       </section>
 
-      <!-- 已接通:工具条 + 内容 + 维护重建 -->
+      <!-- 已接通:工具条 + 内容 + 索引任务与版本 -->
       <template v-else>
         <KnowledgeToolbar />
 

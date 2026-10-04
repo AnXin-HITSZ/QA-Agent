@@ -5,8 +5,10 @@
 // 都是 kind=keys 的任务,进度由任务明细回填到上传行,后端单工作者天然互斥。
 //
 // 提取方式(OCR 接入,见 docs/OCR接入技术方案.md §8)是模块级的一份共享设置:
-// 上传索引、单个文件重试、批量重建都用它;首次索引前必须显式选择("" = 未选择),
-// 不隐式替用户选一种方式 —— native_only 不产生付费调用,其余三种会调用云端 OCR。
+// 上传索引、上传行重试、任务失败重试都用它;首次索引前必须显式选择("" = 未选择),
+// 不隐式替用户选一种方式 —— native_only 不产生付费调用,其余四种会调用云端 OCR。
+// (整库 / 分类树的批量重建入口已从界面移除:一次重建可能跨多种提取方式,一个手动
+//  选择器表达不了;计划改为给每个索引任务记提取方式,重建时按任务原方式整批复用。)
 import { computed, ref, watch } from "vue";
 
 import {
@@ -45,7 +47,7 @@ export interface ModeSpec {
 export const EXTRACTION_MODES: readonly ModeSpec[] = [
   { value: "native_only", label: "不使用 OCR", hint: "只取原生文本层,不产生付费调用" },
   { value: "general", label: "通用文字识别(基础版)", hint: "整页识别为文字;单价低,复杂版面精度一般" },
-  { value: "general_advanced", label: "通用文字识别(高精版)", hint: "同上,复杂背景 / 倾斜 / 印章更准;单价更高" },
+  { value: "general_advanced", label: "通用文字识别(高精版)", hint: "整页识别为文字;复杂背景 / 倾斜 / 印章更稳,单价更高" },
   { value: "invoice", label: "发票识别", hint: "按发票结构识别,字段转成可检索文本" },
   { value: "payment_record", label: "付款详情识别", hint: "付款记录 / 转账详情截图" },
 ];

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 五选一「提取方式」+ 随模式出现的选项(混贴票据页 / 忽略缓存)。
-// 模块级共享状态:工具条与索引任务面板各渲染一份,任一处切换两处同步;
+// 状态在 useKnowledge 里是模块级共享的;现在只有工具条渲染它(索引任务面板那份已移除,
+// 两处同选、看不出哪份生效的困惑随之消失)。
 // 首次索引前必须显式选择,不替用户隐式决定(native_only 之外都会调用付费 OCR)。
 import { useKnowledge } from "../composables/useKnowledge";
 
@@ -72,15 +73,17 @@ const { EXTRACTION_MODES, extractionMode, mixedInvoice, refreshOcr } = useKnowle
 .mp__req {
   color: var(--primary);
 }
+/* 五张卡片等宽铺满整行(auto-fit:宽度不够时按 190px 下限换行,余下几张仍拉满该行) */
 .mp__opts {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 6px;
 }
 .mp__opt {
   display: flex;
   align-items: flex-start;
   gap: 7px;
+  min-width: 0;
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
