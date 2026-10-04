@@ -211,7 +211,9 @@ python -m pytest
 - 目标文件失败 → 不发布，旧索引照常检索（明确提示，不悄悄部分替换）。
 - 子树 / 单文件任务会把范围外向量原样复制进新版本，范围外内容不受影响；已被删除的文件不会被复活。
 - **迁移**：`index-manifest.json` 不存在时读写仍指向 `.env` 的 `QDRANT_COLLECTION`（现有线上索引不受影响），
-  第一次任务成功发布后才切换过去。回退：`POST /api/v1/admin/knowledge/index-manifest/rollback`。
+  第一次任务成功发布后才切换过去。回退：`POST /api/v1/admin/knowledge/index-manifest/rollback`；
+  `GET /index-manifest` 额外回传最近 5 条发布 / 回退记录（时间、目标版本、被换下的版本、点数），
+  前端维护面板据此展示「什么时候切的、切到哪」。
 
 ### 接口
 
@@ -234,7 +236,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/admin/knowledge/index-jobs \
 
 curl http://127.0.0.1:8000/api/v1/admin/knowledge/index-jobs/current          # 进行中的任务
 curl "http://127.0.0.1:8000/api/v1/admin/knowledge/index-jobs/<job_id>/files?offset=0&limit=100"
-curl http://127.0.0.1:8000/api/v1/admin/knowledge/index-manifest              # 当前 / 可回退版本
+curl http://127.0.0.1:8000/api/v1/admin/knowledge/index-manifest              # 当前 / 可回退版本 + 最近发布·回退记录
 ```
 
 任务状态与明细存 `INDEX_STATE_DIR/jobs/`（单工作者锁 + 心跳）；**服务重启会把未结束的任务标记为中断失败**

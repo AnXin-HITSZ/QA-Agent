@@ -202,11 +202,36 @@ def test_manifest_and_rollback_endpoint(client, kb_env):
     roles = {v["name"]: v["role"] for v in info["versions"]}
     assert roles[v2] == "active" and roles[v1] == "previous"
 
+    # 发布 / 回退记录按时间序(旧→新)给出,前端反转展示成「最近几次」
+    his = info["history"]
+    assert [h["action"] for h in his] == ["publish", "publish"]
+    assert his[-1]["name"] == v2 and his[-1]["replaced"] == v1
+    assert isinstance(his[-1]["points"], int) and his[-1]["points"] > 0
+
     back = client.post(f"{ADMIN}/index-manifest/rollback").json()
     assert back["active"] == v1 and back["previous"] == v2
+    tail = back["history"][-1]
+    assert tail["action"] == "rollback" and tail["name"] == v1 and tail["replaced"] == v2
 
     r = client.post(f"{ADMIN}/index-manifest/rollback")
     assert r.status_code == 200
+
+
+def test_manifest_history_returns_recent_tail(client, kb_env):
+    """history 只回传最近若干条(旧→新),不把 manifest 里最多的 50 条全丢给前端。"""
+    from app.api.routes.knowledge import _HISTORY_TAIL
+    from app.rag.localfs import atomic_write_json
+
+    entries = [
+        {"at": f"2026-10-0{i}T00:00:00+00:00", "action": "publish", "name": f"v{i}",
+         "replaced": None, "points": i, "note": ""}
+        for i in range(1, _HISTORY_TAIL + 4)
+    ]
+    atomic_write_json(store.manifest_path(), {"collection": "lab", "active": f"v{_HISTORY_TAIL + 3}",
+                                              "history": entries})
+
+    info = client.get(f"{ADMIN}/index-manifest").json()
+    assert [h["name"] for h in info["history"]] == [f"v{i}" for i in range(4, _HISTORY_TAIL + 4)]
 
 
 def test_rollback_refused_while_job_running(client, kb_env):

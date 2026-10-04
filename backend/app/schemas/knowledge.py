@@ -142,9 +142,23 @@ class IndexVersionInfo(BaseModel):
     points: int = 0
 
 
+class IndexHistoryEntry(BaseModel):
+    """manifest 里的一条发布 / 回退记录(store 侧最多留 50 条,接口只回传最近几条)。"""
+
+    at: str = Field(default="", description="动作时间(UTC ISO)")
+    action: str = Field(..., description="publish / rollback")
+    name: str = Field(..., description="动作之后的生效版本")
+    replaced: str | None = Field(default=None, description="被换下的版本")
+    points: int | None = Field(default=None, description="目标集合当时的点数")
+    note: str = Field(default="", description="发布范围等备注")
+
+
 class IndexManifestInfo(BaseModel):
     active: str = Field(..., description="当前生效的物理集合名")
     previous: str | None = Field(default=None, description="上一版本(回退目标)")
     staging: str | None = Field(default=None, description="正在构建的候选集合")
     updated_at: str | None = None
     versions: list[IndexVersionInfo] = Field(default_factory=list)
+    history: list[IndexHistoryEntry] = Field(
+        default_factory=list, description="最近几条发布 / 回退记录(旧→新,面板反转展示)"
+    )

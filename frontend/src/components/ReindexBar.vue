@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 索引任务与维护:整库 / 当前分类的批量索引(202 + 轮询进度)、失败重试与版本回退。
 // 页面进度、实际提取方式、缓存命中、未提取原因、旧索引是否仍可用都在这里展示。
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import type { IndexJobFileRow, JobPageStats } from "../api";
 import { useKnowledge } from "../composables/useKnowledge";
+import { errorText, formatStampFull } from "../lib/format";
 import IndexModePicker from "./IndexModePicker.vue";
 
 const {
@@ -30,10 +31,26 @@ const open = ref(false);
 const confirming = ref(false);
 const confirmingRollback = ref(false);
 const rollbackErr = ref("");
+// 回退成功后的提示(切到了哪个版本)。没有它,回退只表现为版本行两个名字对调,看不出做没做。
+const rollbackOk = ref("");
 // 明细默认只渲染前若干行,大任务按需展开。
 const visible = ref(40);
 
+// 一有新任务开始,上次回退的提示就过期(发布后生效版本会再变),先清掉。
+watch(jobRunning, (running) => {
+  if (running) rollbackOk.value = "";
+});
+
 const scopeKind = ref<"all" | "prefix">("all");
+
+// 最近几条发布 / 回退记录:manifest 给的是旧→新,面板按新→旧展示(最近一次在最上)。
+const history = computed(() => [...(manifest.value?.history ?? [])].reverse());
+
+function actionText(a: string): string {
+  if (a === "publish") return "发布";
+  if (a === "rollback") return "回退";
+  return a || "—";
+}
 
 const scopeText = computed(() =>
   scopeKind.value === "all" ? "整库" : `分类「${prefix.value || "根目录"}」`,
@@ -144,10 +161,12 @@ async function retryFailed(): Promise<void> {
 async function doRollback(): Promise<void> {
   confirmingRollback.value = false;
   rollbackErr.value = "";
+  rollbackOk.value = "";
   try {
     await rollbackToPrevious();
+    rollbackOk.value = manifest.value?.active ?? "";
   } catch (e) {
-    rollbackErr.value = e instanceof Error ? e.message : String(e);
+    rollbackErr.value = errorText(e);
   }
 }
 
@@ -360,6 +379,23 @@ function toggle(): void {
           </button>
         </div>
         <p v-if="rollbackErr" class="rb__err" role="alert">{{ rollbackErr }}</p>
+        <p v-else-if="rollbackOk" class="rb__ok" role="status">已切回版本 {{ rollbackOk }}</p>
+
+        <!-- 最近记录:发布 / 回退都留痕,新→旧;排查「什么时候切的、切到哪」看这里 -->
+        <div v-if="history.length" class="rb__history">
+          <p class="rb__hishead">最近记录(新→旧)</p>
+          <ul class="rb__hislist">
+            <li v-for="(h, i) in history" :key="i" :title="h.note">
+              <span class="rb__histime">{{ formatStampFull(h.at) }}</span>
+              <span class="rb__hisact" :class="{ 'is-rollback': h.action === 'rollback' }">
+                {{ actionText(h.action) }}
+              </span>
+              <span class="rb__hisname">{{ h.name }}</span>
+              <span v-if="h.replaced" class="rb__hisfrom">← {{ h.replaced }}</span>
+              <span v-if="h.points !== null" class="rb__hispts">{{ h.points }} 点</span>
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
   </section>
@@ -494,6 +530,69 @@ function toggle(): void {
   margin: 12px 0 0;
   color: var(--seal);
   font-size: 13px;
+}
+.rb__ok {
+  margin: 12px 0 0;
+  color: var(--primary-strong);
+  font-size: 13px;
+}
+.rb__history {
+  margin-top: 12px;
+}
+.rb__hishead {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.rb__hislist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rb__hislist li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.rb__histime,
+.rb__hisname,
+.rb__hisfrom {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+}
+.rb__histime {
+  white-space: nowrap;
+}
+.rb__hisact {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--primary-tint);
+  color: var(--primary-strong);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+.rb__hisact.is-rollback {
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+.rb__hisname {
+  color: var(--ink);
+}
+.rb__hisfrom {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+  white-space: nowrap;
+}
+.rb__hispts {
+  white-space: nowrap;
 }
 .rb__job {
   margin-top: 12px;

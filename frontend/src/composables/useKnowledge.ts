@@ -455,9 +455,9 @@ async function refreshManifest(): Promise<void> {
 }
 
 // 回退到上一版本(只切指针)。有任务在跑后端会拒绝(409);失败抛出交调用方提示。
+// 直接吃 POST 的响应(与 GET 同构)——回退是终点,不用再补一次读取,提示里的版本号也不会滞后。
 async function rollbackToPrevious(): Promise<void> {
-  await apiRollbackIndex();
-  await refreshManifest();
+  manifest.value = await apiRollbackIndex();
   await loadTree(prefix.value);
 }
 

@@ -27,6 +27,7 @@ from app.schemas.knowledge import (
     CreateFolderResult,
     DeleteFolderResult,
     IndexedKeysResult,
+    IndexHistoryEntry,
     IndexJobFiles,
     IndexJobRequest,
     IndexJobStatus,
@@ -311,19 +312,43 @@ def get_index_job_files(job_id: str, offset: int = 0, limit: int = 100) -> Index
     return IndexJobFiles(job_id=job_id, **ocr_jobs.files_page(job_id, offset, limit))
 
 
-@admin_router.get("/index-manifest", response_model=IndexManifestInfo)
-def get_index_manifest() -> IndexManifestInfo:
-    """当前生效的索引版本与本地版本集合(排查 / 回退前确认用)。"""
-    with _dep_503():
-        m = store.read_manifest()
-        versions = store.versions()
+# 版本指针接口回传的历史条数:manifest 里最多留 50 条(store._HISTORY_CAP),
+# 前端面板只看「最近几次」,没必要把陈年备注都带出去。
+_HISTORY_TAIL = 5
+
+
+def _manifest_info() -> IndexManifestInfo:
+    """组装版本指针响应:当前指针 + 本地版本集合 + 最近几条发布 / 回退记录(排查用)。"""
+    m = store.read_manifest()
+    raw = m.get("history") if isinstance(m.get("history"), list) else []
+    history: list[IndexHistoryEntry] = []
+    for e in raw[-_HISTORY_TAIL:]:
+        if not isinstance(e, dict):          # manifest 是磁盘上的 JSON,字段缺失/手改都别炸
+            continue
+        replaced, points = e.get("replaced"), e.get("points")
+        history.append(IndexHistoryEntry(
+            at=str(e.get("at") or ""),
+            action=str(e.get("action") or ""),
+            name=str(e.get("name") or ""),
+            replaced=replaced if isinstance(replaced, str) else None,
+            points=points if isinstance(points, int) else None,
+            note=str(e.get("note") or ""),
+        ))
     return IndexManifestInfo(
         active=store.active_collection(),
         previous=m.get("previous"),
         staging=m.get("staging"),
         updated_at=m.get("updated_at"),
-        versions=[IndexVersionInfo(**v) for v in versions],
+        versions=[IndexVersionInfo(**v) for v in store.versions()],
+        history=history,
     )
+
+
+@admin_router.get("/index-manifest", response_model=IndexManifestInfo)
+def get_index_manifest() -> IndexManifestInfo:
+    """当前生效的索引版本、本地版本集合与最近几条发布 / 回退记录(排查 / 回退前确认用)。"""
+    with _dep_503():
+        return _manifest_info()
 
 
 @admin_router.post("/index-manifest/rollback", response_model=IndexManifestInfo)
@@ -337,12 +362,4 @@ def rollback_index() -> IndexManifestInfo:
         )
     with _dep_503():
         store.rollback()
-        versions = store.versions()
-    m = store.read_manifest()
-    return IndexManifestInfo(
-        active=store.active_collection(),
-        previous=m.get("previous"),
-        staging=m.get("staging"),
-        updated_at=m.get("updated_at"),
-        versions=[IndexVersionInfo(**v) for v in versions],
-    )
+        return _manifest_info()

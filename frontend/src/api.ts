@@ -378,12 +378,22 @@ export interface IndexVersionInfo {
   points: number;
 }
 
+export interface IndexHistoryEntry {
+  at: string; // 动作时间(UTC ISO)
+  action: string; // publish / rollback
+  name: string; // 动作之后的生效版本
+  replaced: string | null; // 被换下的版本
+  points: number | null; // 目标集合当时的点数
+  note: string; // 发布范围等备注
+}
+
 export interface IndexManifestInfo {
   active: string; // 当前生效的物理集合名
   previous: string | null; // 上一版本(回退目标)
   staging: string | null; // 正在构建的候选集合
   updated_at: string | null;
   versions: IndexVersionInfo[];
+  history: IndexHistoryEntry[]; // 最近几条发布 / 回退记录(旧→新)
 }
 
 // 带 HTTP 状态码的错误,便于区分「存储/索引未接通」(503)与其它失败。
