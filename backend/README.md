@@ -180,12 +180,13 @@ python -m pytest
 知识库原件存 OSS、向量存 Qdrant。扫描件、照片、截图没有文本层，需要用户**显式选择一种提取方式**；
 不做自动分类、前缀路由或自动切换 —— 每次索引都用当次选择的方式，便于对照费用与效果。
 
-### 四种提取方式
+### 五种提取方式
 
 | `extraction_mode` | 含义 | 调用云端 OCR |
 |---|---|---|
 | `native_only` | 不使用 OCR，只取原生文本层（不产生付费调用） | 否 |
-| `general` | 通用文字识别（整页） | 是 |
+| `general` | 通用文字识别（整页，基础版 `Type=General`） | 是 |
+| `general_advanced` | 通用文字识别（整页，高精版 `Type=Advanced`） | 是 |
 | `invoice` | 发票识别；可加 `mixed_invoice=true` 表示「混贴票据页」 | 是 |
 | `payment_record` | 付款详情识别 | 是 |
 
@@ -250,7 +251,7 @@ curl http://127.0.0.1:8000/api/v1/admin/knowledge/index-manifest              # 
 ### 测试
 
 `pytest` 离线跑全部用例：OCR 与 Embeddings 都打桩（用内存 OSS + 内存 Qdrant），
-覆盖四种模式与非法组合、PDF 逐页与混贴选项、专用字段转文本、缓存命中与 `refresh_ocr`、
+覆盖五种模式与非法组合、PDF 逐页与混贴选项、专用字段转文本、缓存命中与 `refresh_ocr`、
 失败重试与任务恢复、页码 / 来源保留、索引失败时旧版本仍可用、子树重建不动范围外内容。
 **未验证**：真实阿里云 OCR 调用、真实 OSS / Qdrant 上的批量任务（需先配凭证再做小样本验收）。
 

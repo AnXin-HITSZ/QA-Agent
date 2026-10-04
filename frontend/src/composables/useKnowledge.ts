@@ -41,10 +41,11 @@ export interface ModeSpec {
   hint: string;
 }
 
-// 四种手动提取方式,与后端 ExtractionMode 枚举一一对应(不做自动分类 / 自动切换)。
+// 五种手动提取方式,与后端 ExtractionMode 枚举一一对应(不做自动分类 / 自动切换)。
 export const EXTRACTION_MODES: readonly ModeSpec[] = [
   { value: "native_only", label: "不使用 OCR", hint: "只取原生文本层,不产生付费调用" },
-  { value: "general", label: "通用文字识别", hint: "扫描件 / 图片整页识别为文字" },
+  { value: "general", label: "通用文字识别(基础版)", hint: "整页识别为文字;单价低,复杂版面精度一般" },
+  { value: "general_advanced", label: "通用文字识别(高精版)", hint: "同上,复杂背景 / 倾斜 / 印章更准;单价更高" },
   { value: "invoice", label: "发票识别", hint: "按发票结构识别,字段转成可检索文本" },
   { value: "payment_record", label: "付款详情识别", hint: "付款记录 / 转账详情截图" },
 ];

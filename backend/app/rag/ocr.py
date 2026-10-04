@@ -6,8 +6,8 @@
 接口形态(2026-10 核过官方 meta 元数据 + 真实网关验证):
 - 端点形如 https://ocr-api.cn-hangzhou.aliyuncs.com/?<参数>,POST,图片字节直接放 HTTP body
   (也可用 Url 参数传图链,本项目一律用字节流,不公开 OSS 对象);
-- 必填查询参数 Type,取值 Advanced(通用文字)/Invoice(发票)/MixedInvoice(混贴票据)/
-  PaymentRecord(付款详情)/Table/ShoppingReceipt 等;
+- 必填查询参数 Type,取值 General(通用文字基础版)/Advanced(通用文字高精版)/Invoice(发票)/
+  MixedInvoice(混贴票据)/PaymentRecord(付款详情)/Table/ShoppingReceipt 等;
 - 签名走 RPC 风格 SignatureVersion=1.0 (HMAC-SHA1):只签查询参数、不签 body。
   (已用假 AK 打过真实网关:返回 InvalidAccessKeyId.NotFound,说明签名格式被接受。)
 - 单请求图片上限 10MB。
@@ -55,8 +55,9 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 供应商限制:单请求 10MB
 
 # 内部提取方式 → 阿里云 Type。键与前端「提取方式」一一对应,不做自动切换。
 OCR_TYPE_TO_ALIYUN = {
-    "general": "Advanced",           # 通用文字识别(高精版)
-    "invoice": "Invoice",            # 增值税发票
+    "general": "General",             # 通用文字识别(基础版:便宜,清晰扫描件够用)
+    "general_advanced": "Advanced",   # 通用文字识别(高精版:复杂背景 / 倾斜 / 印章更稳,更贵)
+    "invoice": "Invoice",             # 增值税发票
     "mixed_invoice": "MixedInvoice",  # 混贴票据(一页多张)
     "payment_record": "PaymentRecord",  # 付款详情页
 }

@@ -4,10 +4,11 @@
 「知识库相对」(OSS_PREFIX 根前缀由 app/rag/oss.py 内部拼接,不出现在这里)。
 
 提取方式(extraction_mode)由用户显式选择,不做自动分类 / 前缀路由 / 自动切换:
-  native_only  不使用 OCR,只取原生文本层(默认;不产生付费调用)
-  general      通用文字识别
-  invoice      发票识别(可加 mixed_invoice=true 表示「混贴票据页」)
-  payment_record 付款详情识别
+  native_only      不使用 OCR,只取原生文本层(默认;不产生付费调用)
+  general          通用文字识别(基础版,Type=General)
+  general_advanced 通用文字识别(高精版,Type=Advanced)
+  invoice          发票识别(可加 mixed_invoice=true 表示「混贴票据页」)
+  payment_record   付款详情识别
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-ExtractionMode = Literal["native_only", "general", "invoice", "payment_record"]
+ExtractionMode = Literal["native_only", "general", "general_advanced", "invoice", "payment_record"]
 
 
 class KnowledgeFile(BaseModel):

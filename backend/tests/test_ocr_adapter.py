@@ -36,6 +36,15 @@ def test_pct_escapes_rfc3986():
     assert ocr._pct("A-Z_a.b~c") == "A-Z_a.b~c"
 
 
+# ---- 类型映射 ----
+
+def test_ocr_type_to_aliyun_maps_both_general_versions():
+    assert ocr.ocr_type_to_aliyun("general") == "General"           # 基础版
+    assert ocr.ocr_type_to_aliyun("general_advanced") == "Advanced"  # 高精版
+    with pytest.raises(ValueError):
+        ocr.ocr_type_to_aliyun("general_premium")
+
+
 # ---- 归一化 ----
 
 def _sub(kv: dict | None = None, blocks: list[str] | None = None) -> dict:
@@ -51,8 +60,15 @@ def test_normalize_general_prefers_content():
     raw = {"RequestId": "r1", "Data": {"Content": "整页文字", "SubImages": [_sub(blocks=["块1"])]}}
     page = ocr.normalize(raw, "general")
     assert page.text == "整页文字"
-    assert page.aliyun_type == "Advanced"
+    assert page.aliyun_type == "General"
     assert page.request_id == "r1"
+
+
+def test_normalize_general_advanced_marks_aliyun_type():
+    """高精版与基础版共用同一套归一化,只有 aliyun_type 不同(价目按它区分)。"""
+    page = ocr.normalize({"Data": {"Content": "整页文字"}}, "general_advanced")
+    assert page.text == "整页文字"
+    assert page.aliyun_type == "Advanced"
 
 
 def test_normalize_invoice_builds_field_lines_and_marks_fields():
@@ -153,7 +169,7 @@ def test_recognize_retries_transient_then_succeeds(configured, monkeypatch):
     monkeypatch.setattr(ocr, "_post_once", fake_post)
     page = ocr.recognize(b"img", "general")
     assert page.text == "ok"
-    assert calls == ["Advanced"] * 3
+    assert calls == ["General"] * 3
 
 
 def test_recognize_stops_at_max_retries(configured, monkeypatch):

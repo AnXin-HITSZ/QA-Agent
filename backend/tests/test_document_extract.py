@@ -1,4 +1,4 @@
-"""逐页提取:四种方式、非法组合、PDF 全页、混贴选项、两层缓存与失败定位。
+"""逐页提取:五种方式、非法组合、PDF 全页、混贴选项、两层缓存与失败定位。
 
 不调用真实 OCR:把 ocr.recognize_raw(网络边界)换成给定响应 —— 两层缓存、归一化、
 逐页编排仍真实执行,所以缓存命中 / 失效的断言是真断言。缓存是进程内 MemoryCache。
@@ -47,6 +47,7 @@ def test_effective_mode_expands_mixed_invoice():
     assert de.effective_mode("invoice", True) == "mixed_invoice"
     assert de.effective_mode("invoice", False) == "invoice"
     assert de.effective_mode("general") == "general"
+    assert de.effective_mode("general_advanced") == "general_advanced"
 
 
 @pytest.mark.parametrize("mode,mixed", [("native_only", True), ("general", True), ("payment_record", True)])

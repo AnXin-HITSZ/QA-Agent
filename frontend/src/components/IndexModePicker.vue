@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 四选一「提取方式」+ 随模式出现的选项(混贴票据页 / 忽略缓存)。
+// 五选一「提取方式」+ 随模式出现的选项(混贴票据页 / 忽略缓存)。
 // 模块级共享状态:工具条与索引任务面板各渲染一份,任一处切换两处同步;
 // 首次索引前必须显式选择,不替用户隐式决定(native_only 之外都会调用付费 OCR)。
 import { useKnowledge } from "../composables/useKnowledge";

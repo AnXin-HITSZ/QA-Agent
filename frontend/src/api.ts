@@ -291,10 +291,11 @@ export interface IndexedKeysResult {
 //
 // 提取方式由用户显式选择,不做自动分类 / 前缀路由 / 自动切换:
 //   native_only  不使用 OCR,只取原生文本层(不产生付费调用)
-//   general      通用文字识别
+//   general      通用文字识别(基础版,Type=General;便宜)
+//   general_advanced 通用文字识别(高精版,Type=Advanced;复杂版面更准、更贵)
 //   invoice      发票识别(可加 mixed_invoice = 「混贴票据页」)
 //   payment_record 付款详情识别
-export type ExtractionMode = "native_only" | "general" | "invoice" | "payment_record";
+export type ExtractionMode = "native_only" | "general" | "general_advanced" | "invoice" | "payment_record";
 
 // 一次索引 / 重建的提取选项。非法组合(混贴非发票、刷新缓存配原生提取)后端返回 422。
 export interface IndexOptions {

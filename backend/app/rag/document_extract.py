@@ -1,12 +1,13 @@
 """文档逐页提取:按用户选定的提取方式,把一份原件抽成「带页码的文本单元」。
 
-四种提取方式(前端手选,不做自动分类、不按目录前缀路由、不自动切换识别类型):
+提取方式(前端手选,不做自动分类、不按目录前缀路由、不自动切换识别类型):
 
-  不使用 OCR        native_only     只取 PDF / Office 的原生文本层;扫描页记录为「无文本层」
-  通用文字识别      general         每页渲染后调 OCR(Advanced)
-  发票识别          invoice         每页渲染后调 OCR(Invoice)
-  混贴票据页        mixed_invoice   同上,但用 MixedInvoice(一页多张票据)
-  付款详情识别      payment_record  每页渲染后调 OCR(PaymentRecord)
+  不使用 OCR        native_only       只取 PDF / Office 的原生文本层;扫描页记录为「无文本层」
+  通用文字基础版    general           每页渲染后调 OCR(General)
+  通用文字高精版    general_advanced  每页渲染后调 OCR(Advanced)
+  发票识别          invoice           每页渲染后调 OCR(Invoice)
+  混贴票据页        mixed_invoice     同上,但用 MixedInvoice(一页多张票据)
+  付款详情识别      payment_record    每页渲染后调 OCR(PaymentRecord)
 
 「混贴票据页」是发票识别的子选项(前端勾选框),在这里是独立的 mode 取值,便于接口校验。
 
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 NATIVE_ONLY = "native_only"
 INVOICE = "invoice"
 MIXED_INVOICE = "mixed_invoice"
-OCR_MODES = ("general", INVOICE, MIXED_INVOICE, "payment_record")
+OCR_MODES = ("general", "general_advanced", INVOICE, MIXED_INVOICE, "payment_record")
 ALL_MODES = (NATIVE_ONLY,) + OCR_MODES
 IMAGE_EXTS = frozenset({"png", "jpg", "jpeg"})
 
