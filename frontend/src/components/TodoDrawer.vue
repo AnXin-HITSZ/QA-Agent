@@ -5,12 +5,19 @@ import type { Todo } from "../api";
 import { useTodoCategories } from "../composables/useTodoCategories";
 import { useTodoDrawer } from "../composables/useTodoDrawer";
 import { useTodos } from "../composables/useTodos";
-import { formatDue, isOverdue } from "../lib/todoDate";
-import TodoDateField from "./TodoDateField.vue";
+import { formatDue, formatDueShort, isOverdue } from "../lib/todoDate";
+import DateField from "./DateField.vue";
 
 // 空分类的展示名。存储层存的是空串(后端同一个口径),中文只在这一层拼出来 ——
 // 分类本来就是用户自定义的自由文本,不该把一串展示文案固化进数据里。
 const CATEGORY_FALLBACK = "未分类";
+
+// 截止日期的快捷预设:报销场景最常用的相对期限。
+const DUE_PRESETS = [
+  { label: "今天", days: 0 },
+  { label: "明天", days: 1 },
+  { label: "一周后", days: 7 },
+];
 
 const { items, enabled, degraded, loading, error, openCount, load, ensureLoaded, add, toggle, remove } =
   useTodos();
@@ -188,7 +195,12 @@ function overdue(t: Todo): boolean {
                   清除
                 </button>
               </div>
-              <TodoDateField v-model="draftDue" />
+              <DateField
+                v-model="draftDue"
+                :presets="DUE_PRESETS"
+                :format="formatDueShort"
+                :warn="isOverdue"
+              />
             </div>
 
             <div class="td__formact">

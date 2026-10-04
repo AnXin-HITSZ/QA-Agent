@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 MAX_PAGE_SIZE = 200
 
 
+class PriceExists(Exception):
+    """同一 (服务/供应商/目标/单位/币种/生效时间) 的价目已存在:价目只增不改,重复即拒。"""
+
+
 @dataclass(frozen=True)
 class CallFilter:
     """调用列表 / 汇总共用的过滤条件(时间边界为 UTC,由接口层解析)。"""
@@ -54,6 +58,33 @@ def _naive(dt: datetime | None) -> datetime | None:
 
 def _money(value: Decimal | None) -> str | None:
     return None if value is None else f"{value:f}"
+
+
+def _price_dict(row: PriceConfigRow) -> dict:
+    """PriceConfigRow → 接口返回形状(金额 / 时间出库即字符串,与别处同口径)。"""
+    return {"id": row.id, "service": row.service, "provider": row.provider, "target": row.target,
+            "unit": row.unit, "currency": row.currency, "unit_price": _money(row.unit_price),
+            "effective_from": _iso(row.effective_from), "source": row.source, "note": row.note}
+
+
+def _price_key(row: dict) -> tuple:
+    """唯一键(与 uq_price_config_rule 同口径):内存实现判重用;时间统一成 ISO 再比。"""
+    eff = row.get("effective_from")
+    if isinstance(eff, datetime):
+        eff = _iso(eff)
+    key = tuple(str(row.get(k) or "") for k in
+                ("service", "provider", "target", "unit", "currency"))
+    return (*key, str(eff or ""))
+
+
+def _price_out(row: dict) -> dict:
+    """内存行 → 接口返回形状:单价一律字符串、时间一律 ISO(与 MysqlStore 同形)。"""
+    eff = row.get("effective_from")
+    if isinstance(eff, datetime):
+        eff = _iso(eff)
+    price = row.get("unit_price")
+    return {**row, "effective_from": eff,
+            "unit_price": price if isinstance(price, str) else _money(price)}
 
 
 def _event_dict(e: CallEvent, items: list[dict] | None = None) -> dict:
@@ -120,6 +151,10 @@ class MeteringStore(Protocol):
     def insert(self, events: list[CallEvent], cache_events: list[CacheEvent]) -> int: ...
 
     def price_rules(self) -> list[dict]: ...
+
+    def insert_price(self, row: dict) -> dict: ...
+
+    def delete_price(self, price_id: int) -> bool: ...
 
     def health(self) -> dict: ...
 
@@ -219,13 +254,31 @@ class MysqlStore:
 
         with session_scope() as session:
             rows = session.execute(select(PriceConfigRow)).scalars().all()
-        return [
-            # 金额与别处同口径:出库即字符串(接口层声明的是字符串,Decimal 直接出去会 500)
-            {"id": r.id, "service": r.service, "provider": r.provider, "target": r.target,
-             "unit": r.unit, "currency": r.currency, "unit_price": _money(r.unit_price),
-             "effective_from": _iso(r.effective_from), "source": r.source, "note": r.note}
-            for r in rows
-        ]
+        # 金额与别处同口径:出库即字符串(接口层声明的是字符串,Decimal 直接出去会 500)
+        return [_price_dict(r) for r in rows]
+
+    def insert_price(self, row: dict) -> dict:
+        """新增一条价目(只增):唯一键冲突 → PriceExists,绝不覆盖既有价格。"""
+        from sqlalchemy.exc import IntegrityError
+
+        data = dict(row)
+        data["effective_from"] = _naive(data["effective_from"])
+        with session_scope() as session:
+            obj = PriceConfigRow(**data)
+            session.add(obj)
+            try:
+                session.flush()          # 唯一键冲突在这里暴露;flush 后 id / created_at 已就位
+            except IntegrityError as exc:
+                raise PriceExists("同一规则(服务/供应商/目标/单位/币种/生效时间)已存在") from exc
+            return _price_dict(obj)
+
+    def delete_price(self, price_id: int) -> bool:
+        """删除一条价目;返回是否真的删掉了(False = 本来就不存在)。"""
+        from sqlalchemy import delete
+
+        with session_scope() as session:
+            result = session.execute(delete(PriceConfigRow).where(PriceConfigRow.id == price_id))
+            return bool(result.rowcount)
 
     def health(self) -> dict:
         from sqlalchemy import func, select
@@ -391,7 +444,12 @@ class MemoryStore:
         self.items: dict[str, list[dict]] = {}
         self.cache_events: dict[str, dict] = {}
         self.prices: list[dict] = []
+        self._price_seq = 0           # 自增 id:删掉再增不重号(与 MySQL AUTO_INCREMENT 同语义)
         self.fail_writes = False      # 测试用:模拟数据库不可用
+
+    def _next_price_id(self) -> int:
+        self._price_seq += 1
+        return self._price_seq
 
     def insert(self, events: list[CallEvent], cache_events: list[CacheEvent]) -> int:
         if self.fail_writes:
@@ -411,14 +469,29 @@ class MemoryStore:
         return n
 
     def add_price(self, row: dict) -> None:
-        """装一条价目(测试用):字段与 price_rules 表的行一致。"""
-        self.prices.append({"id": len(self.prices) + 1, **row})
+        """装一条价目(测试用,绕过唯一键检查):字段与 price_config 表的行一致。"""
+        self.prices.append({"id": self._next_price_id(), **row})
 
     def price_rules(self) -> list[dict]:
         # 与 MysqlStore 同形:单价以字符串出库(payload 里存的是 Decimal 也不影响读回)
-        return [{**r, "unit_price": (
-            r["unit_price"] if isinstance(r["unit_price"], str) else _money(r["unit_price"]))}
-            for r in self.prices]
+        return [_price_out(r) for r in self.prices]
+
+    def insert_price(self, row: dict) -> dict:
+        if self.fail_writes:
+            raise RuntimeError("MemoryStore: 模拟数据库不可用")
+        key = _price_key(row)
+        if any(_price_key(r) == key for r in self.prices):
+            raise PriceExists("同一规则(服务/供应商/目标/单位/币种/生效时间)已存在")
+        item = {"id": self._next_price_id(), **row}
+        self.prices.append(item)
+        return _price_out(item)
+
+    def delete_price(self, price_id: int) -> bool:
+        if self.fail_writes:
+            raise RuntimeError("MemoryStore: 模拟数据库不可用")
+        before = len(self.prices)
+        self.prices = [r for r in self.prices if r.get("id") != price_id]
+        return len(self.prices) < before
 
     def health(self) -> dict:
         return {"table_calls": len(self.calls), "table_cache_events": len(self.cache_events),

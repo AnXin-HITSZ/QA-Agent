@@ -1,6 +1,7 @@
-"""调用日志接口:分页 / 过滤 / 时间边界 / 汇总口径 / 数据库故障 / 管理员令牌。
+"""调用日志接口:分页 / 过滤 / 时间边界 / 汇总口径 / 价目写入 / 数据库故障。
 
-仓库用内存实现(接口只读),事件直接种进仓库 —— 读路径不依赖写入器与队列。
+仓库用内存实现,事件直接种进仓库 —— 读路径不依赖写入器与队列;
+价目写路径(只增 + 删)走仓库的 insert_price / delete_price,同样不碰真实 MySQL。
 """
 
 from __future__ import annotations
@@ -242,7 +243,6 @@ def test_summary_includes_persistence_health(client, seeded):
     assert health["enabled"] is True and health["configured"] is True
     assert health["lost"] == 0                                  # 有丢失会 >0:前端要能看见
     assert health["pending"] == 0 and health["queued"] == 0
-    assert health["auth_configured"] is False                   # 没配令牌:如实标注
 
 
 def test_summary_without_filters_has_no_false_zero(client, metering_env):
@@ -257,7 +257,7 @@ def test_summary_without_filters_has_no_false_zero(client, metering_env):
 
 
 class _BrokenStore(MemoryStore):
-    """数据库不可用:所有查询抛错(写入故障另有 writer 的补写目录兜)。"""
+    """数据库不可用:所有查询 / 价目写入抛错(日志写入故障另有 writer 的补写目录兜)。"""
 
     def _boom(self, *a, **kw):
         raise RuntimeError("(2003, \"Can't connect to MySQL server on 'db:3306'\")")
@@ -266,6 +266,8 @@ class _BrokenStore(MemoryStore):
     get_call = _boom
     summary = _boom
     price_rules = _boom
+    insert_price = _boom
+    delete_price = _boom
 
 
 @pytest.fixture
@@ -301,34 +303,118 @@ def test_prices_returns_503_when_db_is_down(client, broken):
     assert client.get(f"{ADMIN}/prices").status_code == 503
 
 
-# ---- 管理员令牌 ----
+# ---- 价目表:只读 + 只增可删 ----
 
 
-def test_token_not_configured_means_open_but_flagged(client, seeded):
-    assert client.get(f"{ADMIN}/calls").status_code == 200       # 现有 admin 接口就是敞开的
-    body = client.get(f"{ADMIN}/summary").json()
-    assert body["persistence"]["auth_configured"] is False       # 前端据此显示警示
+def _price_payload(**over) -> dict:
+    body = {"service": SERVICE_EMBEDDING, "provider": "dashscope", "target": "text-embedding-v4",
+            "unit": "1k_tokens", "currency": "CNY", "unit_price": "0.000514",
+            "effective_from": (NOW - timedelta(hours=1)).isoformat(),
+            "source": "测试:官方价格页(核实于当日)"}
+    body.update(over)
+    return body
 
 
-def test_token_configured_is_enforced(client, seeded, monkeypatch):
-    monkeypatch.setattr(seeded.settings, "admin_api_token", "s3cret-token")
-
-    assert client.get(f"{ADMIN}/calls").status_code == 401       # 缺失
-    assert client.get(f"{ADMIN}/calls", headers={"X-Admin-Token": "wrong"}).status_code == 401
-    ok = client.get(f"{ADMIN}/calls", headers={"X-Admin-Token": "s3cret-token"})
-    assert ok.status_code == 200
-    assert client.get(f"{ADMIN}/summary",
-                      headers={"X-Admin-Token": "s3cret-token"}).json()[
-        "persistence"]["auth_configured"] is True
-
-
-def test_prices_endpoint_lists_rules_without_credentials(client, seeded, metering_env):
+def test_prices_lists_rules_with_source(client, seeded, metering_env):
     mk.install_prices(metering_env, mk.price_row(SERVICE_EMBEDDING, "0.000514", days_ago=3))
     r = client.get(f"{ADMIN}/prices")
     assert r.status_code == 200
     item = r.json()["items"][0]
     assert item["unit_price"] == "0.000514" and item["currency"] == "CNY"
     assert item["source"]                                          # 价格来源要能对上
+
+
+def test_create_price_appends_and_persists(client, seeded):
+    r = client.post(f"{ADMIN}/prices", json=_price_payload())
+    assert r.status_code == 201, r.text
+    created = r.json()
+    assert created["id"] and created["unit_price"] == "0.000514" and created["currency"] == "CNY"
+    assert created["effective_from"].endswith("+00:00")            # 出库统一 UTC
+    assert [i["id"] for i in client.get(f"{ADMIN}/prices").json()["items"]] == [created["id"]]
+
+
+def test_create_price_duplicate_key_is_409(client, seeded):
+    """只增不改:同一条重复录入直接拒,不悄悄覆盖(改价 = 追加更晚生效的规则)。"""
+    assert client.post(f"{ADMIN}/prices", json=_price_payload()).status_code == 201
+    r = client.post(f"{ADMIN}/prices", json=_price_payload())
+    assert r.status_code == 409 and "已存在" in r.json()["detail"]
+    assert "改价" in r.json()["detail"]                            # 报错要告诉用户怎么办
+    assert len(client.get(f"{ADMIN}/prices").json()["items"]) == 1  # 没有产生第二条
+
+
+def test_create_price_later_effective_from_is_a_new_rule(client, seeded):
+    """同键但生效时间更晚 = 允许(这正是「改价」的正确姿势)。"""
+    assert client.post(f"{ADMIN}/prices", json=_price_payload()).status_code == 201
+    later = (NOW + timedelta(hours=1)).isoformat()
+    assert client.post(f"{ADMIN}/prices",
+                       json=_price_payload(unit_price="0.000600",
+                                           effective_from=later)).status_code == 201
+    assert len(client.get(f"{ADMIN}/prices").json()["items"]) == 2
+
+
+@pytest.mark.parametrize("over,detail", [
+    ({"service": "chat"}, "未知服务"),
+    ({"unit": "call"}, "计费单位"),
+    ({"unit_price": "-0.001"}, "负数"),
+    ({"unit_price": "0.000000001"}, "8 位小数"),
+    ({"currency": "人民币"}, "币种"),
+    ({"currency": "CNYX"}, "币种"),
+    ({"currency": "c1"}, "币种"),
+    ({"source": "   "}, "不能为空"),
+    ({"provider": ""}, "不能为空"),
+])
+def test_create_price_rejects_bad_input(client, seeded, over, detail):
+    r = client.post(f"{ADMIN}/prices", json=_price_payload(**over))
+    assert r.status_code == 422 and detail in r.text
+
+
+def test_create_price_rejects_bad_time_with_400(client, seeded):
+    r = client.post(f"{ADMIN}/prices", json=_price_payload(effective_from="昨天"))
+    assert r.status_code == 400 and "effective_from" in r.json()["detail"]
+
+
+def test_create_price_naive_time_is_read_as_utc(client, seeded):
+    """不猜时区:没带偏移的时间按 UTC 解释(界面总是换算成带偏移的 UTC 再提交)。"""
+    r = client.post(f"{ADMIN}/prices", json=_price_payload(effective_from="2026-01-01T00:00:00"))
+    assert r.status_code == 201
+    assert r.json()["effective_from"].startswith("2026-01-01T00:00:00")
+
+
+def test_create_price_invalidates_price_book(client, seeded, metering_env):
+    """新价目立刻参与估算(不等缓存周期):写完价格表缓存即作废,重载就能读到。"""
+    client.post(f"{ADMIN}/prices",
+                json=_price_payload(effective_from=(NOW - timedelta(days=1)).isoformat()))
+    rules = metering_env.writer.price_book.rules()                 # 缓存已作废 → 这里重新载入
+    assert any(r.provider == "dashscope" and r.unit_price == Decimal("0.000514") and r.source
+               for r in rules)
+
+
+def test_delete_price_removes_it_and_then_404(client, seeded):
+    price_id = client.post(f"{ADMIN}/prices", json=_price_payload()).json()["id"]
+    assert client.delete(f"{ADMIN}/prices/{price_id}").status_code == 204
+    assert client.get(f"{ADMIN}/prices").json()["items"] == []
+    assert client.delete(f"{ADMIN}/prices/{price_id}").status_code == 404
+
+
+def test_delete_price_does_not_recompute_history(client, seeded, metering_env):
+    """删价目不重算历史:已发生事件的价目快照与估算金额原样保留(对账以快照为准)。"""
+    mk.install_prices(metering_env,
+                      mk.price_row(SERVICE_OCR, "0.007", unit="request", provider="aliyun"))
+    priced = mk.ocr_call(occurred_at=NOW - timedelta(minutes=5))
+    assert priced.cost_amount == Decimal("0.00700000")             # 先确认它真的按这条价目算过
+    mk.seed(metering_env.store, calls=[priced])
+
+    price_id = metering_env.store.price_rules()[0]["id"]
+    assert client.delete(f"{ADMIN}/prices/{price_id}").status_code == 204
+
+    detail = client.get(f"{ADMIN}/calls/{priced.event_id}").json()
+    assert detail["cost_amount"] == "0.00700000"                   # 金额不受删价影响
+    assert detail["price_snapshot"]["unit_price"] == "0.007"
+
+
+def test_price_writes_return_503_when_db_is_down(client, broken):
+    assert client.post(f"{ADMIN}/prices", json=_price_payload()).status_code == 503
+    assert client.delete(f"{ADMIN}/prices/1").status_code == 503
 
 
 # ---- 敏感内容:接口不落密钥 / 完整查询串 ----

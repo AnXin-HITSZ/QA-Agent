@@ -184,18 +184,14 @@ def record_cache_stats(*, layer: str, unit: str, hit: int = 0, miss: int = 0, sh
 
 def status() -> dict:
     """持久化健康(供 /admin/metering/summary 与前端「日志完整性」展示)。"""
-    from app.config import get_settings
-
     if not active():
         return {"enabled": False, "configured": db.configured(), "running": False,
                 "queued": 0, "pending": 0, "claimed": 0, "lost": 0, "spilled": 0,
                 "flushed": 0, "backfilled": 0, "db_ok": None, "db_error": "",
                 "last_flush_at": None, "last_error": "", "price_rules": 0, "price_error": "",
                 "pending_dir": str(pending.pending_dir()),
-                "auth_configured": bool((get_settings().admin_api_token or "").strip()),
                 "message": METERING_DISABLED_MESSAGE}
     st = get_writer().status()
-    st["auth_configured"] = bool((get_settings().admin_api_token or "").strip())
     st["message"] = ""
     return st
 

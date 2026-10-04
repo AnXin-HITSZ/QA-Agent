@@ -54,11 +54,11 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 
 ## 0001：调用日志与费用统计四张表
 
-`0001_create_metering_tables.up.sql` 建四张表：`call_events`（调用流水，一次真实外部请求一行）、`call_event_items`（批量请求按文件 / 页面的估算分摊）、`cache_events`（三层缓存命中统计，不含金额）、`price_config`（价格配置，运维写入）。字段口径见 `docs/调用日志与费用统计技术方案.md` §4，列语义写在建表语句的 `COMMENT` 里。
+`0001_create_metering_tables.up.sql` 建四张表：`call_events`（调用流水，一次真实外部请求一行）、`call_event_items`（批量请求按文件 / 页面的估算分摊）、`cache_events`（三层缓存命中统计，不含金额）、`price_config`（价格配置，在「调用与费用 → 估算依据」界面维护）。字段口径见 `docs/调用日志与费用统计技术方案.md` §4，列语义写在建表语句的 `COMMENT` 里。
 
 几点说明：
 
 - **顺序：先应用迁移，再让带 `METERING_MYSQL_URL` 的代码上线。** 反过来也能活，但缺表期间写入会一直失败、事件转入补写目录（`METERING_PENDING_DIR`），`/summary.persistence.pending` 会显示积压——补写目录只是故障恢复队列，不是第二份日志库，积压久了占磁盘。
-- **价格不随迁移种下。** `price_config` 建出来是空的，费用一律显示「无法估算」，由运维按官方价格页核实后手工 `INSERT`（技术方案 §5.1 有来源与填入示例）；迁移里不硬编码任何单价。
+- **价格不随迁移种下。** `price_config` 建出来是空的，费用一律显示「无法估算」，由运维按官方价格页核实后在前端「调用与费用 → 估算依据」里填写（只增 + 删；技术方案 §5.1 有来源、SQL 示例与只增语义说明）；迁移里不硬编码任何单价。
 - **主键 / 唯一键就是幂等约束。** 补写重放靠它们天然去重（`INSERT ... ON DUPLICATE KEY UPDATE`，重复行不计入新插入），所以这几张表上不要另加会改变唯一性的键。
 - **回滚会连数据一起删。** `call_events` 是审计线索（技术方案 §13），线上不要轻易执行 down。

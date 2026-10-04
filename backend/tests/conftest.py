@@ -225,7 +225,6 @@ def metering_env(monkeypatch, tmp_path):
                         "mysql+pymysql://metering:never-used@127.0.0.1:1/qa_agent_test")
     monkeypatch.setattr(s, "metering_pending_dir", str(tmp_path / "pending"))
     monkeypatch.setattr(s, "metering_flush_batch", 200)
-    monkeypatch.setattr(s, "admin_api_token", "")
 
     memory = MemoryStore()
     install_store(memory)

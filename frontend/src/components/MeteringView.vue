@@ -6,7 +6,7 @@
 // - 拿不到用量或缺价格时显示「无法估算」+ 原因,绝不显示 ¥0;
 // - 缓存命中与实际调用分列:命中不产生外部调用,也就不产生费用;
 // - 业务失败(供应商返回失败 / 超时)与日志补写失败(写库不通)是两回事,分开提示。
-import { computed, onActivated, onErrorCaptured, ref } from "vue";
+import { computed, onActivated, onErrorCaptured, reactive, ref } from "vue";
 
 import "../styles/metering.css";
 import {
@@ -17,12 +17,16 @@ import {
   type StatusKey,
 } from "../composables/useMetering";
 import { formatMs, formatStamp, formatStampFull, trimDecimal } from "../lib/format";
+import { todayIso } from "../lib/todoDate";
+import DateField from "./DateField.vue";
 import MeteringDetail from "./MeteringDetail.vue";
 
 const {
   range,
-  customSince,
-  customUntil,
+  customSinceDate,
+  customSinceTime,
+  customUntilDate,
+  customUntilTime,
   service,
   purpose,
   status,
@@ -30,10 +34,13 @@ const {
   calls,
   total,
   loading,
+  summaryLoading,
   error,
   summaryError,
   prices,
   pricesError,
+  priceSaving,
+  priceError,
   detailId,
   firstIndex,
   lastIndex,
@@ -48,6 +55,8 @@ const {
   openDetail,
   refresh,
   loadPrices,
+  addPrice,
+  removePrice,
 } = useMetering();
 
 // KeepAlive 保活:每次切回本视图都拉一次最新数字(逐条看费用的场景,旧数字比多一次请求更糟)。
@@ -64,11 +73,51 @@ onErrorCaptured((err) => {
 });
 
 const RANGES: { key: RangeKey; label: string }[] = [
-  { key: "24h", label: "最近 24 小时" },
-  { key: "7d", label: "最近 7 天" },
-  { key: "30d", label: "最近 30 天" },
+  { key: "24h", label: "24 小时" },
+  { key: "7d", label: "7 天" },
+  { key: "30d", label: "30 天" },
   { key: "custom", label: "自定义" },
 ];
+const SERVICE_FILTERS: { key: ServiceKey; label: string; title: string }[] = [
+  { key: "", label: "全部", title: "不限服务" },
+  { key: "embedding", label: "embedding", title: "embedding(向量化)" },
+  { key: "ocr", label: "ocr", title: "ocr(文字 / 票据识别)" },
+];
+const PURPOSE_FILTERS: { key: PurposeKey; label: string; title: string }[] = [
+  { key: "", label: "全部", title: "不限用途" },
+  { key: "document_index", label: "索引", title: "索引(写库)" },
+  { key: "query", label: "检索", title: "检索(问答)" },
+];
+const STATUS_FILTERS: { key: StatusKey; label: string; title: string }[] = [
+  { key: "", label: "全部", title: "不限状态" },
+  { key: "success", label: "成功", title: "业务调用成功" },
+  { key: "failure", label: "失败", title: "业务调用失败(与日志补写失败无关)" },
+];
+
+const activeTab = ref("logs");
+const rangeDialog = ref<HTMLDialogElement | null>(null);
+const draft = reactive({ since: "", until: "" });
+const rangeError = ref("");
+const rangeLabel = computed(() => range.value === "custom" ? `${customSinceDate.value} — ${customUntilDate.value}` : `最近 ${RANGES.find(r => r.key === range.value)?.label}`);
+function openRange(): void {
+  draft.since = `${customSinceDate.value}T${customSinceTime.value}`;
+  draft.until = `${customUntilDate.value}T${customUntilTime.value}`;
+  rangeError.value = "";
+  rangeDialog.value?.showModal();
+}
+function onRangeBackdrop(event: MouseEvent): void { if (event.target === rangeDialog.value) closeRange(); }
+function closeRange(): void { rangeDialog.value?.close(); }
+function chooseRange(key: RangeKey): void { setRange(key); closeRange(); }
+function applyRange(): void {
+  if (!draft.since || !draft.until || !Number.isFinite(Date.parse(draft.since)) || !Number.isFinite(Date.parse(draft.until)) || new Date(draft.since) >= new Date(draft.until)) {
+    rangeError.value = "请选择有效时间，结束时间须晚于开始时间。"; return;
+  }
+  [customSinceDate.value, customSinceTime.value] = draft.since.split("T") as [string, string];
+  [customUntilDate.value, customUntilTime.value] = draft.until.split("T") as [string, string];
+  range.value = "custom"; applyFilters(); closeRange();
+}
+function resetFilters(): void { service.value = ""; purpose.value = ""; status.value = ""; setRange("7d"); }
+const summaryReady = computed(() => Boolean(summary.value && !summary.value.error && !summaryError.value && summary.value.persistence?.enabled && summary.value.persistence?.db_ok !== false));
 
 const totals = computed(() => summary.value?.totals ?? null);
 const persistence = computed(() => summary.value?.persistence ?? null);
@@ -120,6 +169,105 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
     void openDetail(eventId);
   }
 }
+
+// ── 价目表维护(只增 + 删:改价 = 追加一条生效时间更晚的规则,不覆盖历史) ──
+
+const SERVICE_OPTS: { key: string; label: string }[] = [
+  { key: "embedding", label: "embedding(向量化)" },
+  { key: "ocr", label: "ocr(文字 / 票据)" },
+];
+const UNIT_OPTS: { key: string; label: string; title: string }[] = [
+  { key: "1k_tokens", label: "1k_tokens", title: "每千 token" },
+  { key: "request", label: "request", title: "每次请求" },
+  { key: "page", label: "page", title: "每页(如 OCR 按页计费)" },
+];
+
+const priceFormOpen = ref(false);
+const priceFormError = ref("");
+const confirmDel = ref<number | null>(null);
+// 生效时间默认从今天 00:00 起:今天核实的价格今天就开始算,时刻可再调。
+const priceDate = ref<string | null>(todayIso());
+const priceTime = ref("00:00");
+const priceForm = reactive({
+  service: "embedding",
+  provider: "",
+  target: "",
+  unit: "1k_tokens",
+  currency: "CNY",
+  unit_price: "",
+  source: "",
+  note: "",
+});
+
+function resetPriceForm(): void {
+  Object.assign(priceForm, {
+    service: "embedding",
+    provider: "",
+    target: "",
+    unit: "1k_tokens",
+    currency: "CNY",
+    unit_price: "",
+    source: "",
+    note: "",
+  });
+  priceDate.value = todayIso();
+  priceTime.value = "00:00";
+  priceFormError.value = "";
+}
+
+function openPriceForm(): void {
+  priceFormOpen.value = true;
+  priceError.value = ""; // 别把上一次的删 / 增失败带进新表单
+  priceFormError.value = "";
+}
+
+function closePriceForm(): void {
+  priceFormOpen.value = false;
+  resetPriceForm();
+}
+
+// 前端只挡明显填错(空值、格式),与后端校验同样的口径但不重复实现业务规则。
+function validatePriceForm(): string {
+  if (!priceForm.provider.trim()) return "供应商不能为空(如 dashscope)。";
+  if (!/^\d+(\.\d{1,8})?$/.test(priceForm.unit_price.trim())) {
+    return "单价填数字,最多 8 位小数,不要带货币符号或千分位。";
+  }
+  if (!/^[A-Za-z]{3}$/.test(priceForm.currency.trim())) return "币种填 3 位字母代码(如 CNY)。";
+  if (!priceDate.value) return "请选择生效日期。";
+  if (!/^\d{2}:\d{2}$/.test(priceTime.value)) return "生效时刻按 HH:mm 填写。";
+  if (!priceForm.source.trim()) {
+    return "来源不能为空:写清官方价格页并注明核实日期,以后复核靠它。";
+  }
+  return "";
+}
+
+async function submitPrice(): Promise<void> {
+  priceFormError.value = validatePriceForm();
+  if (priceFormError.value) return;
+  // 本地日期 + 时刻 → UTC ISO,时区偏移由浏览器给出,后端不需要猜。
+  const eff = new Date(`${priceDate.value}T${priceTime.value}:00`);
+  if (Number.isNaN(eff.getTime())) {
+    priceFormError.value = "生效时间不合法,请重新选择日期与时刻。";
+    return;
+  }
+  const ok = await addPrice({
+    service: priceForm.service,
+    provider: priceForm.provider.trim(),
+    target: priceForm.target.trim(),
+    unit: priceForm.unit,
+    currency: priceForm.currency.trim().toUpperCase(),
+    unit_price: priceForm.unit_price.trim(),
+    effective_from: eff.toISOString(),
+    source: priceForm.source.trim(),
+    note: priceForm.note.trim(),
+  });
+  if (ok) closePriceForm();
+}
+
+async function onRemovePrice(id: number | null): Promise<void> {
+  if (id === null) return;
+  if (await removePrice(id)) confirmDel.value = null;
+}
 </script>
 
 <template>
@@ -149,101 +297,38 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
       <header class="mt__bar">
         <div>
           <h2 class="mt__title">调用与费用</h2>
-          <p class="mt__sub">
-            实际外部调用的日志与<strong>估算</strong>费用:每次真实请求一条记录,重试逐次记录。
-            金额 = 配置单价 × 用量,不是官方账单(官方账单本期未接入);只统计 embedding 与 OCR,
-            <strong>不含聊天 LLM 调用</strong>。
-          </p>
+          <p class="mt__sub">追踪 Embedding 与 OCR 调用，了解用量与估算费用。</p>
         </div>
-        <button class="btn" type="button" :disabled="loading" @click="refresh">
+        <button class="mt__btn" type="button" :disabled="loading" @click="refresh">
           {{ loading ? "刷新中…" : "刷新" }}
         </button>
       </header>
 
-      <!-- 筛选 -->
       <div class="mt__filters">
-        <label class="flt">
-          <span class="flt__label">时间范围</span>
-          <select
-            class="flt__sel"
-            :value="range"
-            @change="setRange(($event.target as HTMLSelectElement).value as RangeKey)"
-          >
-            <option v-for="r in RANGES" :key="r.key" :value="r.key">{{ r.label }}</option>
-          </select>
-        </label>
-        <label v-if="range === 'custom'" class="flt">
-          <span class="flt__label">起(本地时间)</span>
-          <input v-model="customSince" class="flt__in flt__in--dt" type="datetime-local" />
-        </label>
-        <label v-if="range === 'custom'" class="flt">
-          <span class="flt__label">止(不含)</span>
-          <input v-model="customUntil" class="flt__in flt__in--dt" type="datetime-local" />
-        </label>
-        <label class="flt">
-          <span class="flt__label">服务</span>
-          <select
-            class="flt__sel"
-            :value="service"
-            @change="
-              service = ($event.target as HTMLSelectElement).value as ServiceKey;
-              applyFilters();
-            "
-          >
-            <option value="">全部</option>
-            <option value="embedding">embedding(向量化)</option>
-            <option value="ocr">ocr(文字 / 票据识别)</option>
-          </select>
-        </label>
-        <label class="flt">
-          <span class="flt__label">用途</span>
-          <select
-            class="flt__sel"
-            :value="purpose"
-            @change="
-              purpose = ($event.target as HTMLSelectElement).value as PurposeKey;
-              applyFilters();
-            "
-          >
-            <option value="">全部</option>
-            <option value="document_index">索引(写库)</option>
-            <option value="query">检索(问答)</option>
-          </select>
-        </label>
-        <label class="flt">
-          <span class="flt__label">状态</span>
-          <select
-            class="flt__sel"
-            :value="status"
-            @change="
-              status = ($event.target as HTMLSelectElement).value as StatusKey;
-              applyFilters();
-            "
-          >
-            <option value="">全部</option>
-            <option value="success">成功</option>
-            <option value="failure">失败</option>
-          </select>
-        </label>
-        <button
-          v-if="range === 'custom'"
-          class="btn mt__filterGo"
-          type="button"
-          @click="applyFilters"
-        >
-          应用
-        </button>
+        <button class="mt__btn mt__dateTrigger" aria-haspopup="dialog" @click="openRange">◷ {{ rangeLabel }} ⌄</button>
+        <label class="mt__selectLabel">服务<select v-model="service" class="mt__input" @change="applyFilters"><option v-for="s in SERVICE_FILTERS" :key="s.key" :value="s.key">{{ s.key ? s.title : '全部服务' }}</option></select></label>
+        <label class="mt__selectLabel">用途<select v-model="purpose" class="mt__input" @change="applyFilters"><option v-for="p in PURPOSE_FILTERS" :key="p.key" :value="p.key">{{ p.key ? p.label : '全部用途' }}</option></select></label>
+        <label class="mt__selectLabel">状态<select v-model="status" class="mt__input" @change="applyFilters"><option v-for="s in STATUS_FILTERS" :key="s.key" :value="s.key">{{ s.key ? s.label : '全部状态' }}</option></select></label>
+        <button class="mt__textBtn" :disabled="!filtersActive && range === '7d'" @click="resetFilters">重置</button>
       </div>
+      <dialog ref="rangeDialog" class="mt__dateDialog" aria-labelledby="range-title" @click="onRangeBackdrop">
+        <div class="mt__dateContent">
+          <div class="mt__dialogHead"><h3 id="range-title">选择时间范围</h3><button class="mt__textBtn" aria-label="关闭时间选择" @click="closeRange">✕</button></div>
+          <div class="flt__chips"><button v-for="r in RANGES.filter(r => r.key !== 'custom')" :key="r.key" class="flt__chip" :class="{ 'is-on': range === r.key }" @click="chooseRange(r.key)">最近 {{ r.label }}</button></div>
+          <p class="mt__sub">自定义范围 · 本地时间</p>
+          <label class="mt__dateLabel">开始时间<input v-model="draft.since" class="mt__input" type="datetime-local" /></label>
+          <label class="mt__dateLabel">结束时间<input v-model="draft.until" class="mt__input" type="datetime-local" /></label>
+          <p class="mt__sub">统计至结束时刻之前；修改后点击应用生效。</p>
+          <p v-if="rangeError" class="mt__err" role="alert">{{ rangeError }}</p>
+          <div class="mt__dialogActions"><button class="mt__cancel" @click="closeRange">取消</button><button class="mt__save" @click="applyRange">应用范围</button></div>
+        </div>
+      </dialog>
 
       <!-- 口径与健康提示(按重要性依次出现) -->
       <p v-if="persistence && !persistence.enabled" class="mt__note">
         <strong>调用日志与费用统计未启用。</strong
         >{{ persistence.message || "请在 backend/.env 配置 METERING_MYSQL_URL 后重启后端。" }}
         未配置不影响 OCR / 索引 / 检索,只是不留调用记录。
-      </p>
-      <p v-if="persistence && persistence.enabled && !persistence.auth_configured" class="mt__note mt__note--warn">
-        <strong>管理员接口未配置访问令牌。</strong>调用日志与费用数据目前对任何能访问本服务的人可见
-        —— 请在 <code>backend/.env</code> 配置 <code>ADMIN_API_TOKEN</code>(并只在受信网络内暴露服务)。
       </p>
       <p v-if="persistence && persistence.enabled && persistence.db_ok === false" class="mt__note mt__note--warn">
         <strong>调用日志数据库当前连不上:</strong>{{ persistence.db_error || "连接失败" }}。
@@ -269,35 +354,35 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
         <strong>价格表载入失败:</strong>{{ persistence.price_error }}金额会按「无法估算」处理。
       </p>
       <p v-else-if="pricesMissing && totals && totals.calls > 0" class="mt__note">
-        还没有配置价格:所有金额都会显示「无法估算」而不是 0 元。在
-        <code>price_config</code> 表里按「服务 / 供应商 / 模型或 OCR Type / 计费单位」配置后生效
-        (见技术方案 §5)。
+        还没有配置价格:金额一律显示「无法估算」而不是 0 元。在下方「估算依据」里按
+        「服务 / 供应商 / 模型或 OCR Type / 计费单位」添加价目(附官方来源与核实日期);
+        只对之后发生的调用生效 —— 历史事件按发生时的快照估算,不会追补重算。
       </p>
 
       <!-- 概览:实际调用 / 成功失败 / 缓存命中 / 估算费用 -->
-      <div class="mt__cards">
+      <div class="mt__cards" :class="{ 'is-loading': summaryLoading }" :aria-busy="summaryLoading">
         <div class="card">
-          <span class="card__k">实际调用(本窗口)</span>
-          <span class="card__v">{{ totals?.calls ?? 0 }}</span>
+          <span class="card__k">实际调用</span>
+          <span class="card__v">{{ summaryReady ? totals?.calls : "—" }}</span>
           <span class="card__x">
             条记录 / {{ totals?.http_attempts ?? 0 }} 次真实请求(含 SDK 内部重试)
           </span>
         </div>
         <div class="card" :class="{ 'card--bad': (totals?.failure ?? 0) > 0 }">
-          <span class="card__k">成功 / 失败</span>
-          <span class="card__v">{{ totals?.success ?? 0 }} / {{ totals?.failure ?? 0 }}</span>
-          <span class="card__x">失败是业务调用失败,与日志补写失败无关</span>
+          <span class="card__k">失败调用</span>
+          <span class="card__v">{{ summaryReady ? totals?.failure : "—" }}</span>
+          <span class="card__x">成功 {{ summaryReady ? totals?.success : "—" }} 次</span>
         </div>
         <div class="card">
-          <span class="card__k">缓存命中(不产生外部调用)</span>
-          <span class="card__v">{{ cacheHits }}</span>
+          <span class="card__k">缓存命中</span>
+          <span class="card__v">{{ summaryReady ? cacheHits : "—" }}</span>
           <span class="card__x">
-            未命中 {{ cacheMiss }} · 等待复用 {{ cacheShared }} —— 命中单独统计,不计入上面的调用数
+            未命中 {{ cacheMiss }} · 等待复用 {{ cacheShared }}
           </span>
         </div>
         <div class="card" :class="{ 'card--bad': (totals?.unknown_cost ?? 0) > 0 }">
           <span class="card__k">估算费用</span>
-          <template v-if="costRows.length">
+          <template v-if="summaryReady && costRows.length">
             <span v-for="c in costRows" :key="c.service + c.currency" class="card__v card__v--small">
               {{ c.currency }} {{ trimDecimal(c.amount) }}
               <span class="dt__hint">{{ SERVICE_TEXT[c.service] ?? c.service }} · {{ c.events }} 条</span>
@@ -315,12 +400,17 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
 
       <!-- 窗口说明:后端按 UTC 边界取数,这里按本地时区显示,免得对不上账 -->
       <p v-if="windowSince && windowUntil" class="mt__sub">
-        统计窗口(本地时间):{{ formatStampFull(windowSince) }} — {{ formatStampFull(windowUntil) }}
-        <span class="mt__dim">(不含止点;后端按 UTC 边界取数)</span>
+        已应用范围（本地时间）：{{ formatStampFull(windowSince) }} — {{ formatStampFull(windowUntil) }}
+        <span class="mt__dim">不含结束时刻</span>
       </p>
 
-      <!-- 分组 -->
-      <div class="mt__panels">
+      <nav class="mt__tabs" aria-label="费用视图">
+        <button :class="{ 'is-active': activeTab === 'logs' }" :aria-pressed="activeTab === 'logs'" @click="activeTab = 'logs'">调用日志 <span>{{ total }}</span></button>
+        <button :class="{ 'is-active': activeTab === 'analysis' }" :aria-pressed="activeTab === 'analysis'" @click="activeTab = 'analysis'">统计分析</button>
+      </nav>
+      <div v-if="activeTab === 'analysis' && !summaryReady" class="mt__state">{{ summaryLoading ? '正在加载统计…' : '统计暂不可用，请检查上方提示。' }}</div>
+      <div v-else-if="activeTab === 'analysis' && !serviceRows.length && !cacheRows.length" class="mt__state">当前范围暂无统计数据，可扩大时间范围后重试。</div>
+      <div v-else-if="activeTab === 'analysis'" class="mt__panels">
         <section class="panel">
           <div class="panel__hd">
             <h3 class="panel__t">按服务</h3>
@@ -412,15 +502,15 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
       </div>
 
       <!-- 调用日志 -->
-      <section class="mt__list">
+      <section v-if="activeTab === 'logs'" class="mt__list" :aria-busy="loading">
         <div class="mt__listHd">
           <h3 class="mt__listT">调用日志</h3>
           <span class="mt__listHint">
-            按开始时间倒序 · 点任意一行看详情(用量来源、价格依据、错误摘要)
+            {{ loading ? "正在更新…" : "按时间倒序 · 点击记录查看详情" }}
           </span>
         </div>
 
-        <div v-if="loading" class="mt__state mt__state--soft">
+        <div v-if="loading && !calls.length" class="mt__state mt__state--soft">
           <p class="mt__stateHd">载入中…</p>
           <p class="mt__stateBody">正在读取调用日志。</p>
         </div>
@@ -438,13 +528,14 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
               可能是筛选条件太窄(时间范围 / 服务 / 用途 / 状态),换个范围再试。
             </template>
             <template v-else>
-              窗口内确实没有 embedding / OCR 调用(命中缓存不会产生调用记录)。
+              当前范围暂无外部调用记录，缓存命中可在统计分析中查看。
             </template>
           </p>
+          <div><button class="mt__retry" @click="setRange('30d')">查看最近 30 天</button><button v-if="filtersActive" class="mt__textBtn" @click="resetFilters">重置筛选</button></div>
         </div>
 
         <template v-else>
-          <div class="mt__scroll">
+          <div class="mt__scroll" :class="{ 'is-loading': loading }">
             <table class="mt__table">
               <thead>
                 <tr>
@@ -530,10 +621,10 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
               第 {{ firstIndex }}–{{ lastIndex }} 条 / 共 {{ total }} 条(每页 {{ calls.length }} 条上限 50)
             </span>
             <div class="mt__pagerBtns">
-              <button class="btn" type="button" :disabled="!hasPrev || loading" @click="prevPage">
+              <button class="mt__btn" type="button" :disabled="!hasPrev || loading" @click="prevPage">
                 上一页
               </button>
-              <button class="btn" type="button" :disabled="!hasNext || loading" @click="nextPage">
+              <button class="mt__btn" type="button" :disabled="!hasNext || loading" @click="nextPage">
                 下一页
               </button>
             </div>
@@ -541,19 +632,157 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
         </template>
       </section>
 
-      <!-- 价目依据(估算的解释权在配置里) -->
+      <details class="mt__details mt__help"><summary>统计说明</summary><div class="mt__detailsBody"><p class="mt__sub">仅统计 Embedding 与 OCR，不含聊天 LLM。金额按调用时的价格快照估算，不是官方账单，不扣减免费额度或折扣；不同币种不合并。缓存命中包含外部结果复用和本地文本转换，不等同于节省的请求数。日期筛选使用本地时间，按天分组使用 UTC 日期。</p></div></details>
+      <!-- 价目依据(估算的解释权在配置里;只增 + 删,改价 = 追加更晚生效的规则) -->
       <details class="mt__details">
         <summary>估算依据:当前价目表({{ prices.length }} 条)</summary>
         <div class="mt__detailsBody">
-          <p v-if="pricesError" class="mt__note mt__note--warn">{{ pricesError }}</p>
-          <template v-else-if="!prices.length">
-            <p class="mt__stateBody">
-              还没有配置价格:金额一律显示「无法估算」。价目由运维写入 MySQL 的
-              <code>price_config</code> 表(按 服务 / 供应商 / 模型或 OCR Type / 计费单位 配置,
-              引用官方价格来源与核实日期)。
+          <div class="mt__priceHd">
+            <p class="mt__sub">
+              价目按「服务 / 供应商 / 模型或 OCR Type / 计费单位 / 币种」匹配,以生效时间最晚的一条为准。
+              改价请添加更晚生效的新规则(不覆盖历史);删除只影响之后的调用。
             </p>
-            <button class="mt__retry" type="button" @click="loadPrices">重新载入</button>
-          </template>
+            <button v-if="!priceFormOpen" class="mt__add" type="button" @click="openPriceForm">
+              ＋ 添加价目
+            </button>
+          </div>
+
+          <!-- 新增表单(只增;单价一律按官方价格页核实后填入) -->
+          <form v-if="priceFormOpen" class="mt__form" @submit.prevent="submitPrice">
+            <p class="mt__formtitle">新增价目</p>
+
+            <div class="mt__field">
+              <span class="flt__label">服务</span>
+              <div class="flt__chips">
+                <button
+                  v-for="s in SERVICE_OPTS"
+                  :key="s.key"
+                  class="flt__chip"
+                  :class="{ 'is-on': priceForm.service === s.key }"
+                  type="button"
+                  @click="priceForm.service = s.key"
+                >
+                  {{ s.label }}
+                </button>
+              </div>
+            </div>
+
+            <div class="mt__grid">
+              <div class="mt__field">
+                <label class="flt__label" for="pf-provider">供应商</label>
+                <input
+                  id="pf-provider"
+                  v-model="priceForm.provider"
+                  class="mt__input"
+                  placeholder="dashscope"
+                />
+              </div>
+              <div class="mt__field">
+                <label class="flt__label" for="pf-target">模型 / OCR Type</label>
+                <input
+                  id="pf-target"
+                  v-model="priceForm.target"
+                  class="mt__input"
+                  placeholder="如 text-embedding-v4;留空 = 该服务通用"
+                />
+              </div>
+            </div>
+
+            <div class="mt__field">
+              <span class="flt__label">计费单位</span>
+              <div class="flt__chips">
+                <button
+                  v-for="u in UNIT_OPTS"
+                  :key="u.key"
+                  class="flt__chip"
+                  :class="{ 'is-on': priceForm.unit === u.key }"
+                  type="button"
+                  :title="u.title"
+                  @click="priceForm.unit = u.key"
+                >
+                  {{ u.label }}
+                </button>
+              </div>
+            </div>
+
+            <div class="mt__grid">
+              <div class="mt__field">
+                <label class="flt__label" for="pf-cur">币种</label>
+                <input
+                  id="pf-cur"
+                  v-model="priceForm.currency"
+                  class="mt__input mt__input--cur"
+                  maxlength="3"
+                  placeholder="CNY"
+                  @input="priceForm.currency = priceForm.currency.toUpperCase()"
+                />
+              </div>
+              <div class="mt__field">
+                <label class="flt__label" for="pf-price">单价(按计费单位)</label>
+                <input
+                  id="pf-price"
+                  v-model="priceForm.unit_price"
+                  class="mt__input"
+                  inputmode="decimal"
+                  placeholder="如 0.000514"
+                />
+              </div>
+            </div>
+
+            <div class="mt__field">
+              <span class="flt__label">生效时间(本地)</span>
+              <div class="mt__rangeRow">
+                <DateField v-model="priceDate" overlay />
+                <input
+                  v-model="priceTime"
+                  class="mt__input mt__input--time"
+                  type="time"
+                  aria-label="生效时刻"
+                />
+              </div>
+            </div>
+
+            <div class="mt__field">
+              <label class="flt__label" for="pf-src">来源(官方价格页 + 核实日期)</label>
+              <input
+                id="pf-src"
+                v-model="priceForm.source"
+                class="mt__input"
+                placeholder="官方价格页 URL 或名称(核实于 2026-10-04)"
+              />
+            </div>
+
+            <div class="mt__field">
+              <label class="flt__label" for="pf-note">备注(可选)</label>
+              <input
+                id="pf-note"
+                v-model="priceForm.note"
+                class="mt__input"
+                placeholder="如:标准价,未计免费额度 / 折扣"
+              />
+            </div>
+
+            <p v-if="priceFormError || priceError" class="mt__err">{{ priceFormError || priceError }}</p>
+
+            <div class="mt__formact">
+              <button class="mt__save" type="submit" :disabled="priceSaving">
+                {{ priceSaving ? "提交中…" : "添加价目" }}
+              </button>
+              <button class="mt__cancel" type="button" @click="closePriceForm">取消</button>
+            </div>
+          </form>
+          <p v-else-if="priceError" class="mt__err">{{ priceError }}</p>
+
+          <p v-if="pricesError" class="mt__note mt__note--warn">
+            {{ pricesError }}
+            <button class="mt__retry mt__retry--inline" type="button" @click="loadPrices">
+              重新载入
+            </button>
+          </p>
+          <p v-else-if="!prices.length" class="mt__stateBody mt__empty">
+            还没有配置价格:金额一律显示「无法估算」。点上方「＋ 添加价目」,按官方价格页填入
+            服务 / 供应商 / 模型或 OCR Type / 计费单位 与单价。
+          </p>
           <template v-else>
             <table class="mt__priceTable">
               <thead>
@@ -565,10 +794,11 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
                   <th>单价</th>
                   <th>生效时间(本地)</th>
                   <th>来源</th>
+                  <th class="mt__opsCol">操作</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(p, i) in prices" :key="p.id ?? i">
+                <tr v-for="(p, i) in prices" :key="p.id ?? i" class="mt__priceRow">
                   <td>{{ p.service }}</td>
                   <td>{{ p.provider }}</td>
                   <td>{{ p.target || "(通用)" }}</td>
@@ -576,11 +806,36 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
                   <td class="mono">{{ p.currency }} {{ trimDecimal(p.unit_price) }}</td>
                   <td class="mono">{{ formatStampFull(p.effective_from) }}</td>
                   <td :title="p.note">{{ p.source || "—" }}</td>
+                  <td class="mt__ops">
+                    <span class="mt__opsIn">
+                      <template v-if="p.id !== null && confirmDel === p.id">
+                        <button
+                          class="mt__delYes"
+                          type="button"
+                          :disabled="priceSaving"
+                          @click="onRemovePrice(p.id)"
+                        >
+                          {{ priceSaving ? "删除中…" : "删除" }}
+                        </button>
+                        <button class="mt__delNo" type="button" @click="confirmDel = null">取消</button>
+                      </template>
+                      <button
+                        v-else-if="p.id !== null"
+                        class="mt__delX"
+                        type="button"
+                        :aria-label="'删除这条价目(id ' + p.id + ')'"
+                        title="删除这条价目(历史金额不受影响)"
+                        @click="confirmDel = p.id"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  </td>
                 </tr>
               </tbody>
             </table>
             <p class="mt__sub">
-              每条调用在发生时打一份价目快照:改价不会重算历史金额(历史按当时的规则估算)。
+              每条调用在发生时打一份价目快照:改价、删价都不会重算历史金额(历史按当时的规则估算)。
             </p>
           </template>
         </div>

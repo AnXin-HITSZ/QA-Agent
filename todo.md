@@ -35,16 +35,23 @@
   内存队列 → 后台线程批量 INSERT → 失败落 `METERING_PENDING_DIR` → 原子领取 + `event_id` 主键幂等补写 + 指数退避,
   提交成功才删补写文件;**写库失败不会把已成功的 OCR / Embedding 变成业务失败,补写绝不重做付费调用**;
   连补写文件都写不下才计 `lost` 并告警(接口 / 前端都会暴露 pending / lost / db_ok)。崩溃窗口如实写进方案 §11。
-- **接口(只读,`/api/v1/admin/metering`)** —— [metering.py](backend/app/api/routes/metering.py):`GET /calls`(分页 + 过滤,
+- **接口(`/api/v1/admin/metering`)** —— [metering.py](backend/app/api/routes/metering.py):`GET /calls`(分页 + 过滤,
   缺省最近 7 天、上限 366 天 / 200 条一页)、`GET /calls/{event_id}`(含分摊与价格快照)、`GET /summary`(聚合在 SQL 里做)、
-  `GET /prices`。**权限缺口如实暴露**:后端无登录态,`ADMIN_API_TOKEN` + `X-Admin-Token` 为可选第一道门,
-  未配置时 `/summary` 返回 `auth_configured=false` 且前端显著提示 —— **配令牌 + 网络限制前不要把后端暴露到公网**。
+  `GET /prices`。**价目写接口(只增 + 删)**:`POST /prices`(重复唯一键 409,写入后价格表缓存立即失效)、
+  `DELETE /prices/{id}`(204 / 404;历史事件按快照估算,不重算)。日志仍只读。
+  **权限缺口如实暴露**:后端无登录态,接口只应在受信网络内暴露,统一鉴权机制后续引入(2026-10-04
+  已按决策移除早前的可选 `ADMIN_API_TOKEN` 单点令牌)。
 - **前端「调用与费用」tab** —— [MeteringView.vue](frontend/src/components/MeteringView.vue) +
   [MeteringDetail.vue](frontend/src/components/MeteringDetail.vue) + [useMetering.ts](frontend/src/composables/useMetering.ts) +
   [metering.css](frontend/src/styles/metering.css);[App.vue](frontend/src/App.vue) / [AppHeader.vue](frontend/src/components/AppHeader.vue)
-  加 `#/metering` 视图与折页标签。筛选(时间范围 / 服务 / 用途 / 状态)、概览卡(实际调用 / 成功失败 / 缓存命中 / 估算费用
+  加 `#/metering` 视图与折页标签。筛选(时间范围 / 服务 / 用途 / 状态 —— 胶囊按钮点选即生效,
+  样式对齐「待办清单」;自定义范围用日期选择器 + `HH:mm` 时刻,「应用」提交)、概览卡(实际调用 / 成功失败 / 缓存命中 / 估算费用
   按币种分列)、分组面板(按服务、用量与费用、缓存三层、按天纯 CSS 条)、分页表格、详情抽屉(用量口径 / 价格依据 /
-  错误 / 重试链路,文件可跳知识库)、加载 / 空 / 错误 / 缺价 / 日志不完整各有独立文案。`npm run build` 通过。
+  错误 / 重试链路,文件可跳知识库)、加载 / 空 / 错误 / 缺价 / 日志不完整各有独立文案。
+  **「估算依据」内可直接维护价目**(2026-10-04):「＋ 添加价目」表单(服务 / 计费单位胶囊,字段校验后才提交;
+  本地生效时间转 UTC)+ 表格内行内确认删除 —— 只增 + 删,改价 = 追加更晚生效的规则;停用 / 编辑留到以后。
+  无原生 `<select>` / `datetime-local`:日期选择器为共享组件 [DateField.vue](frontend/src/components/DateField.vue)
+  (自 TodoDateField 抽出)。`npm run build`(vue-tsc)通过。
 - **测试** —— `test_metering_{model,calls,writer,api,migration}.py` 全离线(mock 付费调用;迁移用例把
   `migrations/*.sql` 解析成结构再与模型逐项比对);
   [test_metering_mysql.py](backend/tests/test_metering_mysql.py) 是 MySQL 专属集成项(执行迁移 SQL 建表 / 回滚 /
@@ -52,8 +59,8 @@
   **未设 `METERING_TEST_MYSQL_URL` 时整组 skip**,且拒绝在不像测试库的库名上建表 / 删表。**SQLite 通过 ≠ MySQL 通过**。
 - ⏭ **待你执行 / 未验证**:① ECS 上建 `qa_agent_dev` / `qa_agent_prod` 两库并执行
   `mysql <db> < migrations/0001_create_metering_tables.up.sql`(语句见方案 §9.2/§9.3 与 migrations/README.md);
-  ② 在 `price_config` 里按官方价格页核实后填入单价(不内置、不硬编码;为空时界面显示「无法估算」);
-  ③ 配置 `METERING_MYSQL_URL` + `ADMIN_API_TOKEN` 后做一次真实 OCR / 索引小样本验收(真实计费仍未验证)。
+  ② 按官方价格页核实后在前端「调用与费用 → 估算依据」里填入单价(不内置、不硬编码;为空时界面显示「无法估算」);
+  ③ 配置 `METERING_MYSQL_URL` 后做一次真实 OCR / 索引小样本验收(真实计费仍未验证)。
 
 ---
 

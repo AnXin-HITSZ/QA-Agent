@@ -9,7 +9,15 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from decimal import Decimal
+
+from pydantic import BaseModel, Field, field_validator
+
+from app.metering.model import SERVICE_EMBEDDING, SERVICE_OCR
+from app.metering.pricing import UNITS
+
+# 价目 / 日志共用的服务清单(与 model 里的常量同源)
+SERVICES = (SERVICE_EMBEDDING, SERVICE_OCR)
 
 
 class CallItemView(BaseModel):
@@ -151,7 +159,6 @@ class PersistenceHealth(BaseModel):
     last_error: str = Field(default="", description="最近一次写入错误")
     price_rules: int = Field(default=0, description="已载入内存的价目条数")
     price_error: str = Field(default="", description="价格表载入错误")
-    auth_configured: bool = Field(default=False, description="是否配置了 ADMIN_API_TOKEN(未配置时接口对外裸奔)")
     message: str = Field(default="", description="未启用时的说明")
 
 
@@ -175,7 +182,7 @@ class MeteringSummary(BaseModel):
 
 
 class PriceRuleView(BaseModel):
-    """一条价目(供前端解释「估算」的依据;价格由运维在 MySQL 里配置)。"""
+    """一条价目(供前端解释「估算」的依据;在界面「估算依据」里维护,也只增 / 删)。"""
 
     id: int | None = Field(default=None, description="价目 id")
     service: str = Field(..., description="embedding / ocr")
@@ -187,6 +194,73 @@ class PriceRuleView(BaseModel):
     effective_from: str = Field(..., description="生效时间(UTC)")
     source: str = Field(default="", description="价格来源(官方价格页地址 / 核实日期)")
     note: str = Field(default="", description="备注")
+
+
+class PriceRuleInput(BaseModel):
+    """新增价目的请求体(只增语义;约束对齐 price_config 列定义与「必须引用官方来源」的口径)。"""
+
+    service: str = Field(..., description="embedding / ocr")
+    provider: str = Field(..., max_length=32, description="供应商(与调用日志里的 provider 一致)")
+    target: str = Field(default="", max_length=64, description="模型名 / OCR Type;空 = 该服务通用价")
+    unit: str = Field(..., description="计费单位:1k_tokens / request / page")
+    currency: str = Field(default="CNY", description="币种(3 位大写字母,如 CNY / USD)")
+    unit_price: Decimal = Field(..., description="单价(每计费单位;最多 8 位小数,非负)")
+    effective_from: str = Field(..., min_length=1,
+                                description="生效时间(ISO8601 带时区,或 epoch 秒;缺省按 UTC)")
+    source: str = Field(..., max_length=255,
+                        description="价格来源:官方价格页地址 / 核实日期(必填,便于对账)")
+    note: str = Field(default="", max_length=255, description="备注")
+
+    @field_validator("service")
+    @classmethod
+    def _known_service(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v not in SERVICES:
+            raise ValueError(f"未知服务 {v!r}(可选:{' / '.join(SERVICES)})")
+        return v
+
+    @field_validator("unit")
+    @classmethod
+    def _known_unit(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v not in UNITS:
+            raise ValueError(f"未知计费单位 {v!r}(可选:{' / '.join(UNITS)})")
+        return v
+
+    @field_validator("currency")
+    @classmethod
+    def _currency(cls, v: str) -> str:
+        v = (v or "").strip().upper()
+        if len(v) != 3 or not v.isascii() or not v.isalpha():
+            raise ValueError("币种必须是 3 位字母代码(如 CNY / USD)")
+        return v
+
+    @field_validator("provider", "source")
+    @classmethod
+    def _required_text(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("不能为空")
+        return v
+
+    @field_validator("target", "note", "effective_from")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return (v or "").strip()
+
+    @field_validator("unit_price")
+    @classmethod
+    def _price(cls, v: Decimal) -> Decimal:
+        if not v.is_finite():
+            raise ValueError("单价必须是有限数")
+        if v < 0:
+            raise ValueError("单价不能为负数")
+        exponent = v.as_tuple().exponent
+        if isinstance(exponent, int) and exponent < -8:
+            raise ValueError("单价最多 8 位小数(列定义 DECIMAL(18,8))")
+        if v >= Decimal("10000000000"):          # DECIMAL(18,8) 整数位上限 10 位
+            raise ValueError("单价超出 DECIMAL(18,8) 可存范围")
+        return v
 
 
 class PriceRuleList(BaseModel):

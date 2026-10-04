@@ -362,21 +362,22 @@ none = 显式关闭并重复付费调用，仅限本地开发）、共用 `REDIS
 | `call_events` | 一次真实 HTTP 请求 | 每次重试各一行（`call_group` + `attempt_no` + `retry_of` 串链路）；SDK 内部重试记进 `http_attempts`，不虚增行数 |
 | `call_event_items` | 一次批量请求覆盖的一个文件 | 金额按文本数比例**分摊**并标注估算；整笔金额只在事件行记一次 |
 | `cache_events` | 一批缓存结果 | 三层（`ocr_raw` / `ocr_text` / `embedding`）的命中 / 未命中 / 等待复用 / 去重，**分表不重复计费** |
-| `price_config` | 一条价目 | 按 服务 / 供应商 / 模型或 OCR Type / 计费单位 / 币种 + `effective_from` 配置，由运维写入 |
+| `price_config` | 一条价目 | 按 服务 / 供应商 / 模型或 OCR Type / 计费单位 / 币种 + `effective_from` 配置，在「调用与费用 → 估算依据」页面维护 |
 
 口径（前端与接口共用同一说法）：**超时 ≠ 免费**（用量与金额留空、`billing_status=unknown`，
 绝不记 0）；用量优先取供应商回报，拿不到才本端计数，**绝不按字数折算 token**；
 缺价格 / 缺用量显示「无法估算」+ 原因；金额全用 `Decimal`，不同币种、不同单位**不合并**。
 每条事件在发生时刻把命中的价目**快照**进行里，之后改价不重算历史。
 
-### 接口（`/api/v1/admin/metering`，只读）
+### 接口（`/api/v1/admin/metering`）
 
 `GET /calls`（分页 + since/until/service/purpose/status/job_id/document_id 过滤，
 缺省最近 7 天、上限 200/页）、`GET /calls/{event_id}`（含分摊与价格快照）、
-`GET /summary`（概览 + 持久化健康）、`GET /prices`（当前价目）。
-**权限现状**：后端没有登录态，`ADMIN_API_TOKEN` + `X-Admin-Token` 是可选的第一道门；
-没配置时接口对任何能访问服务的人敞开（`/summary` 会返回 `auth_configured=false`，
-前端显著提示）——**配令牌 + 网络限制之前不要把后端暴露到公网**。
+`GET /summary`（概览 + 持久化健康）、`GET /prices`（当前价目）、
+`POST /prices`（新增价目，只增：重复唯一键 → 409）、`DELETE /prices/{id}`（删除误录价目）。
+日志接口只读；价目只增 + 删，改价 = 追加一条更晚生效的规则，历史事件按当时的快照估算、不重算。
+**权限现状**：后端没有登录态（统一鉴权机制后续引入，见方案 §9）——
+在那之前接口只应在受信网络内暴露，**不要把后端直接放到公网**。
 
 ### 运行要求与故障行为
 
@@ -395,7 +396,7 @@ none = 显式关闭并重复付费调用，仅限本地开发）、共用 `REDIS
 
 `.env`（见 `.env.example`）：`METERING_MYSQL_URL` / `METERING_POOL_*` / 读写超时 /
 `METERING_PENDING_DIR` / `METERING_QUEUE_MAX` / `METERING_FLUSH_BATCH` /
-`METERING_FLUSH_INTERVAL_SECONDS` / `METERING_PRICE_CACHE_SECONDS` / `ADMIN_API_TOKEN`。
+`METERING_FLUSH_INTERVAL_SECONDS` / `METERING_PRICE_CACHE_SECONDS`。
 价格不内置、不硬编码：`price_config` 为空时所有金额显示「无法估算」。
 
 ### 测试

@@ -344,6 +344,28 @@ def test_price_rule_unique_and_transaction_rollback(store, mysql):
     assert _count(mysql, "price_config") == 1
 
 
+def test_store_price_insert_delete_round_trip(store, mysql):
+    """接口用的价目写路径在真库上成立:重复 → PriceExists(不覆盖),删除幂等地如实返回。"""
+    from app.metering.store import PriceExists
+
+    row = dict(service="ocr", provider="aliyun", target="Invoice", unit="request",
+               currency="CNY", unit_price=Decimal("0.00700000"),
+               effective_from=datetime(2026, 10, 1, 0, 0, tzinfo=UTC),
+               source="官方价格页(测试)", note="")
+    created = store.insert_price(row)
+    assert created["id"] and created["unit_price"] == "0.00700000"     # DECIMAL(18,8) 原样
+    assert created["effective_from"].startswith("2026-10-01T00:00:00")
+    assert _count(mysql, "price_config") == 1
+
+    with pytest.raises(PriceExists):          # 同一规则重复录入:拒绝而不是覆盖旧价
+        store.insert_price(row)
+    assert _count(mysql, "price_config") == 1
+
+    assert store.delete_price(int(created["id"])) is True
+    assert store.delete_price(int(created["id"])) is False             # 已经没了:如实返回
+    assert _count(mysql, "price_config") == 0
+
+
 def test_concurrent_identical_writes_insert_once(store, mysql):
     """多线程同时补写同一批事件:最终一人一行、不重不漏。
 

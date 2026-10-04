@@ -106,9 +106,6 @@ class Settings(BaseSettings):
     metering_flush_batch: int = 200         # 每轮批量写入上限
     metering_flush_interval_seconds: float = 2.0
     metering_price_cache_seconds: float = 60.0   # 价格表内存缓存时长(改价最多滞后这么久生效)
-    # 管理接口令牌:设置后所有 /admin/metering 接口要求请求头 X-Admin-Token 一致。
-    # 留空 = 不校验(与本项目其它 admin 接口一致,只能靠网络层保护,详见技术方案 §9)。
-    admin_api_token: str = ""
 
     # ---- CORS ----
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

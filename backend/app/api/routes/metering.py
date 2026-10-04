@@ -1,51 +1,40 @@
-"""调用日志与费用统计接口(管理员,前缀 /api/v1/admin/metering)。
+"""调用日志与费用统计接口(前缀 /api/v1/admin/metering)。
 
 三条口径(与前端、技术方案一致):
-- **只读**:日志由业务链路写入,接口不提供改 / 删;也不提供「清空历史」;
+- **日志只读、价目只增可删**:日志由业务链路写入,接口不提供改 / 删,也不提供「清空历史」;
+  价目表只支持新增与删除误录条目 —— 改价 = 追加一条更晚生效的规则,历史事件按发生时的
+  快照估算,绝不重算;
 - **估算**:所有金额都标 cost_status=estimated 且原因是「按配置单价 × 用量估算」;
   缺用量 / 缺价格时金额为空并给出原因,绝不返回 0;
 - **不合并**:不同币种、不同用量单位分开返回,不给跨币种 / 跨单位合计。
 
-权限:沿用现有 admin 前缀;后端目前**没有**成体系的登录态(见技术方案 §9),
-因此这里提供 ADMIN_API_TOKEN + X-Admin-Token 作为可选的第一道门:
-配置了就必须带对,没配置则与其它 admin 接口一样敞开 —— 此时状态接口会明确
-返回 auth_configured=false,前端据此显示警示,避免把费用与文件日志当成已受保护。
+权限:后端目前**没有**登录态,统一鉴权机制后续引入(见技术方案 §9);
+在那之前接口只应在受信网络内暴露,不要把服务直接放到公网。
 """
 
 from __future__ import annotations
 
 import logging
-import secrets
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.config import get_settings
-from app.metering import METERING_DISABLED_MESSAGE, db, status as metering_status
+from app.metering import METERING_DISABLED_MESSAGE, db, get_writer, status as metering_status
 from app.metering.redact import safe_text
-from app.metering.store import CallFilter, MAX_PAGE_SIZE, get_store
-from app.schemas.metering import CallLogItem, CallLogPage, MeteringSummary, PriceRuleList
+from app.metering.store import CallFilter, MAX_PAGE_SIZE, PriceExists, get_store
+from app.schemas.metering import (
+    SERVICES, CallLogItem, CallLogPage, MeteringSummary, PriceRuleInput, PriceRuleList, PriceRuleView,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix=get_settings().api_prefix + "/admin/metering", tags=["metering"])
 
-SERVICES = ("embedding", "ocr")
 STATUSES = ("success", "failure")
 DEFAULT_WINDOW_DAYS = 7
 MAX_WINDOW_DAYS = 366
-
-
-def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
-    """可选的令牌校验:配了 ADMIN_API_TOKEN 就必须带对;没配则不拦(并在状态里标注)。"""
-    expected = (get_settings().admin_api_token or "").strip()
-    if not expected:
-        return
-    got = (x_admin_token or "").strip()
-    if not got or not secrets.compare_digest(got, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="管理员令牌无效或缺失(请在请求头带 X-Admin-Token)")
 
 
 @contextmanager
@@ -53,6 +42,8 @@ def _db_503():
     """数据库不可用 / 未配置 → 503(前端据此提示,而不是当成「没有数据」)。"""
     try:
         yield
+    except HTTPException:
+        raise                     # 已翻译好的业务错误(404 / 409)原样透传,不吞成 503
     except Exception as exc:  # noqa: BLE001 —— 统一翻译成可读、已脱敏的 503
         logger.warning("调用日志查询失败:%s", exc)
         raise HTTPException(
@@ -113,7 +104,6 @@ def list_calls(
     document_id: str | None = Query(default=None, description="文件身份 id"),
     offset: int = Query(default=0, ge=0, description="偏移"),
     limit: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE, description=f"每页条数(≤{MAX_PAGE_SIZE})"),
-    _: None = Depends(require_admin),
 ) -> dict:
     """按时间倒序返回调用记录;只返回当前页,不做全量导出。"""
     flt = _filters(since=since, until=until, service=service, call_status=call_status,
@@ -123,7 +113,7 @@ def list_calls(
 
 
 @router.get("/calls/{event_id}", response_model=CallLogItem, summary="调用详情")
-def get_call(event_id: str, _: None = Depends(require_admin)) -> dict:
+def get_call(event_id: str) -> dict:
     """单条调用详情:含按文件 / 页面的估算分摊(items)与当时的价目快照。"""
     eid = (event_id or "").strip()
     if not eid or len(eid) > 64:
@@ -143,7 +133,6 @@ def summary(
     purpose: str | None = Query(default=None, description="document_index / query"),
     job_id: str | None = Query(default=None, description="索引任务 id"),
     document_id: str | None = Query(default=None, description="文件身份 id"),
-    _: None = Depends(require_admin),
 ) -> dict:
     """概览:实际调用 / 成功 / 失败 / 用量(按单位)/ 估算费用(按币种)/ 缓存命中 / 持久化健康。
 
@@ -171,7 +160,60 @@ def summary(
 
 
 @router.get("/prices", response_model=PriceRuleList, summary="当前价目表")
-def prices(_: None = Depends(require_admin)) -> dict:
-    """价目表(运维在 MySQL 里配置):估算费用的依据;为空说明还没配价格。"""
+def prices() -> dict:
+    """价目表:估算费用的依据;为空说明还没配价格(界面显示「无法估算」,绝不显示 0)。"""
     with _db_503():
         return {"items": get_store().price_rules()}
+
+
+def _price_row(payload: PriceRuleInput) -> dict:
+    """请求体 → 存储行:生效时间必须能解析成带时区的时刻(缺省按 UTC,不猜本地时区)。"""
+    eff = _parse_time(payload.effective_from, what="effective_from")
+    if eff is None:  # schema 已要求非空,这里只兜底(正常到不了)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="effective_from 不能为空")
+    return {"service": payload.service, "provider": payload.provider, "target": payload.target,
+            "unit": payload.unit, "currency": payload.currency, "unit_price": payload.unit_price,
+            "effective_from": eff, "source": payload.source, "note": payload.note}
+
+
+def _refresh_prices() -> None:
+    """写入价目后立刻作废价格表缓存(不让新价格白等一个缓存周期);刷新失败不掩盖写入成功。"""
+    try:
+        get_writer().price_book.invalidate()
+    except Exception:  # noqa: BLE001 —— 最多滞后一个缓存周期生效,不影响已写入的事实
+        logger.warning("价目写入后刷新价格表缓存失败(新价目将滞后生效)", exc_info=True)
+
+
+@router.post("/prices", response_model=PriceRuleView, status_code=status.HTTP_201_CREATED,
+             summary="新增价目(只增)")
+def create_price(payload: PriceRuleInput) -> dict:
+    """新增一条价目。
+
+    **只增不改**:同一(服务/供应商/模型/单位/币种/生效时间)重复录入返回 409;
+    改价 = 追加一条生效时间更晚的规则 —— 历史事件用的是发生时刻的价目快照,不会重算。
+    """
+    row = _price_row(payload)
+    with _db_503():
+        try:
+            item = get_store().insert_price(row)
+        except PriceExists as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="同一(服务/供应商/模型/单位/币种/生效时间)的价目已存在;"
+                       "改价请把生效时间改到更晚,而不是重复录入同一条。",
+            ) from exc
+        _refresh_prices()
+    return item
+
+
+@router.delete("/prices/{price_id}", status_code=status.HTTP_204_NO_CONTENT, summary="删除价目")
+def delete_price(price_id: int) -> None:
+    """删除一条误录的价目。
+
+    历史事件保留发生时刻的价目快照与估算金额,删除只影响之后的调用;对账时以快照为准。
+    """
+    with _db_503():
+        if not get_store().delete_price(int(price_id)):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="未找到该价目(可能已被删除)")
+        _refresh_prices()

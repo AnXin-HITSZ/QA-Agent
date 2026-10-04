@@ -25,6 +25,14 @@ onBeforeUnmount(() => {
 
 // Esc 关闭:除点遮罩 / 关闭按钮之外的另一条出口。
 function onKeydown(e: KeyboardEvent): void {
+  if (e.key === "Tab") {
+    const nodes = panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), [tabindex="0"]');
+    if (nodes?.length) {
+      const first = nodes[0]; const last = nodes[nodes.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { e.preventDefault(); last?.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+    } else { e.preventDefault(); }
+  }
   if (e.key === "Escape") {
     e.stopPropagation();
     closeDetail();

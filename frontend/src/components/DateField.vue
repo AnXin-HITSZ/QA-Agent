@@ -1,18 +1,25 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 
-import { addDaysIso, formatDueShort, isOverdue, parseIsoDate, toIsoDate, todayIso } from "../lib/todoDate";
+import { addDaysIso, parseIsoDate, toIsoDate, todayIso } from "../lib/todoDate";
 
-// 受控:值为本地日历日字符串 YYYY-MM-DD,null = 无截止。
-const props = defineProps<{ modelValue: string | null }>();
+// 通用日期选择器:可选快捷预设 + 自绘月历。受控值为本地日历日字符串 YYYY-MM-DD,null = 未选。
+// 展示文案与「是否标红」由调用方以函数传入(待办传相对期限 / 逾期;计量传纯日期)——
+// 组件不认识业务语义,口径统一留在调用方的 lib 里。
+//
+// 月历默认**内联展开**(抽屉这种滚动容器里定位浮层会被裁切);`overlay` 打开时改为
+// 绝对定位浮层 —— 页面上的筛选行用它,展开不撑高所在行。
+const props = withDefaults(
+  defineProps<{
+    modelValue: string | null;
+    presets?: { label: string; days: number }[];
+    format?: (iso: string | null) => string;
+    warn?: (iso: string | null) => boolean;
+    overlay?: boolean;
+  }>(),
+  { presets: () => [], overlay: false },
+);
 const emit = defineEmits<{ (e: "update:modelValue", v: string | null): void }>();
-
-// 快捷预设:报销场景最常用的相对期限。
-const PRESETS = [
-  { label: "今天", days: 0 },
-  { label: "明天", days: 1 },
-  { label: "一周后", days: 7 },
-];
 
 // 月历当前显示的月份(0 基的 m)。
 const cursor = ref(monthOf(parseIsoDate(props.modelValue) ?? new Date()));
@@ -60,8 +67,8 @@ const cells = computed(() => {
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
 
 const presetIso = (days: number): string => addDaysIso(days);
-const dueText = computed(() => formatDueShort(props.modelValue));
-const over = computed(() => isOverdue(props.modelValue));
+const valueText = computed(() => (props.format ? props.format(props.modelValue) : props.modelValue ?? ""));
+const valueWarn = computed(() => Boolean(props.warn?.(props.modelValue)));
 
 // 选中即收起,少一次点击。
 function pick(iso: string): void {
@@ -71,10 +78,10 @@ function pick(iso: string): void {
 </script>
 
 <template>
-  <div class="df">
-    <div class="df__presets">
+  <div class="df" :class="{ 'df--overlay': overlay }">
+    <div v-if="presets.length" class="df__presets">
       <button
-        v-for="p in PRESETS"
+        v-for="p in presets"
         :key="p.label"
         class="df__chip"
         :class="{ 'is-on': presetIso(p.days) === modelValue }"
@@ -105,7 +112,7 @@ function pick(iso: string): void {
           <polyline points="2.5,4.5 6,8 9.5,4.5" />
         </svg>
       </button>
-      <span v-if="dueText" class="df__val" :class="{ 'is-over': over }">{{ dueText }}</span>
+      <span v-if="valueText" class="df__val" :class="{ 'is-over': valueWarn }">{{ valueText }}</span>
     </div>
 
     <div v-if="open" class="df__cal" role="dialog" aria-label="选择日期">
@@ -175,7 +182,7 @@ function pick(iso: string): void {
   flex-wrap: wrap;
 }
 .df__datebtn {
-  height: 34px;
+  height: 38px;
   padding: 0 12px;
   display: inline-flex;
   align-items: center;
@@ -231,13 +238,27 @@ function pick(iso: string): void {
   font-weight: 500;
 }
 
-/* 自绘月历:内联展开(抽屉内滚动,浮层定位易错位) */
+/* 自绘月历:默认内联展开(抽屉内滚动,浮层定位易错位) */
 .df__cal {
   margin-top: 10px;
   padding: 11px 11px 9px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
+}
+
+/* 浮层模式:相对本组件绝对定位,展开只盖住下方内容、不改变所在行尺寸 */
+.df--overlay {
+  position: relative;
+}
+.df--overlay .df__cal {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: 264px; /* 脱离普通流后须自带宽度(内联时由容器撑开) */
+  margin-top: 0;
+  box-shadow: var(--shadow);
 }
 .df__calhd {
   display: flex;

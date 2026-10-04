@@ -400,6 +400,17 @@ async function detailOr(res: Response, fallback: string): Promise<string> {
   try {
     const body = (await res.json()) as { detail?: unknown };
     if (typeof body?.detail === "string" && body.detail) return body.detail;
+    // FastAPI 校验失败(422):detail 是错误数组,取出各条 msg 拼一行(表单要显示给人看)。
+    if (Array.isArray(body?.detail)) {
+      const msgs = body.detail
+        .map((d) =>
+          d && typeof d === "object" && typeof (d as { msg?: unknown }).msg === "string"
+            ? (d as { msg: string }).msg
+            : "",
+        )
+        .filter(Boolean);
+      if (msgs.length) return msgs.join(";");
+    }
   } catch {
     // 无 JSON body,用兜底文案
   }
@@ -770,7 +781,7 @@ export interface MeteringCacheStat {
   skipped: number;
 }
 
-// 日志持久化自身的健康:补写失败 / 队列积压 / 是否有管理员令牌都在这里如实暴露。
+// 日志持久化自身的健康:补写失败 / 队列积压 / 价格表状态都在这里如实暴露。
 export interface MeteringPersistence {
   enabled: boolean;
   configured: boolean;
@@ -789,7 +800,6 @@ export interface MeteringPersistence {
   last_error: string;
   price_rules: number;
   price_error: string;
-  auth_configured: boolean; // false = admin 接口没配令牌(对外敞开)
   message: string;
 }
 
@@ -875,7 +885,34 @@ export async function getMeteringCall(eventId: string): Promise<MeteringCall> {
   );
 }
 
-// 当前价目表(估算依据;由运维在 MySQL 的 price_config 里配置)。
+// 当前价目表(估算依据;在页面「估算依据」里维护,写入 price_config)。
 export async function listMeteringPrices(): Promise<{ items: MeteringPriceRule[] }> {
   return kfetchJson<{ items: MeteringPriceRule[] }>(`/api/v1/admin/metering/prices`);
+}
+
+// 新增价目的请求体(只增:改价 = 追加一条生效时间更晚的规则)。
+export interface MeteringPriceInput {
+  service: string;
+  provider: string;
+  target?: string;
+  unit: string;
+  currency: string;
+  unit_price: string; // 字符串十进制(最多 8 位小数,非负)
+  effective_from: string; // ISO8601 带偏移(UTC);本地时间由页面换算
+  source: string; // 官方价格页地址 / 核实日期(必填)
+  note?: string;
+}
+
+// 新增一条价目。重复的唯一键 → ApiError(409);字段校验失败 → ApiError(422)。
+export async function createMeteringPrice(input: MeteringPriceInput): Promise<MeteringPriceRule> {
+  return kfetchJson<MeteringPriceRule>(`/api/v1/admin/metering/prices`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+// 删除一条误录的价目(历史事件的价目快照与金额不受影响)。不存在 → ApiError(404)。
+export async function deleteMeteringPrice(id: number): Promise<void> {
+  return kfetchVoid(`/api/v1/admin/metering/prices/${id}`, { method: "DELETE" });
 }
