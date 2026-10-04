@@ -71,7 +71,7 @@
 
 ### 已确认的关键决定
 
-- **Embeddings**:`text-embedding-v4`(默认 1024 维,OpenAI 兼容端点,换模型才改 `EMBEDDINGS_DIM`)。限制:单请求 ≤ 10 条输入、单条 ≤ 8192 token → 摄取分批。
+- **Embeddings**:`qwen3.7-text-embedding-flash`(默认 1024 维,OpenAI 兼容端点,2026-10-04 自 `text-embedding-v4` 换入;换模型必重建索引,`EMBEDDINGS_DIM` 与版本号同步)。限制:单请求 ≤ 20 条输入(代码保守按 10 分批)、单条 ≤ 128K token ⊃ 现切块尺寸。
 - **涉密红线**:已确认切块原文可发 DashScope 云 + 向量存云 ECS Qdrant + 扫描件 OCR 正文也可上云 → 维持云方案,不做本地 embedding / 本地 Qdrant。
 - **原件仓库**:阿里云 OSS 私有桶 `anxin-hitsz-qa-agent`(region cn-shenzhen,prefix `knowledge/`)+ SSE 服务端加密 + RAM 最小权限;AccessKey 只进 `backend/.env`,**绝不提交**。
 - **发票 / 报销**:文件名已编码金额(`发票6100`)、目录名已编码费用大类+实际支出+预算上限 → 报销/审计问答可直接解析文件名算账;`metadata.py` 富化字段与分类**正交、非权威**。

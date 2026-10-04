@@ -4,7 +4,7 @@
 - langchain-openai 的 embed_documents 只回传向量,响应里的 usage(prompt_tokens)被丢掉,
   而官方用量是估算费用唯一可信的来源 → 用 httpx 响应钩子(probe)在请求边界上取;
 - 一次 embed_documents 内部按 chunk_size 拆成多个 HTTP 请求,我们需要**按请求**记账:
-  因此这里显式按 10 条一批自己拆(与 DashScope text-embedding-v4 单请求上限一致),
+  因此这里显式按 10 条一批自己拆(EMBED_BATCH,与 embeddings.py 的 chunk_size 一致),
   一批 = 一次请求 = 一条事件,不虚报也不合并;
 - 供应商 SDK 的内部重试:钩子能看到几次响应就记几次(http_attempts),不假装没发生。
 
@@ -29,7 +29,8 @@ from app.metering.redact import safe_error, safe_endpoint
 
 logger = logging.getLogger(__name__)
 
-# 单请求输入条数上限:DashScope text-embedding-v4 为 10,这里与 embeddings.py 的 chunk_size 对齐。
+# 单请求输入条数上限:qwen3.7-text-embedding-flash 为 20,这里与 embeddings.py 的 chunk_size
+# 对齐保守取 10(要放宽到 20 就两边一起改)。
 EMBED_BATCH = 10
 
 NOTE_NO_USAGE = "供应商响应未返回 usage,无法取得 token 数(不按字数折算)"

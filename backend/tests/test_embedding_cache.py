@@ -171,7 +171,9 @@ def test_model_change_changes_key(cache_env, monkeypatch):
 
 def test_version_bump_changes_key(cache_env, monkeypatch):
     before = embedding_cache.cache_key("文本")
-    monkeypatch.setattr(get_settings(), "embeddings_version", "2")
+    # 在**当前值**上加后缀再比对:写死 "2" 会随本地 .env 的 EMBEDDINGS_VERSION 一起翻车。
+    bumped = get_settings().embeddings_version + "-bump"
+    monkeypatch.setattr(get_settings(), "embeddings_version", bumped)
     assert embedding_cache.cache_key("文本") != before
 
 

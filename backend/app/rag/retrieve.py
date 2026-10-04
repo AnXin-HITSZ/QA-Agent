@@ -17,7 +17,8 @@ from app.rag.embeddings import get_embeddings
 
 DEFAULT_TOP_K = 5
 # 余弦相似度阈值:低于此判为「不相关」丢弃。经验默认,需按真实语料再调
-# (text-embedding-v4 余弦下,弱相关常落在 0.2 上下)。
+# (原按 text-embedding-v4 余弦校准,弱相关常落在 0.2 上下;换
+#  qwen3.7-text-embedding-flash 后分布会变,重建索引后需用真实语料复核)。
 SCORE_THRESHOLD = 0.2
 
 

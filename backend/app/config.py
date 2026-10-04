@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     # ---- Embeddings(RAG 向量化,OpenAI 兼容端点;如阿里云 DashScope)----
     embeddings_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embeddings_api_key: str = ""
-    embeddings_model: str = "text-embedding-v4"
-    embeddings_dim: int = 1024
+    embeddings_model: str = "qwen3.7-text-embedding-flash"
+    embeddings_dim: int = 1024  # 新模型可选 256/512/768/1024(默认 1024),与 Qdrant 集合维度绑定
 
     # ---- Qdrant 向量库 ----
     qdrant_url: str = ""  # 例:http://<ECS-IP>:6333;为空则 RAG 不可用

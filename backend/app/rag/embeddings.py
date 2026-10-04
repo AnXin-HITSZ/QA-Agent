@@ -1,7 +1,7 @@
 """RAG 向量化:从 .env 建 OpenAI 兼容的 embeddings(需真实 key)。
 
 仿 app/llm.py 的 get_llm:未配 EMBEDDINGS_API_KEY 直接抛错,不做假兜底。
-阿里云 DashScope 走兼容模式端点即可(text-embedding-v3,默认 1024 维)。
+阿里云 DashScope 走兼容模式端点即可(qwen3.7-text-embedding-flash,默认 1024 维)。
 """
 
 from __future__ import annotations
@@ -38,7 +38,9 @@ def get_embeddings() -> Embeddings:
         model=s.embeddings_model,
         # 第三方(非 OpenAI)端点:关掉基于 tiktoken 的按 token 分批,按原文发送,避免误判。
         check_embedding_ctx_length=False,
-        # DashScope text-embedding-v4 单请求 ≤10 条输入 → 按 10 一批发送(embed_documents 内部分批)。
+        # 单请求条数上限:qwen3.7-text-embedding-flash 为 20(官方模型表「最大行数」)。
+        # 这里保守留 10:请求更小、失败重试的影响面更小;要压请求数可放宽到 20,
+        # 记得与 metered_embeddings.EMBED_BATCH 同步改。
         chunk_size=10,
         # 自带 httpx 客户端:响应钩子在那里取供应商报的 usage(调用日志与费用统计用)。
         # 默认 HTTP 超时仍由 SDK 逐请求设置,行为与未传 http_client 时一致。
