@@ -128,18 +128,6 @@
   border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
-.mt__rangeRow {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
-}
-.mt__rangeRow .flt__label {
-  flex: 0 0 60px;
-  padding-top: 0; /* 行内是 38px 控件、已垂直居中,不需要外面胶囊那条 6px 顶距 */
-  text-align: right;
-}
-
 /* ---------- 通用输入 / 按钮(对齐待办清单的输入与幽灵按钮) ---------- */
 .mt__input {
   width: 100%;
@@ -160,11 +148,6 @@
 .mt__input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-tint);
-}
-.mt__input--time {
-  width: 108px;
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 13px;
 }
 .mt__input--cur {
   width: 96px;

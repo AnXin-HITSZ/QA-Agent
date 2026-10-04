@@ -18,7 +18,6 @@ import {
 } from "../composables/useMetering";
 import { formatMs, formatStamp, formatStampFull, trimDecimal } from "../lib/format";
 import { todayIso } from "../lib/todoDate";
-import DateField from "./DateField.vue";
 import DateTimeField from "./DateTimeField.vue";
 import MeteringDetail from "./MeteringDetail.vue";
 import SelectField from "./SelectField.vue";
@@ -723,7 +722,7 @@ async function onRemovePrice(id: number | null): Promise<void> {
                   id="pf-target"
                   v-model="priceForm.target"
                   class="mt__input"
-                  placeholder="如 text-embedding-v4;留空 = 该服务通用"
+                  placeholder="如 qwen3.7-text-embedding-flash;留空 = 该服务通用"
                 />
               </div>
             </div>
@@ -771,15 +770,8 @@ async function onRemovePrice(id: number | null): Promise<void> {
 
             <div class="mt__field">
               <span class="flt__label">生效时间(本地)</span>
-              <div class="mt__rangeRow">
-                <DateField v-model="priceDate" overlay />
-                <input
-                  v-model="priceTime"
-                  class="mt__input mt__input--time"
-                  type="time"
-                  aria-label="生效时刻"
-                />
-              </div>
+              <!-- 与时间范围对话框同一套「日期+时刻」组合框:日历 / 时刻浮层、SVG 图标 -->
+              <DateTimeField v-model:date="priceDate" v-model:time="priceTime" />
             </div>
 
             <div class="mt__field">
