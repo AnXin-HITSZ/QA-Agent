@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -34,6 +35,7 @@ from sqlalchemy.pool import NullPool
 from app.metering import CallItem
 from app.metering.model import COST_ESTIMATED
 from app.metering.store import CallFilter
+from app.metering.tables import CallEventRow
 from tests import meterkit as mk
 from tests import migrationkit as mig
 
@@ -298,6 +300,28 @@ def test_insert_is_idempotent_and_money_round_trips(store, mysql):
     money = {(c["service"], c["currency"]): c["amount"] for c in summary["cost_by_service_currency"]}
     assert money[(event.service, "CNY")] == "0.00102800"        # 合计也没有浮点误差
     assert summary["totals"]["calls"] == 1
+
+
+def test_long_identifiers_round_trip(store, mysql):
+    """真实长度的 document_id(36 位)与顶格 oss_key 必须进得去、原样读得回。
+
+    生产上栽过这一跤:document_id 是 36 位带连字符的 UUID,列却是 CHAR(32),严格模式下
+    整批 INSERT 报 1406 Data too long,带 document_id 的索引记录一条都进不了库。
+    SQLite 不校验长度,只有真库挡得住 —— 这正是本文件存在的理由。
+    """
+    max_key = CallEventRow.__table__.c.oss_key.type.length
+    doc_id = str(uuid.uuid4())                                  # documents.py 登记的就是这个形状
+    oss_key = ("子目录/" * max_key)[: max_key - 5] + "a.pdf"     # 顶格 oss_key,item_key 随之最长
+    assert (len(doc_id), len(oss_key)) == (36, max_key)
+
+    event = mk.embedding_call(usage_quantity=Decimal("10"),
+                              items=(CallItem(document_id=doc_id, oss_key=oss_key, text_count=1),))
+    assert store.insert([event], []) == 1
+
+    got = store.get_call(event.event_id)
+    assert got["document_id"] == doc_id
+    assert got["items"][0]["document_id"] == doc_id
+    assert got["items"][0]["oss_key"] == oss_key                # 没有被截断
 
 
 def test_microseconds_and_utc_window_survive(store, mysql):

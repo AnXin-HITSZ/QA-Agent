@@ -24,9 +24,11 @@ from sqlalchemy import select
 
 from app.metering import build_call, record_call
 from app.metering.db import session_scope
-from app.metering.model import COST_UNKNOWN, SERVICE_EMBEDDING, STATUS_SUCCESS, USAGE_SOURCE_VENDOR
+from app.metering.model import (
+    COST_UNKNOWN, SERVICE_EMBEDDING, STATUS_SUCCESS, USAGE_SOURCE_VENDOR, CallItem,
+)
 from app.metering.store import CallFilter, MysqlStore
-from app.metering.tables import CallEventRow
+from app.metering.tables import CallEventItemRow, CallEventRow, CacheEventRow
 
 
 def _unpriced_call():
@@ -93,3 +95,34 @@ def test_event_row_keeps_not_null_columns_non_null(metering_env):
     for col in CallEventRow.__table__.columns:
         if col.name in row and not col.nullable:
             assert row[col.name] is not None, f"{col.name} 是 NOT NULL 列,入库行不能为 None"
+
+
+def _declared_len(model, column: str) -> int:
+    length = model.__table__.c[column].type.length
+    assert isinstance(length, int), f"{model.__tablename__}.{column} 没有声明长度"
+    return length
+
+
+def test_identifiers_fit_the_columns_that_store_them(cache_env):
+    """存进来的标识必须装得进声明的列宽 —— 这是 SQLite 永远发现不了的一类错。
+
+    生产实测过一次:document_id 是 app/rag/documents.py 登记的带连字符 UUID(36 位),
+    而列是 CHAR(32),MySQL 严格模式下整批 INSERT 报 1406 Data too long,带 document_id
+    的索引记录一条都进不了库(与 price_version 那次同一类:本地全绿、线上全挂)。
+    所以这里不看「典型的 id 有多长」,而是按各列自己的上限算最长可能值再比列宽。
+    """
+    from app.rag import documents
+
+    doc_id = documents.register("制度与办事指南/一份很长的目录名/附件二.pdf")
+    assert doc_id, "缓存未接通时 register 返回空串,本用例就失去意义了"
+
+    for model in (CallEventRow, CallEventItemRow, CacheEventRow):
+        length = _declared_len(model, "document_id")
+        assert len(doc_id) <= length, \
+            f"{model.__tablename__}.document_id 是 {length} 位,装不下 {len(doc_id)} 位的文档身份"
+
+    # item_key = document_id + ":" + oss_key:取 oss_key 列允许的最大长度算最坏情况
+    longest = CallItem(document_id=doc_id, oss_key="x" * _declared_len(CallEventRow, "oss_key"))
+    length = _declared_len(CallEventItemRow, "item_key")
+    assert len(longest.item_key) <= length, \
+        f"call_event_items.item_key 是 {length} 位,装不下最长的 {len(longest.item_key)} 位关联键"

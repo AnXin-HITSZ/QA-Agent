@@ -84,7 +84,10 @@ class CallEventRow(Base):
     price_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     price_snapshot: Mapped[dict | None] = mapped_column(JSON)
     job_id: Mapped[str | None] = mapped_column(String(64))
-    document_id: Mapped[str | None] = mapped_column(CHAR(32))
+    # 文档身份(app/rag/documents.py 登记)是带连字符的 UUID 字符串,36 位 —— 不是本模块
+    # event_id 那种 32 位 hex。列宽按它来:短一位,MySQL 严格模式下整批 INSERT 直接
+    # 1406 Data too long(SQLite 不校验 CHAR 长度,本地全绿也发现不了),0002 迁移为此放宽。
+    document_id: Mapped[str | None] = mapped_column(CHAR(36))
     oss_key: Mapped[str | None] = mapped_column(String(512))
     page_no: Mapped[int | None] = mapped_column(Integer)
 
@@ -104,8 +107,10 @@ class CallEventItemRow(Base):
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"),
                                     primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(CHAR(32), nullable=False)
-    item_key: Mapped[str] = mapped_column(String(320), nullable=False)   # NULL 字段的占位(norm)
-    document_id: Mapped[str | None] = mapped_column(CHAR(32))
+    # NULL 字段的占位(norm)。最长形态是 document_id + ":" + oss_key(36 + 1 + 512 = 549),
+    # 按 oss_key 列的上限取整,别按「常见路径」估 —— 长路径会撞 1406(0002 迁移放宽到 549)。
+    item_key: Mapped[str] = mapped_column(String(549), nullable=False)
+    document_id: Mapped[str | None] = mapped_column(CHAR(36))   # 文档身份:36 位(见 CallEventRow)
     oss_key: Mapped[str | None] = mapped_column(String(512))
     page_no: Mapped[int | None] = mapped_column(Integer)
     text_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -136,7 +141,7 @@ class CacheEventRow(Base):
     shared_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     job_id: Mapped[str | None] = mapped_column(String(64))
-    document_id: Mapped[str | None] = mapped_column(CHAR(32))
+    document_id: Mapped[str | None] = mapped_column(CHAR(36))   # 文档身份:36 位(见 CallEventRow)
     oss_key: Mapped[str | None] = mapped_column(String(512))
     page_no: Mapped[int | None] = mapped_column(Integer)
     note: Mapped[str] = mapped_column(String(255), nullable=False, default="")

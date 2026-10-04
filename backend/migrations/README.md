@@ -50,7 +50,8 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 
 | 版本 | 文件 | 开发库 | 生产库 |
 | --- | --- | --- | --- |
-| 0001 | `0001_create_metering_tables` | 待应用 | 待应用 |
+| 0001 | `0001_create_metering_tables` | 已应用 | 已应用 |
+| 0002 | `0002_widen_metering_identifiers` | 待应用 | 待应用 |
 
 ## 0001：调用日志与费用统计四张表
 
@@ -62,3 +63,12 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 - **价格不随迁移种下。** `price_config` 建出来是空的，费用一律显示「无法估算」，由运维按官方价格页核实后在前端「调用与费用 → 估算依据」里填写（只增 + 删；技术方案 §5.1 有来源、SQL 示例与只增语义说明）；迁移里不硬编码任何单价。
 - **主键 / 唯一键就是幂等约束。** 补写重放靠它们天然去重（`INSERT ... ON DUPLICATE KEY UPDATE`，重复行不计入新插入），所以这几张表上不要另加会改变唯一性的键。
 - **回滚会连数据一起删。** `call_events` 是审计线索（技术方案 §13），线上不要轻易执行 down。
+
+## 0002：放宽标识列（document_id / item_key）
+
+`0002_widen_metering_identifiers.up.sql` 只做四条 `ALTER TABLE ... MODIFY`：`call_events`、`call_event_items`、`cache_events` 的 `document_id` 由 `CHAR(32)` 放宽到 `CHAR(36)`，`call_event_items.item_key` 由 `VARCHAR(320)` 放宽到 `VARCHAR(549)`。
+
+- **为什么：** `document_id` 不是本模块 `event_id` 那种 32 位 hex，而是 `app/rag/documents.py` 登记的 `str(uuid.uuid4())`——带连字符的 36 位。`CHAR(32)` 装不下，MySQL 严格模式下整批 `INSERT` 报 `1406 Data too long`，带 `document_id` 的索引类事件一条都进不了库，全积压在补写目录里反复重试（2026-10-04 生产实测）。
+- **`item_key` 同一个原因：** 它是 `document_id + ":" + oss_key`，最长 36 + 1 + 512 = 549；按常见路径估成 320 就会在长路径上再撞一次 `1406`。
+- **为什么本地测试没拦住：** 本地跑 SQLite，而 SQLite 不校验 `CHAR` / `VARCHAR` 长度。现在有两道新的看护：`tests/test_metering_store.py::test_identifiers_fit_the_columns_that_store_them`（按各列上限算最长标识再比列宽）与 `tests/test_metering_mysql.py::test_long_identifiers_round_trip`（真库上写 36 位 id + 顶格 oss_key）。
+- **回滚：** down 会把列宽改回去，只适用于空库 / 开发库——表里只要有 36 位的 `document_id`，严格模式下这条 `ALTER` 就会报 `1406`。

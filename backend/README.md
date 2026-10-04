@@ -372,6 +372,11 @@ none = 显式关闭并重复付费调用，仅限本地开发）、共用 `REDIS
 缺价格 / 缺用量显示「无法估算」+ 原因；金额全用 `Decimal`，不同币种、不同单位**不合并**。
 每条事件在发生时刻把命中的价目**快照**进行里，之后改价不重算历史。
 
+标识列按各自的**上限**取宽，不按常见值估：`document_id` 是 `documents.register` 登记的
+36 位带连字符 UUID（不是本模块 `event_id` 那种 32 位 hex），`item_key` = `document_id` +
+`:` + `oss_key` 最长 549。本地跑 SQLite 不校验列宽，短一位只有 MySQL 会报 1406
+（2026-10-04 生产撞过，见 `migrations/README.md` 的 0002）。
+
 ### 接口（`/api/v1/admin/metering`）
 
 `GET /calls`（分页 + since/until/service/purpose/status/job_id/document_id 过滤，

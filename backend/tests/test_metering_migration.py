@@ -8,14 +8,14 @@
 为什么不逐字比对 DDL 文本:SQL 是人排版出来的(列对齐、UNIQUE KEY 写法、DEFAULT CHARSET),
 与 SQLAlchemy 渲染的字符串注定对不上;比结构才能既保住保证,又不逼着人写机器格式。
 
-解析只覆盖 CREATE TABLE 一种语句:新增迁移若改用 ALTER,本用例会显式报错提醒扩展解析,
-而不是悄悄漏检。
+解析覆盖两种语句并**按版本顺序重放**:`CREATE TABLE` 建表、`ALTER TABLE ... MODIFY` 改列
+(0002 放宽 document_id / item_key 用的就是后者)。遇到第三种写法仍然显式报错,不悄悄漏检。
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import UniqueConstraint, types as sa_types
 from sqlalchemy.dialects import mysql
@@ -67,6 +67,7 @@ _NULL = re.compile(r"\bNULL\b", re.I)
 _ENGINE = re.compile(r"ENGINE\s*=\s*(\w+)", re.I)
 _CHARSET = re.compile(r"(?:DEFAULT\s+)?CHARSET\s*=\s*(\w+)", re.I)
 _DROP_TABLE = re.compile(r"^DROP\s+TABLE\s+(IF\s+EXISTS\s+)?(\w+)$", re.I)
+_ALTER_MODIFY = re.compile(r"^ALTER\s+TABLE\s+(\w+)\s+MODIFY\s+(?:COLUMN\s+)?(.+)$", re.I | re.S)
 
 
 def canon_type(sql: str) -> str:
@@ -184,14 +185,49 @@ def parse_table(stmt: str) -> Table:
 
 
 def migration_tables() -> dict[str, Table]:
-    """按版本顺序执行全部 up 文件(只解析,不连库),得到「迁移认为库长什么样」。"""
+    """按版本顺序把全部 up 文件作用一遍(只解析,不连库),得到「迁移认为库长什么样」。"""
     out: dict[str, Table] = {}
     for item in mig.migrations("up"):
-        for stmt in mig.statements(mig.text(item.path)):
-            table = parse_table(stmt)
-            assert table.name not in out, f"{item.path.name} 重复建表:{table.name}"
-            out[table.name] = table
+        apply_up(out, mig.text(item.path), where=item.path.name)
     return out
+
+
+def apply_up(schema: dict[str, Table], sql: str, *, where: str) -> None:
+    """把一份 up 的语句作用到结构上:CREATE TABLE 建表、ALTER ... MODIFY 改列。"""
+    for stmt in mig.statements(sql):
+        if alter_modify(schema, stmt, where=where):
+            continue
+        table = parse_table(stmt)          # 其余写法在这里显式报错(宁可炸,不要漏检)
+        assert table.name not in schema, f"{where}: 重复建表:{table.name}"
+        schema[table.name] = table
+
+
+def alter_modify(schema: dict[str, Table], stmt: str, *, where: str) -> bool:
+    """识别并应用 `ALTER TABLE t MODIFY [COLUMN] 列名 类型 NULL|NOT NULL`;不是 ALTER 返回 False。"""
+    m = _ALTER_MODIFY.match(stmt)
+    if not m:
+        return False
+    name, spec = m.group(1), m.group(2).strip()
+    table = schema.get(name)
+    assert table is not None, f"{where}: ALTER 的表不在结构里:{name}"
+    col = _column(spec, name)
+    names = [c.name for c in table.columns]
+    assert col.name in names, f"{where}: {name}.{col.name} 不在表里(改列不能改名)"
+    schema[name] = replace(table, columns=tuple(col if c.name == col.name else c
+                                               for c in table.columns))
+    return True
+
+
+def apply_down(schema: dict[str, Table], sql: str, *, where: str) -> None:
+    """把一份 down 的语句作用到结构上:DROP TABLE IF EXISTS 删表、ALTER ... MODIFY 改回去。"""
+    for stmt in mig.statements(sql):
+        if alter_modify(schema, stmt, where=where):
+            continue
+        m = _DROP_TABLE.match(stmt)
+        assert m and m.group(1), (
+            f"{where}: down 只允许 DROP TABLE IF EXISTS / ALTER ... MODIFY:{stmt[:60]!r}")
+        dropped = schema.pop(m.group(2), None)
+        assert dropped is not None, f"{where}: 删了结构里没有的表:{m.group(2)}"
 
 
 # ---- 模型 ----
@@ -271,19 +307,32 @@ def test_files_are_paired_and_versioned():
         "每个 up 都要有同名 down(回滚要能执行)"
 
 
-def test_down_files_drop_exactly_what_they_created():
-    """回滚要把对应 up 建的表全部删掉,且不碰别的表(线上回滚就是执行这些 down)。"""
+def test_down_files_revert_every_up():
+    """回滚要能一步步真的倒回去:每执行一版 down,结构必须回到该版 up **之前**的样子。
+
+    只断言「最后是空结构」不够 —— 表删掉就没了,down 里漏掉 ALTER(没把列宽改回去)照样会绿。
+    所以逐版比对快照;全放完自然是空结构。down 里只许出现 DROP TABLE IF EXISTS 与
+    ALTER ... MODIFY(线上回滚执行的就是这些文件)。
+    """
+    ups = mig.migrations("up")
+    snapshots: list[dict[str, Table]] = [{}]
+    for item in ups:
+        nxt = dict(snapshots[-1])
+        apply_up(nxt, mig.text(item.path), where=item.path.name)
+        snapshots.append(nxt)
+
     downs = {(m.version, m.name): m for m in mig.migrations("down")}
-    for up in mig.migrations("up"):
-        created = {parse_table(s).name for s in mig.statements(mig.text(up.path))}
+    schema = dict(snapshots[-1])
+    for i, up in enumerate(reversed(ups)):
         down = downs[(up.version, up.name)]
-        dropped = set()
-        for stmt in mig.statements(mig.text(down.path)):
-            m = _DROP_TABLE.match(stmt)
-            assert m and m.group(1), f"{down.path.name}: 只允许 DROP TABLE IF EXISTS:{stmt[:60]!r}"
-            dropped.add(m.group(2))
-        assert dropped == created, \
-            f"{down.path.name} 删的表与 {up.path.name} 建的表不一致:{sorted(dropped)}"
+        apply_down(schema, mig.text(down.path), where=down.path.name)
+        want = snapshots[len(ups) - i - 1]
+        if schema != want:
+            changed = sorted(set(schema) | set(want))
+            diff = [name for name in changed if schema.get(name) != want.get(name)]
+            raise AssertionError(
+                f"{down.path.name} 回滚后结构没回到 {up.path.name} 之前的样子,差异表:{diff}")
+    assert schema == {}
 
 
 def test_app_never_creates_or_alters_tables():
