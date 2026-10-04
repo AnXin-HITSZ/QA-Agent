@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Iterator
 
 from app.config import get_settings
+from app.metering.context import bind as bind_context
 from app.rag import ocr_cache
 from app.rag.cache_store import CacheError
 from app.rag.extract import extract
@@ -241,7 +242,9 @@ def _ocr_page_into(result: DocumentResult, page_no: int, png: bytes, mode: str,
         result.pages.append(PageResult(page_no, "blank", "ocr"))
         return
     try:
-        got = recognize_page(png, mode, refresh)
+        # 调用日志归属:这一页的识别 / 缓存命中都记在本页(§3)
+        with bind_context(page_no=page_no):
+            got = recognize_page(png, mode, refresh)
     except CacheError:
         raise                  # 缓存不可用 / 写失败:整批停下来报错,不当作"这一页失败"(§9)
     except Exception as exc:  # OCR 失败(QCRError / 网络 / 未配置)都记在该页上,不中断整批

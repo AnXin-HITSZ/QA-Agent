@@ -656,3 +656,226 @@ export async function updateTodo(id: string, body: TodoUpdate): Promise<Todo> {
 export async function deleteTodo(id: string): Promise<void> {
   return kfetchVoid(`/api/v1/todos/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
+
+// ── 调用与费用(管理员;对齐后端 /api/v1/admin/metering)──
+//
+// 三条口径(与后端 Schema、docs/调用日志与费用统计技术方案.md 一致,界面文案不得偏离):
+// - 金额一律是「按配置单价 × 用量」的**估算费用**,不是官方账单(本期不接官方账单);
+// - 缺用量或缺价格时 cost_amount 为 null:calls 显示「无法估算」,绝不显示 ¥0;
+// - 不同币种、不同用量单位分开返回,不提供跨币种 / 跨单位合计。
+
+// 一次请求按文件 / 页面的估算分摊(批量请求覆盖多文件时有多行)。
+export interface MeteringItem {
+  document_id: string | null;
+  oss_key: string | null;
+  page_no: number | null;
+  text_count: number; // 该文件在这次请求里的文本条数(分摊权重)
+  allocated_cost: string | null; // 分摊到该文件的估算金额;无可分摊金额时为 null
+  allocation_note: string;
+}
+
+export interface MeteringCall {
+  event_id: string;
+  occurred_at: string; // UTC ISO;展示时按本地时区
+  service: string; // embedding / ocr
+  purpose: string; // document_index / query
+  provider: string;
+  target: string; // 模型名 / OCR Type
+  endpoint: string; // 已脱敏(只有主机名)
+  call_group: string | null; // 同一逻辑调用的多次尝试共享
+  attempt_no: number;
+  retry_of: string | null; // 上一次尝试的事件 id
+  http_attempts: number; // 本行背后的真实 HTTP 请求次数(SDK 内部重试计入)
+  duration_ms: number;
+  status: string; // success / failure:业务调用是否成功,不是日志写入状态
+  error_class: string;
+  error_message: string;
+  http_status: number | null;
+  provider_request_id: string | null;
+  usage_quantity: string | null; // 用量(字符串十进制);null = 未取得
+  usage_unit: string; // token / request / page
+  usage_source: string; // vendor_response / local_count / unknown
+  usage_note: string;
+  billing_quantity: string | null; // 计费数量(1k_tokens 会除以 1000)
+  billing_unit: string;
+  billing_status: string; // billable / unknown(供应商侧是否计费未知)
+  billing_note: string;
+  cost_amount: string | null; // **估算**费用;null = 无法估算
+  currency: string | null; // 币种;不同币种不合并
+  cost_status: string; // estimated / unknown
+  cost_note: string; // 估算依据 / 无法估算的原因
+  price_id: number | null;
+  price_version: string | null; // 价目内容摘要(改价后可核对历史用的是哪版)
+  price_snapshot: Record<string, unknown> | null; // 事件发生时的不可变快照
+  job_id: string | null;
+  document_id: string | null;
+  oss_key: string | null;
+  page_no: number | null;
+  items?: MeteringItem[] | null; // 详情接口才有
+}
+
+export interface MeteringCallPage {
+  total: number;
+  offset: number;
+  limit: number;
+  items: MeteringCall[];
+}
+
+export interface MeteringTotals {
+  calls: number; // 记录条数
+  success: number;
+  failure: number;
+  unknown_usage: number; // 未取得用量的条数
+  unknown_cost: number; // 无法估算费用的条数(缺用量或缺价格)
+  billing_unknown: number; // 供应商侧是否计费未知的条数
+  http_attempts: number; // 真实发出的 HTTP 请求次数(≥ 记录条数)
+}
+
+export interface MeteringServiceStat {
+  service: string;
+  calls: number;
+  success: number;
+  failure: number;
+  unknown_usage: number;
+  unknown_cost: number;
+  http_attempts: number;
+}
+
+export interface MeteringDayStat {
+  day: string; // UTC 日期
+  service: string;
+  calls: number;
+  failure: number;
+}
+
+export interface MeteringCostStat {
+  service: string;
+  currency: string;
+  events: number;
+  amount: string; // 该服务该币种的估算金额合计(字符串十进制)
+}
+
+export interface MeteringUsageStat {
+  service: string;
+  unit: string;
+  quantity: string;
+}
+
+export interface MeteringCacheStat {
+  layer: string; // ocr_raw / ocr_text / embedding
+  unit: string;
+  hit: number;
+  miss: number;
+  shared: number;
+  skipped: number;
+}
+
+// 日志持久化自身的健康:补写失败 / 队列积压 / 是否有管理员令牌都在这里如实暴露。
+export interface MeteringPersistence {
+  enabled: boolean;
+  configured: boolean;
+  running: boolean;
+  db_ok: boolean | null; // null = 尚未探测
+  db_error: string;
+  queued: number; // 队列中待写入
+  pending: number; // 补写目录里待写入
+  claimed: number; // 正被某个进程写入
+  pending_dir: string;
+  flushed: number;
+  backfilled: number;
+  spilled: number;
+  lost: number; // >0 表示确有丢失,需人工关注
+  last_flush_at: string | null;
+  last_error: string;
+  price_rules: number;
+  price_error: string;
+  auth_configured: boolean; // false = admin 接口没配令牌(对外敞开)
+  message: string;
+}
+
+export interface MeteringSummary {
+  since: string | null; // 时间窗起(UTC;含)
+  until: string | null; // 时间窗止(UTC;不含)
+  filters: Record<string, string | null>;
+  error: string; // 非空 = 统计失败,下面的数字不可信(不是「没有调用」)
+  totals: MeteringTotals;
+  by_service: MeteringServiceStat[];
+  by_day: MeteringDayStat[];
+  cost_by_service_currency: MeteringCostStat[];
+  usage_by_service_unit: MeteringUsageStat[];
+  cache: MeteringCacheStat[];
+  persistence: MeteringPersistence;
+}
+
+export interface MeteringPriceRule {
+  id: number | null;
+  service: string;
+  provider: string;
+  target: string;
+  unit: string; // 计费单位:1k_tokens / request / page
+  currency: string;
+  unit_price: string;
+  effective_from: string;
+  source: string; // 价格来源(官方价格页 / 核实日期)
+  note: string;
+}
+
+// 列表 / 汇总共用的查询条件(时间传 UTC ISO 串;缺省由后端取最近 7 天)。
+export interface MeteringQuery {
+  since?: string;
+  until?: string;
+  service?: string;
+  purpose?: string;
+  status?: string;
+  job_id?: string;
+  document_id?: string;
+  offset?: number;
+  limit?: number;
+}
+
+const METERING_PARAMS = [
+  "since",
+  "until",
+  "service",
+  "purpose",
+  "status",
+  "job_id",
+  "document_id",
+  "offset",
+  "limit",
+] as const;
+
+// 只把真正传了的条件拼进查询串(空串 = 不筛);offset=0 要留下,不能被当成空值丢掉。
+function meteringQuery(q: MeteringQuery): string {
+  const p = new URLSearchParams();
+  for (const key of METERING_PARAMS) {
+    const v = q[key];
+    if (v === undefined || v === null || v === "") continue;
+    p.set(key, String(v));
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+// 概览:实际调用 / 成功失败 / 用量(按单位)/ 估算费用(按币种)/ 缓存命中 / 持久化健康。
+// 数据库故障时后端仍返回 200,但 summary.error 非空(前端据此提示,而不是当成「没有调用」)。
+export async function getMeteringSummary(q: MeteringQuery = {}): Promise<MeteringSummary> {
+  return kfetchJson<MeteringSummary>(`/api/v1/admin/metering/summary${meteringQuery(q)}`);
+}
+
+// 分页调用日志(时间倒序)。只读:不提供改 / 删 / 清空历史。
+export async function listMeteringCalls(q: MeteringQuery = {}): Promise<MeteringCallPage> {
+  return kfetchJson<MeteringCallPage>(`/api/v1/admin/metering/calls${meteringQuery(q)}`);
+}
+
+// 单条详情:含按文件 / 页面的估算分摊与当时的价目快照。不存在 → ApiError(404)。
+export async function getMeteringCall(eventId: string): Promise<MeteringCall> {
+  return kfetchJson<MeteringCall>(
+    `/api/v1/admin/metering/calls/${encodeURIComponent(eventId)}`,
+  );
+}
+
+// 当前价目表(估算依据;由运维在 MySQL 的 price_config 里配置)。
+export async function listMeteringPrices(): Promise<{ items: MeteringPriceRule[] }> {
+  return kfetchJson<{ items: MeteringPriceRule[] }>(`/api/v1/admin/metering/prices`);
+}

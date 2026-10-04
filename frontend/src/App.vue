@@ -5,12 +5,13 @@ import AppHeader from "./components/AppHeader.vue";
 import ChatView from "./components/ChatView.vue";
 import HistorySidebar from "./components/HistorySidebar.vue";
 import KnowledgeView from "./components/KnowledgeView.vue";
+import MeteringView from "./components/MeteringView.vue";
 import SopView from "./components/SopView.vue";
 import TodoDrawer from "./components/TodoDrawer.vue";
 import { useSidebar } from "./composables/useSidebar";
 import { useTodoDrawer } from "./composables/useTodoDrawer";
 
-type View = "chat" | "knowledge" | "sops";
+type View = "chat" | "knowledge" | "sops" | "metering";
 
 // 历史抽屉开关(两视图共用;侧栏为固定覆盖层,不占布局 → 内容始终整窗居中)。
 // 由对话视图的「会话工具胶囊」触发,故用模块级单例共享。
@@ -18,20 +19,23 @@ const { open, closeDrawer } = useSidebar();
 // 右侧待办抽屉开关(与左侧对称);切视图时一并收起。
 const { open: todoOpen, close: closeTodo } = useTodoDrawer();
 
-// hash 路由:#/knowledge → 知识库,#/sops → SOP 流程,其它一律对话。刷新后停在当前视图,链接可分享。
+// hash 路由:#/knowledge → 知识库,#/sops → SOP 流程,#/metering → 调用与费用,其它一律对话。
+// 刷新后停在当前视图,链接可分享。
 function viewFromHash(): View {
   const h = location.hash.replace(/^#\/?/, "");
   if (h === "knowledge") return "knowledge";
   if (h === "sops") return "sops";
+  if (h === "metering") return "metering";
   return "chat";
 }
 
 const view = ref<View>(viewFromHash());
 
-// 当前视图对应的组件(三视图映射,供 KeepAlive 保活)。
+// 当前视图对应的组件(四视图映射,供 KeepAlive 保活)。
 const viewComponent = computed(() => {
   if (view.value === "knowledge") return KnowledgeView;
   if (view.value === "sops") return SopView;
+  if (view.value === "metering") return MeteringView;
   return ChatView;
 });
 
@@ -121,7 +125,7 @@ onUnmounted(() => {
     <div class="app__main">
       <AppHeader :view="view" @change-view="changeView" />
 
-      <!-- 三视图保活:切换即时,滚动位置 / 输入草稿 / 知识库当前分类 / SOP 浏览态都不丢。
+      <!-- 四视图保活:切换即时,滚动位置 / 输入草稿 / 知识库当前分类 / SOP 浏览态都不丢。
            注意:此处曾用 <Transition mode="out-in"> 包裹,但它与 <KeepAlive> 组合会触发
            Vue 3.5.3+ 的已知回归(vuejs/core#12653):生产构建下依次逛过三个视图后回到
            首个视图会整块白屏(dev 模式不复现)。故去掉过渡、只留 KeepAlive,切换改为即时。 -->

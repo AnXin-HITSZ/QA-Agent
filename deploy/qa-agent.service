@@ -11,6 +11,8 @@ User=__USER__
 Group=__USER__
 # 关键:工作目录必须是 backend/,pydantic-settings 才能就地读到 .env
 #      (config.py 里 env_file=".env" 是相对路径,相对本目录解析)。
+# 调用日志的待写目录(METERING_PENDING_DIR,默认 data/metering-pending)也相对本目录:
+#      必须可写且随机器保留(数据库不可用时靠它兜住记录);本单元未加沙箱限制,无需额外放行。
 WorkingDirectory=__HOME__/qa-agent/backend
 Environment=PYTHONUNBUFFERED=1
 # 直接用 conda 环境里的 python,不做 conda activate(与 start-dev.sh 同一思路,规避激活坑)。

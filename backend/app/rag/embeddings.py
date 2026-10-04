@@ -26,7 +26,13 @@ def get_embeddings() -> Embeddings:
     # 任意 OpenAI 兼容的 embeddings 端点(阿里云 DashScope / 硅基流动 / 智谱 ...)。
     from langchain_openai import OpenAIEmbeddings
 
-    return OpenAIEmbeddings(
+    # 计量:用量探针(响应钩子)+ 包装层。惰性 import,未用到向量化时不加载。
+    from app.metering.probe import UsageProbe
+    from app.rag.metered_embeddings import MeteredEmbeddings
+
+    probe = UsageProbe()          # 与下面的 httpx 客户端同生命周期(闭包持有,不会被回收)
+
+    inner = OpenAIEmbeddings(
         base_url=s.embeddings_base_url,
         api_key=s.embeddings_api_key,
         model=s.embeddings_model,
@@ -34,4 +40,26 @@ def get_embeddings() -> Embeddings:
         check_embedding_ctx_length=False,
         # DashScope text-embedding-v4 单请求 ≤10 条输入 → 按 10 一批发送(embed_documents 内部分批)。
         chunk_size=10,
+        # 自带 httpx 客户端:响应钩子在那里取供应商报的 usage(调用日志与费用统计用)。
+        # 默认 HTTP 超时仍由 SDK 逐请求设置,行为与未传 http_client 时一致。
+        http_client=_probe_client(probe),
     )
+
+    # 计量包装:每次真实请求记一条调用事件;关闭计量时逐字透传(见 metered_embeddings)。
+    return MeteredEmbeddings(inner, probe, provider=_provider_of(s.embeddings_base_url),
+                             target=s.embeddings_model, endpoint=s.embeddings_base_url)
+
+
+def _probe_client(probe):
+    """建带用量钩子的 httpx 客户端(惰性 import,未用 embeddings 时不加载 httpx)。"""
+    import httpx
+
+    return httpx.Client(event_hooks={"response": [probe.hook]}, follow_redirects=True)
+
+
+def _provider_of(base_url: str) -> str:
+    """供应商标签取端点主机名:价目表按它配置,与「实际打到哪个网关」一致。"""
+    from urllib.parse import urlsplit
+
+    host = urlsplit(base_url or "").hostname or ""
+    return host or "openai-compatible"

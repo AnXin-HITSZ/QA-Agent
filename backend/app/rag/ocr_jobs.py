@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import get_settings
+from app.metering.context import PURPOSE_INDEX, bind as bind_context
 from app.rag import documents, ingest, oss, store
 from app.rag.ingest import Options, Scope
 from app.rag.localfs import atomic_write_json, read_json
@@ -245,8 +246,10 @@ def _run(job_id: str, scope_dict: dict, options_dict: dict) -> None:
             job["progress"] = {"done": done, "total": total, "current": detail.get("key")}
             _write(job)
 
-        summary = ingest.run_index_job(oss.knowledge_store(), scope, opts, progress=progress,
-                                       job_id=job_id)
+        # 调用日志归属:本任务线程内所有 OCR / 向量化调用都记在这个任务名下(§3)
+        with bind_context(purpose=PURPOSE_INDEX, job_id=job_id):
+            summary = ingest.run_index_job(oss.knowledge_store(), scope, opts, progress=progress,
+                                           job_id=job_id)
         files = summary.pop("files", [])
         for d in files[_read_details_count(job_id):]:   # 兜底:回调漏记的明细补上
             _append_file_detail(job_id, d)

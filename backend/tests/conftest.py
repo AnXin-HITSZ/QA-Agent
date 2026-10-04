@@ -185,3 +185,53 @@ def kb_env(cache_env, monkeypatch, tmp_path):
 
     return SimpleNamespace(kb=kb, qdrant=client, embeddings=embeddings, cache=cache_env,
                            cache_dir=tmp_path / "ocr", settings=s)
+
+
+# ---- 调用日志与费用统计 ----
+
+
+class NoThreadWriter:
+    """计量写入器的测试替身:入队照旧,但不启后台线程。
+
+    真实写入器会起线程把队列排空,断言时会和测试抢时序;这里保留入队 / 补写 / 幂等
+    这些真正要测的代码路径(MeteringWriter 本体),只把「什么时候冲刷」交给测试显式调用。
+    """
+
+
+@pytest.fixture
+def metering_env(monkeypatch, tmp_path):
+    """计量环境:内存仓库 + 不入队的后台线程模型 + 临时补写目录。
+
+    METERING_MYSQL_URL 指向本机一个**不存在**的端口:测试永远不会真的去连它
+    (仓库已换成内存实现),只用来让 db.configured() 为真、计量开关打开。
+    """
+    from types import SimpleNamespace
+
+    from app.config import get_settings
+    from app.metering import db, install_store, install_writer
+    from app.metering.store import MemoryStore
+    from app.metering.writer import MeteringWriter
+
+    class _Writer(MeteringWriter):
+        def _ensure_thread(self) -> None:
+            return
+
+        def start(self) -> None:      # 后台线程不启动:队列由测试自己 flush
+            return
+
+    s = get_settings()
+    monkeypatch.setattr(s, "metering_enabled", True)
+    monkeypatch.setattr(s, "metering_mysql_url",
+                        "mysql+pymysql://metering:never-used@127.0.0.1:1/qa_agent_test")
+    monkeypatch.setattr(s, "metering_pending_dir", str(tmp_path / "pending"))
+    monkeypatch.setattr(s, "metering_flush_batch", 200)
+    monkeypatch.setattr(s, "admin_api_token", "")
+
+    memory = MemoryStore()
+    install_store(memory)
+    writer = _Writer()
+    install_writer(writer)
+    yield SimpleNamespace(store=memory, writer=writer, settings=s, pending=tmp_path / "pending")
+    install_writer(None)
+    install_store(None)
+    db.dispose()

@@ -22,11 +22,22 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from app.metering import record_cache_stats
+from app.metering.model import LAYER_OCR_RAW, LAYER_OCR_TEXT
+from app.metering.probe import ReadProbe, classify
 from app.rag import ocr
-from app.rag.cache_store import CACHE_PREFIX, get_cache, load_json, single_flight, write_with_retry
+from app.rag.cache_store import (
+    CACHE_PREFIX, CacheBusy, get_cache, load_json, single_flight, write_with_retry,
+)
 from app.rag.ocr import OCRPage
 
 logger = logging.getLogger(__name__)
+
+# 缓存统计的口径备注(供前端解释「命中 / 未命中分别意味着什么」)
+NOTE_RAW_LAYER = "第 1 层(识别结果):命中 = 没有调用供应商;未命中 = 发起了识别请求"
+NOTE_TEXT_LAYER = "第 2 层(文本转换):未命中只是本地重新转换,不产生外部调用与费用"
+NOTE_INCOMPLETE = "本次计算已发起但异常中断,记一条未命中(失败本身另有调用记录)"
+NOTE_BUSY = "没抢到计算锁:本次没有计算,不计入缓存命中 / 未命中"
 
 # 识别配置版本:请求参数 / 端点形态 / 供应商响应有实质变化时 +1(只影响第 1 层)。
 OCR_CACHE_VERSION = "1"
@@ -172,6 +183,13 @@ def _read_text(cache, key: str) -> dict | None:
 
 # ---- 对外入口 ----
 
+def _record_cache(layer: str, probe: ReadProbe, hit: bool | None, note: str,
+                  *, attempted: bool = False) -> None:
+    """记一条缓存统计(单位:页)。计量未启用时是空操作,不影响缓存路径。"""
+    counts = classify(probe, hit, attempted=attempted)
+    record_cache_stats(layer=layer, unit="page", note=note, **counts)
+
+
 def recognize_cached(image: bytes, ocr_type: str, *, refresh: bool = False) -> CachedPage:
     """一张图片 → 两层缓存后的 OCRPage。测试里替换 ocr.recognize_raw(网络边界)即可离线跑。
 
@@ -182,23 +200,43 @@ def recognize_cached(image: bytes, ocr_type: str, *, refresh: bool = False) -> C
     cache = get_cache()   # NullCache(显式关闭缓存)自然退化为「永远未命中」,无需分支
     okey = ocr_cache_key(image, ocr_type)
 
-    raw, ocr_hit = single_flight(
-        kind="ocr", identity=ocr_digest(image, ocr_type),
-        read=lambda: None if refresh else _read_raw(cache, okey),
-        compute=lambda: ocr.recognize_raw(image, ocr_type),
-        keep=lambda r: bool(ocr.normalize(r, ocr_type).text.strip()),   # 空内容不算成功(§4.1)
-        write=lambda r: write_with_retry(cache, okey, _raw_envelope(r)),
-    )
+    raw_read = ReadProbe(lambda: None if refresh else _read_raw(cache, okey))
+    try:
+        raw, ocr_hit = single_flight(
+            kind="ocr", identity=ocr_digest(image, ocr_type),
+            read=raw_read,
+            compute=lambda: ocr.recognize_raw(image, ocr_type),
+            keep=lambda r: bool(ocr.normalize(r, ocr_type).text.strip()),   # 空内容不算成功(§4.1)
+            write=lambda r: write_with_retry(cache, okey, _raw_envelope(r)),
+        )
+    except CacheBusy:
+        _record_cache(LAYER_OCR_RAW, raw_read, None, NOTE_BUSY)   # 没抢到锁:没算,不计入
+        raise
+    except BaseException:
+        _record_cache(LAYER_OCR_RAW, raw_read, None, NOTE_INCOMPLETE, attempted=True)
+        raise
+    # 第 1 层未命中 = 真的调了一次供应商(调用事件由 ocr.recognize_raw 逐次记录)
+    _record_cache(LAYER_OCR_RAW, raw_read, ocr_hit, NOTE_RAW_LAYER)
 
     chash = content_hash(raw)
     tkey = text_cache_key(chash, ocr_type)
-    payload, text_hit = single_flight(
-        kind="text", identity=text_digest(chash, ocr_type),
-        read=lambda: _read_text(cache, tkey),
-        compute=lambda: _page_payload(ocr.normalize(raw, ocr_type), chash),
-        keep=lambda p: bool(p["text"].strip()),                          # 空结果不写成功缓存
-        write=lambda p: write_with_retry(cache, tkey, json.dumps(p, ensure_ascii=False)),
-    )
+    text_read = ReadProbe(lambda: _read_text(cache, tkey))
+    try:
+        payload, text_hit = single_flight(
+            kind="text", identity=text_digest(chash, ocr_type),
+            read=text_read,
+            compute=lambda: _page_payload(ocr.normalize(raw, ocr_type), chash),
+            keep=lambda p: bool(p["text"].strip()),                          # 空结果不写成功缓存
+            write=lambda p: write_with_retry(cache, tkey, json.dumps(p, ensure_ascii=False)),
+        )
+    except CacheBusy:
+        _record_cache(LAYER_OCR_TEXT, text_read, None, NOTE_BUSY)
+        raise
+    except BaseException:
+        _record_cache(LAYER_OCR_TEXT, text_read, None, NOTE_INCOMPLETE, attempted=True)
+        raise
+    # 第 2 层未命中只是本地重新转换:不产生任何外部调用,不计费用(§2)
+    _record_cache(LAYER_OCR_TEXT, text_read, text_hit, NOTE_TEXT_LAYER)
     # 命中转换缓存:字段明细不落缓存(§10),只有 recognized_fields 标记;
     # 本次刚转换的:字段明细还在内存里,原样交给调用方(与未接缓存时行为一致)。
     page = _page_from_payload(payload) if text_hit else ocr.normalize(raw, ocr_type)

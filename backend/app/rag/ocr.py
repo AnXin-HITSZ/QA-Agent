@@ -31,10 +31,22 @@ import time
 import urllib.parse
 import uuid
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from app.config import get_settings
+from app.metering import active, build_call, current_context, new_id, record_call
+from app.metering.model import (
+    BILLING_BILLABLE, BILLING_UNKNOWN, SERVICE_OCR, STATUS_FAILURE, STATUS_SUCCESS,
+    USAGE_SOURCE_LOCAL_COUNT, USAGE_SOURCE_UNKNOWN, CallItem,
+)
+from app.metering.redact import safe_error
 
 logger = logging.getLogger(__name__)
+
+PROVIDER = "aliyun"                # 供应商标识:价目表按 (service, provider, target) 配置
+NOTE_USAGE_COUNT = "本端请求计数:每次识别请求记 1 次(供应商不返回用量)"
+NOTE_FAILED = "调用失败,未取得用量;供应商是否计费未知,不按 0 计"
+NOTE_BILLABLE = "供应商成功返回,按供应商计费规则应计费(金额以官方账单为准)"
 
 API_ACTION = "RecognizeAllText"
 API_VERSION = "2021-07-07"
@@ -405,10 +417,17 @@ def recognize_raw(image: bytes, ocr_type: str, *, timeout: float | None = None,
     aliyun_type = ocr_type_to_aliyun(ocr_type)
 
     last: OCRError | None = None
+    # 调用日志:一次真实请求一条事件,多次尝试共享 call_group,retry_of 串起链路(§3 §8)
+    ctx = current_context()
+    call_group = new_id()
+    retry_of: str | None = None
     for attempt in range(max(0, retries) + 1):
+        started = time.monotonic()
         try:
-            return _post_once(image, aliyun_type, timeout)
+            raw = _post_once(image, aliyun_type, timeout)
         except OCRError as exc:
+            retry_of = _record_attempt(ctx, call_group, retry_of, attempt + 1, started,
+                                       aliyun_type, exc=exc, request_id=exc.request_id)
             last = exc
             if not exc.retryable or attempt >= max(0, retries):
                 logger.warning("OCR 失败(%s)%s", exc.code, "已用尽重试" if exc.retryable else "不可重试")
@@ -416,7 +435,46 @@ def recognize_raw(image: bytes, ocr_type: str, *, timeout: float | None = None,
             delay = min(4.0, 0.5 * (2 ** attempt))
             logger.warning("OCR 第%d次失败(%s),%.1fs 后重试", attempt + 1, exc.code, delay)
             _sleep(delay)
+        else:
+            _record_attempt(ctx, call_group, retry_of, attempt + 1, started, aliyun_type,
+                            exc=None, request_id=raw.get("RequestId"))
+            return raw
     raise last or OCRError("Unknown", "OCR 未执行")
+
+
+def _record_attempt(ctx, call_group: str, retry_of: str | None, attempt_no: int, started: float,
+                    aliyun_type: str, *, exc: OCRError | None, request_id: str | None) -> str | None:
+    """一次真实 OCR 请求 → 一条调用事件;返回事件 id(供下一次尝试记 retry_of)。
+
+    失败(超时 / 供应商错误码)一律 usage 置空、billing 记 unknown:供应商是否已计费无法
+    从客户端判定,记 0 会低估费用。计量关闭或记账出错时返回 None,**绝不影响 OCR 本身**。
+    """
+    if not active():
+        return None
+    try:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        error_class, error_message = safe_error(exc) if exc is not None else ("", "")
+        ok = exc is None
+        event = build_call(
+            service=SERVICE_OCR, provider=PROVIDER, target=aliyun_type, endpoint=_endpoint(),
+            duration_ms=duration_ms, status=STATUS_SUCCESS if ok else STATUS_FAILURE,
+            usage_quantity=Decimal(1) if ok else None, usage_unit="request",
+            usage_source=USAGE_SOURCE_LOCAL_COUNT if ok else USAGE_SOURCE_UNKNOWN,
+            usage_note=NOTE_USAGE_COUNT if ok else NOTE_FAILED,
+            billing_status=BILLING_BILLABLE if ok else BILLING_UNKNOWN,
+            billing_note=NOTE_BILLABLE if ok else NOTE_FAILED,
+            price_unit="request",
+            error_class=error_class, error_message=error_message,
+            http_status=getattr(exc, "status", None), provider_request_id=request_id,
+            call_group=call_group, attempt_no=attempt_no, retry_of=retry_of, http_attempts=1,
+            items=(CallItem(document_id=ctx.document_id, oss_key=ctx.oss_key, text_count=1),),
+            ctx=ctx,
+        )
+        record_call(event)
+        return event.event_id
+    except Exception:  # noqa: BLE001 —— 记账失败不影响本次识别
+        logger.warning("OCR 调用记录失败(不影响本次识别)", exc_info=True)
+        return None
 
 
 def recognize(image: bytes, ocr_type: str, *, timeout: float | None = None,

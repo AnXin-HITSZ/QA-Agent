@@ -10,6 +10,53 @@
 
 ---
 
+## 调用日志与费用统计(MySQL)—— ✅ DONE(2026-10-03,待 ECS 建库 + 真实调用验收)
+
+> 按 [docs/调用日志与费用统计技术方案.md](docs/调用日志与费用统计技术方案.md) 实现:记录 embedding / OCR 的
+> **真实外部调用**与按配置单价的**估算费用**。日志主存储 MySQL(Redis 仍只做缓存 + 会话,Qdrant 仍只做向量),
+> **不含聊天 LLM**,**不接官方账单**,界面只写「估算费用」。
+
+- **库表(4 张,无外键,`DATETIME(6)` / `DECIMAL`,`InnoDB` + `utf8mb4`)** —— [tables.py](backend/app/metering/tables.py) +
+  [迁移 0001](backend/migrations/0001_create_metering_tables.up.sql)(纯 SQL、手工执行,约定见
+  [migrations/README.md](backend/migrations/README.md)):`call_events`(一次真实请求一行,
+  每次重试各一行,`call_group`/`attempt_no`/`retry_of` 串链路,`http_attempts` 记 SDK 内部重试)、
+  `call_event_items`(批量请求按文本数比例**分摊**,整笔金额只记一次)、`cache_events`(三层缓存命中 / 未命中 / 复用 / 去重,
+  与费用分表不重复计)、`price_config`(维度 = 服务 / 供应商 / 模型或 OCR Type / 计费单位 / 币种 + `effective_from`,
+  运维写入)。**应用绝不 `create_all`,也不引迁移框架:表只由 migrations 下的 SQL 演进**;
+  运行账号只给 DML,迁移账号另建。
+- **口径** —— 超时 ≠ 免费(用量 / 金额留空 + `billing_status=unknown`,不记 0);用量优先供应商回报,
+  其次本端计数,**绝不按字数折算 token**;缺价 / 缺用量显示「无法估算」+ 原因;全链路 `Decimal`,
+  不同币种 / 单位不合并;事件发生时对命中的价目做**不可变快照**,改价不重算历史;
+  文档正文 / 向量 / 图片 / 完整查询文本 / 密钥 / 签名 URL 一律不落库(endpoint 只留主机名,错误摘要过 `redact`)。
+- **埋点(不改变现有缓存行为)** —— [metered_embeddings.py](backend/app/rag/metered_embeddings.py) 包住 embedding 客户端
+  (批量 / 部分命中 / 去重 / 查询向量只计实际未命中)、[ocr.py](backend/app/rag/ocr.py) 每次真实识别请求记一条
+  (重试逐次、失败 / 超时如实记)、`ocr_cache.py` / `embedding_cache.py` 追加一行缓存统计上报(键、TTL、单飞逻辑未动)。
+- **故障补写(不影响业务)** —— [writer.py](backend/app/metering/writer.py) + [pending.py](backend/app/metering/pending.py):
+  内存队列 → 后台线程批量 INSERT → 失败落 `METERING_PENDING_DIR` → 原子领取 + `event_id` 主键幂等补写 + 指数退避,
+  提交成功才删补写文件;**写库失败不会把已成功的 OCR / Embedding 变成业务失败,补写绝不重做付费调用**;
+  连补写文件都写不下才计 `lost` 并告警(接口 / 前端都会暴露 pending / lost / db_ok)。崩溃窗口如实写进方案 §11。
+- **接口(只读,`/api/v1/admin/metering`)** —— [metering.py](backend/app/api/routes/metering.py):`GET /calls`(分页 + 过滤,
+  缺省最近 7 天、上限 366 天 / 200 条一页)、`GET /calls/{event_id}`(含分摊与价格快照)、`GET /summary`(聚合在 SQL 里做)、
+  `GET /prices`。**权限缺口如实暴露**:后端无登录态,`ADMIN_API_TOKEN` + `X-Admin-Token` 为可选第一道门,
+  未配置时 `/summary` 返回 `auth_configured=false` 且前端显著提示 —— **配令牌 + 网络限制前不要把后端暴露到公网**。
+- **前端「调用与费用」tab** —— [MeteringView.vue](frontend/src/components/MeteringView.vue) +
+  [MeteringDetail.vue](frontend/src/components/MeteringDetail.vue) + [useMetering.ts](frontend/src/composables/useMetering.ts) +
+  [metering.css](frontend/src/styles/metering.css);[App.vue](frontend/src/App.vue) / [AppHeader.vue](frontend/src/components/AppHeader.vue)
+  加 `#/metering` 视图与折页标签。筛选(时间范围 / 服务 / 用途 / 状态)、概览卡(实际调用 / 成功失败 / 缓存命中 / 估算费用
+  按币种分列)、分组面板(按服务、用量与费用、缓存三层、按天纯 CSS 条)、分页表格、详情抽屉(用量口径 / 价格依据 /
+  错误 / 重试链路,文件可跳知识库)、加载 / 空 / 错误 / 缺价 / 日志不完整各有独立文案。`npm run build` 通过。
+- **测试** —— `test_metering_{model,calls,writer,api,migration}.py` 全离线(mock 付费调用;迁移用例把
+  `migrations/*.sql` 解析成结构再与模型逐项比对);
+  [test_metering_mysql.py](backend/tests/test_metering_mysql.py) 是 MySQL 专属集成项(执行迁移 SQL 建表 / 回滚 /
+  列类型精度 / 索引 / 无外键 / Decimal 往返 / 微秒与 UTC 边界 / 并发幂等写 / 真实写出器落盘补写),
+  **未设 `METERING_TEST_MYSQL_URL` 时整组 skip**,且拒绝在不像测试库的库名上建表 / 删表。**SQLite 通过 ≠ MySQL 通过**。
+- ⏭ **待你执行 / 未验证**:① ECS 上建 `qa_agent_dev` / `qa_agent_prod` 两库并执行
+  `mysql <db> < migrations/0001_create_metering_tables.up.sql`(语句见方案 §9.2/§9.3 与 migrations/README.md);
+  ② 在 `price_config` 里按官方价格页核实后填入单价(不内置、不硬编码;为空时界面显示「无法估算」);
+  ③ 配置 `METERING_MYSQL_URL` + `ADMIN_API_TOKEN` 后做一次真实 OCR / 索引小样本验收(真实计费仍未验证)。
+
+---
+
 ## RAG 知识库(Step 2)—— 进行中
 
 > **架构**:原件存**阿里云 OSS**(私有桶,唯一事实源,抗 ECS 重建);ECS 的 **Qdrant** 只放向量 + 元数据;引用来源用短时效**签名 URL** 指回原件。

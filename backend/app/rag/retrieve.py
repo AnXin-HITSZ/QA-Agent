@@ -11,6 +11,7 @@ v1 纯语义检索,不带分类 / 元数据过滤(全库);低于分数阈值的�
 
 from __future__ import annotations
 
+from app.metering.context import PURPOSE_QUERY, bind as bind_context
 from app.rag import store
 from app.rag.embeddings import get_embeddings
 
@@ -34,7 +35,11 @@ def search_knowledge(
     q = (query or "").strip()
     if not q:
         return []
-    vector = get_embeddings().embed_query(q)   # 查询向量不进缓存:检索不依赖 Redis(§4.3 修订)
+    # 调用日志归属:检索(聊天)发起的向量化记 purpose=query,不带文件信息(§3)
+    with bind_context(purpose=PURPOSE_QUERY, job_id=None, document_id=None, oss_key=None,
+                      page_no=None):
+        # 查询向量不进缓存:检索不依赖 Redis(§4.3 修订)
+        vector = get_embeddings().embed_query(q)
     points = store.search(vector, top_k=top_k)
     hits: list[dict] = []
     for p in points:

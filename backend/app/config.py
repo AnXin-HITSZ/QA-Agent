@@ -83,6 +83,33 @@ class Settings(BaseSettings):
     # embedding 模型版本标识:供应商没有固定版本号时人工维护,换版本 / 主动失效时 +1(§4.3)。
     embeddings_version: str = "1"
 
+    # ---- 调用日志与费用统计(MySQL;docs/调用日志与费用统计技术方案.md)----
+    # 只记录「业务调用发生了多少次、供应商报了多少用量、按配置价估算多少钱」;
+    # 不落文档正文 / 向量 / 图片 / 完整查询文本,也不保存任何密钥与签名 URL。
+    # 未配置 METERING_MYSQL_URL 时整个计量层静默关闭(不影响 OCR / 索引 / 检索)。
+    metering_enabled: bool = True
+    # 例:mysql+pymysql://qa_agent:密码(需 URL 编码)@127.0.0.1:3306/qa_agent_prod?charset=utf8mb4
+    # (开发库 qa_agent_dev / 生产库 qa_agent_prod;运行账号只给 DML,迁移用另一个账号,见方案 §9)
+    # 同机 / 同 Docker 网络用 host 名即可,不需要把 MySQL 端口暴露到公网。
+    metering_mysql_url: str = ""
+    # 连接池按「每个 uvicorn worker 各一份」计算:总连接 ≈ workers × (pool + overflow),
+    # 留够余量,别把 MySQL max_connections 占满。
+    metering_mysql_pool_size: int = 5
+    metering_mysql_max_overflow: int = 5
+    metering_mysql_pool_recycle_seconds: int = 1800   # 小于 MySQL wait_timeout,避免用陈旧连接
+    metering_mysql_connect_timeout_seconds: float = 5.0
+    metering_mysql_read_timeout_seconds: float = 10.0
+    metering_mysql_write_timeout_seconds: float = 10.0
+    # 数据库不可用时的本地补写目录(只作故障恢复队列,不是第二份可查询日志库)。
+    metering_pending_dir: str = "data/metering-pending"
+    metering_queue_max: int = 5000          # 进程内待写队列上限,满了直接落补写目录
+    metering_flush_batch: int = 200         # 每轮批量写入上限
+    metering_flush_interval_seconds: float = 2.0
+    metering_price_cache_seconds: float = 60.0   # 价格表内存缓存时长(改价最多滞后这么久生效)
+    # 管理接口令牌:设置后所有 /admin/metering 接口要求请求头 X-Admin-Token 一致。
+    # 留空 = 不校验(与本项目其它 admin 接口一致,只能靠网络层保护,详见技术方案 §9)。
+    admin_api_token: str = ""
+
     # ---- CORS ----
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

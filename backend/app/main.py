@@ -6,7 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import chat, conversations, health, knowledge, sops, todos
+from app.api.routes import (
+    chat, conversations, health, knowledge, metering, sops, todos,
+)
 from app.config import get_settings
 from app.graph import build_graph
 
@@ -78,9 +80,29 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("索引任务对账失败(不影响启动):%s", exc)
 
+    # 调用日志与费用统计:起后台补写线程(不建表、不阻塞启动;未配 METERING_MYSQL_URL 则什么都不做,
+    # 索引与检索照常)。表结构由迁移脚本建立,见 docs/调用日志与费用统计技术方案.md §6。
+    try:
+        from app.metering import start as metering_start, status as metering_status
+
+        metering_start()
+        st = metering_status()
+        if st.get("enabled"):
+            logger.info("调用日志:已启用(MySQL %s)", "连接正常" if st.get("db_ok") else "连接待确认")
+        else:
+            logger.info("调用日志:%s", st.get("message") or "未启用")
+    except Exception as exc:
+        logger.warning("调用日志初始化失败(不影响启动与业务):%s", exc)
+
     try:
         yield
     finally:
+        try:
+            from app.metering import stop as metering_stop
+
+            metering_stop()
+        except Exception as exc:
+            logger.warning("调用日志收尾失败:%s", exc)
         if saver_cm is not None:
             await saver_cm.__aexit__(None, None, None)
         if todo_store is not None:
@@ -104,6 +126,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(knowledge.router)
     app.include_router(knowledge.admin_router)
+    app.include_router(metering.router)          # 调用日志与费用统计(admin,见 §9 权限说明)
     app.include_router(sops.router)
     app.include_router(todos.router)
     return app

@@ -345,3 +345,66 @@ none = 显式关闭并重复付费调用，仅限本地开发）、共用 `REDIS
 - 已记录完成的缓存、登记清理阶段不重复执行。
 - embedding 批量取锁的异常清理覆盖取锁、等待、缓存复查和计算全过程。忙碌或 Redis 故障时释放本次已取得的锁，不释放其他任务的锁，不绕过锁收费计算。
 - 上述身份检查用于应用维护的登记信息；直接绕过应用修改 OSS，以及跨服务检查与删除间的严格原子性，仍需后续对象版本条件删除或操作串行化进一步保障。
+
+
+## 调用日志与费用统计（MySQL）
+
+按 [docs/调用日志与费用统计技术方案.md](../docs/调用日志与费用统计技术方案.md) 实现。
+记录 embedding / OCR 的**真实外部调用**与按配置单价的**估算费用**：
+日志主存储是 **MySQL**（Redis 仍只做缓存与会话，Qdrant 仍只做向量），
+**不含聊天 LLM 调用**，**不接官方账单**，界面只报「估算费用」。
+未配置 `METERING_MYSQL_URL` 时整层静默关闭，不影响 OCR / 索引 / 检索。
+
+### 记什么、怎么记
+
+| 表 | 一行 = | 关键点 |
+|---|---|---|
+| `call_events` | 一次真实 HTTP 请求 | 每次重试各一行（`call_group` + `attempt_no` + `retry_of` 串链路）；SDK 内部重试记进 `http_attempts`，不虚增行数 |
+| `call_event_items` | 一次批量请求覆盖的一个文件 | 金额按文本数比例**分摊**并标注估算；整笔金额只在事件行记一次 |
+| `cache_events` | 一批缓存结果 | 三层（`ocr_raw` / `ocr_text` / `embedding`）的命中 / 未命中 / 等待复用 / 去重，**分表不重复计费** |
+| `price_config` | 一条价目 | 按 服务 / 供应商 / 模型或 OCR Type / 计费单位 / 币种 + `effective_from` 配置，由运维写入 |
+
+口径（前端与接口共用同一说法）：**超时 ≠ 免费**（用量与金额留空、`billing_status=unknown`，
+绝不记 0）；用量优先取供应商回报，拿不到才本端计数，**绝不按字数折算 token**；
+缺价格 / 缺用量显示「无法估算」+ 原因；金额全用 `Decimal`，不同币种、不同单位**不合并**。
+每条事件在发生时刻把命中的价目**快照**进行里，之后改价不重算历史。
+
+### 接口（`/api/v1/admin/metering`，只读）
+
+`GET /calls`（分页 + since/until/service/purpose/status/job_id/document_id 过滤，
+缺省最近 7 天、上限 200/页）、`GET /calls/{event_id}`（含分摊与价格快照）、
+`GET /summary`（概览 + 持久化健康）、`GET /prices`（当前价目）。
+**权限现状**：后端没有登录态，`ADMIN_API_TOKEN` + `X-Admin-Token` 是可选的第一道门；
+没配置时接口对任何能访问服务的人敞开（`/summary` 会返回 `auth_configured=false`，
+前端显著提示）——**配令牌 + 网络限制之前不要把后端暴露到公网**。
+
+### 运行要求与故障行为
+
+- **建表只走迁移**（应用绝不 `create_all`，也不引迁移框架）：用有 DDL 权限的账号执行
+  `mysql --default-character-set=utf8mb4 -u qa_migrate -p qa_agent_prod < migrations/0001_create_metering_tables.up.sql`
+  （建库语句、迁移账号 / 运行账号分离、本地与 ECS 的地址差异见方案 §9 与
+  [migrations/README.md](migrations/README.md)；本仓库的建库与迁移由你在 ECS 上执行）；
+- 连接池每 worker 一份（`POOL_SIZE` + `MAX_OVERFLOW`，`pool_pre_ping` + 回收 + 连接/读写超时）；
+  后台写出线程与请求线程**各用独立会话**，事务不跨外部调用，入队不阻塞请求；
+- 写库失败只把记录落进 `METERING_PENDING_DIR`（原子领取、幂等重放、指数退避、提交成功才删文件），
+  **不会**把已成功的 OCR / Embedding 变成业务失败，也**不会**重做任何付费调用；
+  连补写文件都写不下才计 `lost` 并告警（接口与前端都会暴露 pending / lost / db_ok）；
+  进程崩溃可能丢掉尚未落盘的记录，不承诺严格一次（方案 §11）。
+
+### 配置
+
+`.env`（见 `.env.example`）：`METERING_MYSQL_URL` / `METERING_POOL_*` / 读写超时 /
+`METERING_PENDING_DIR` / `METERING_QUEUE_MAX` / `METERING_FLUSH_BATCH` /
+`METERING_FLUSH_INTERVAL_SECONDS` / `METERING_PRICE_CACHE_SECONDS` / `ADMIN_API_TOKEN`。
+价格不内置、不硬编码：`price_config` 为空时所有金额显示「无法估算」。
+
+### 测试
+
+`tests/test_metering_{model,calls,writer,api,migration}.py` 全离线（mock 付费调用；迁移用例把
+`migrations/*.sql` 解析成结构再与模型逐项比对），覆盖批量 / 部分命中 / 去重、查询向量、OCR 原始命中不产生外部调用、
+失败 / 超时 / 重试、缺用量 / 缺价格、幂等补写、多文件不重复计、分页 / 过滤 / 时间边界 /
+统计一致、缓存与费用不重复计、日志写失败不触发重复业务调用。
+`tests/test_metering_mysql.py` 是 **MySQL 专属**集成测试（执行迁移 SQL 建表 / 回滚、列类型与精度、
+索引、无外键、Decimal 往返、微秒与 UTC 边界、唯一约束与回滚、并发幂等写、真实写出器落盘 / 补写），
+**没设 `METERING_TEST_MYSQL_URL` 就整组 skip**——脚本拒绝在不像测试库的库名上建表 / 删表；
+`SQLite 通过不等于 MySQL 通过`，无测试库时如实报告为未验证（跑法见方案 §12）。

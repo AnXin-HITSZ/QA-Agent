@@ -42,6 +42,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from app.config import get_settings
+from app.metering.context import PURPOSE_INDEX, bind as bind_context
 from app.rag import documents, embedding_cache, oss, store
 from app.rag.cache_store import CacheError, ensure_available
 from app.rag.document_extract import (
@@ -266,13 +267,14 @@ def prepare_file(kb, key: str, opts: Options) -> Prepared:
         return prep
     prep.content_sha256 = _sha256(data)
     prep.document_id = documents.register(key, content_sha256=prep.content_sha256)
-    try:
-        res = extract_document(data, key, opts.mode, refresh=opts.refresh_ocr)
-    except CacheError:
-        raise
-    except Exception as exc:
-        prep.status, prep.reason = "failed", f"extract_failed:{type(exc).__name__}:{exc}"
-        return prep
+    with bind_context(document_id=prep.document_id or None, oss_key=key, page_no=None):
+        try:
+            res = extract_document(data, key, opts.mode, refresh=opts.refresh_ocr)
+        except CacheError:
+            raise
+        except Exception as exc:
+            prep.status, prep.reason = "failed", f"extract_failed:{type(exc).__name__}:{exc}"
+            return prep
     prep.page_keys = [(p.page_number, p.ocr_cache_key, p.text_cache_key) for p in res.pages]
 
     prep.method = ",".join(res.methods) or ("ocr" if opts.mode != NATIVE_ONLY else "native")
@@ -348,6 +350,15 @@ def run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: in
     单文件失败不中断整批,但会导致本次不发布(旧索引保持可用);缓存不可用 / 内存上限
     则立刻停在当前文件并如实报错(§9),不继续跑完整批。
     """
+    # 调用日志归属:整个任务(提取阶段的 OCR 与写入阶段的向量化)都记在
+    # purpose=document_index + 本次 job_id 下。上层任务线程已绑定同样的值,这里再兜一层 ——
+    # 本函数是对外唯一的索引入口,归属不该依赖调用方记得先绑定。
+    with bind_context(purpose=PURPOSE_INDEX, job_id=job_id):
+        return _run_index_job(kb, scope, opts, progress=progress, retries=retries, job_id=job_id)
+
+
+def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: int | None = None,
+                   job_id: str | None = None) -> dict:
     targets, missing = scope_files(kb, scope)   # 先验 OSS 通 + 固定清单
     embeddings = get_embeddings()               # 先验 embeddings 已配(fail-fast)
     ensure_available()                          # 再验缓存可用(fail-fast,§9)
@@ -400,11 +411,14 @@ def run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: in
                     extraction_version=f"v{_strategy_version()}",
                 )
                 try:
-                    vectors = embedding_cache.embed_documents(embeddings, texts)
-                    points = [store.make_point(ids[j], vectors[j], payloads[j]) for j in range(len(texts))]
-                    n = 0
-                    for b in range(0, len(points), _UPSERT_BATCH):
-                        n += store.upsert(points[b: b + _UPSERT_BATCH], collection=version)
+                    # 调用日志归属:本文件的向量化调用带上文件身份(提取阶段的那次绑定已退出)
+                    with bind_context(oss_key=key, document_id=prep.document_id or None):
+                        vectors = embedding_cache.embed_documents(embeddings, texts)
+                        points = [store.make_point(ids[j], vectors[j], payloads[j])
+                                  for j in range(len(texts))]
+                        n = 0
+                        for b in range(0, len(points), _UPSERT_BATCH):
+                            n += store.upsert(points[b: b + _UPSERT_BATCH], collection=version)
                     totals["indexed_files"] += 1
                     totals["chunks"] += len(texts)
                     totals["vectors"] += n

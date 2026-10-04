@@ -24,6 +24,8 @@ import time
 from datetime import datetime, timezone
 
 from app.config import get_settings
+from app.metering import record_cache_stats
+from app.metering.model import LAYER_EMBEDDING
 from app.rag.cache_store import (
     CACHE_PREFIX, CacheBackend, CacheBusy, LockRenewer, get_cache, load_json, lock_name,
     write_with_retry,
@@ -33,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 KEY_VERSION = "v1"
 _PROVIDER = "openai-compatible"   # 端点形态:OpenAI 兼容接口(base_url 区分具体供应商)
+
+# 缓存统计口径(供前端解释):只有未命中才会提交给模型并产生费用
+NOTE_LAYER = ("第 3 层(切块向量):未命中才会提交给模型并产生费用;"
+              "去重跳过与等待复用都不产生外部调用")
 
 
 def _digest(payload: dict) -> str:
@@ -134,52 +140,66 @@ def embed_documents(client, texts: list[str]) -> list[list[float]]:
     got: dict[str, list[float] | None] = {
         t: _vector_of(raw, dim) for t, raw in zip(uniq, cache.mget([keys[t] for t in uniq]))}
     missing = [t for t in uniq if got[t] is None]
-    if not missing:
-        return [got[t] for t in texts]  # type: ignore[misc]
-
-    ttl = float(get_settings().cache_lock_ttl_seconds)
-    wait = float(get_settings().cache_lock_wait_seconds)
-    tokens: dict[str, str] = {}
-    renewer: LockRenewer | None = None
+    # 缓存统计(单位:条文本):同批重复 = skipped,直接读到 = hit,等他方算完复用 = shared,
+    # 真正提交给模型的 = miss —— 只有 miss 会产生外部调用与费用(§2)。
+    stats = {"hit": len(uniq) - len(missing), "miss": 0, "shared": 0,
+             "skipped": len(texts) - len(uniq)}
     try:
-        deadline = time.monotonic() + wait
-        while True:
-            for t in [t for t in missing if t not in tokens]:
-                token = cache.acquire_lock(lock_name("embedding", embedding_digest(t)), ttl)
-                if token:
-                    tokens[t] = token
-            pending = [t for t in missing if t not in tokens and got[t] is None]
-            if not pending or time.monotonic() >= deadline:
-                break
-            time.sleep(min(0.25, max(0.05, wait / 10)))
-            for t, raw in zip(pending, cache.mget([keys[t] for t in pending])):
-                got[t] = _vector_of(raw, dim)              # 等锁期间别人可能已写好
-        if pending:
-            raise CacheBusy(f"embedding:{len(pending)} 条文本")
+        if not missing:
+            return [got[t] for t in texts]  # type: ignore[misc]
 
-        mine = [t for t in tokens if got[t] is None]
-        if mine:                                           # 持锁后复查:抢锁前别人可能已写好
-            for t, raw in zip(mine, cache.mget([keys[t] for t in mine])):
-                got[t] = _vector_of(raw, dim)
-            mine = [t for t in mine if got[t] is None]
+        ttl = float(get_settings().cache_lock_ttl_seconds)
+        wait = float(get_settings().cache_lock_wait_seconds)
+        tokens: dict[str, str] = {}
+        renewer: LockRenewer | None = None
+        try:
+            deadline = time.monotonic() + wait
+            while True:
+                for t in [t for t in missing if t not in tokens]:
+                    token = cache.acquire_lock(lock_name("embedding", embedding_digest(t)), ttl)
+                    if token:
+                        tokens[t] = token
+                pending = [t for t in missing if t not in tokens and got[t] is None]
+                if not pending or time.monotonic() >= deadline:
+                    break
+                time.sleep(min(0.25, max(0.05, wait / 10)))
+                for t, raw in zip(pending, cache.mget([keys[t] for t in pending])):
+                    filled = _vector_of(raw, dim)          # 等锁期间别人可能已写好
+                    if filled is not None and got[t] is None:
+                        stats["shared"] += 1
+                    got[t] = filled
+            if pending:
+                raise CacheBusy(f"embedding:{len(pending)} 条文本")
 
-        if mine:
-            renewer = LockRenewer(cache, [(lock_name("embedding", embedding_digest(t)), tokens[t])
-                                          for t in mine], ttl)   # 只续真正在算的这几把
-            renewer.start()
-            vectors = client.embed_documents(mine)
-            if len(vectors) != len(mine):
-                raise RuntimeError(f"embedding 返回 {len(vectors)} 条,与请求 {len(mine)} 条不符")
-            _store_many(cache, [keys[t] for t in mine], vectors, dim)
-            for t, vec in zip(mine, vectors):
-                got[t] = [float(x) for x in vec]
+            mine = [t for t in tokens if got[t] is None]
+            if mine:                                           # 持锁后复查:抢锁前别人可能已写好
+                for t, raw in zip(mine, cache.mget([keys[t] for t in mine])):
+                    filled = _vector_of(raw, dim)
+                    if filled is not None and got[t] is None:
+                        stats["shared"] += 1
+                    got[t] = filled
+                mine = [t for t in mine if got[t] is None]
+
+            if mine:
+                renewer = LockRenewer(cache, [(lock_name("embedding", embedding_digest(t)), tokens[t])
+                                              for t in mine], ttl)   # 只续真正在算的这几把
+                renewer.start()
+                stats["miss"] = len(mine)      # 提交给模型 = 未命中;失败也算(失败另有调用记录)
+                vectors = client.embed_documents(mine)
+                if len(vectors) != len(mine):
+                    raise RuntimeError(f"embedding 返回 {len(vectors)} 条,与请求 {len(mine)} 条不符")
+                _store_many(cache, [keys[t] for t in mine], vectors, dim)
+                for t, vec in zip(mine, vectors):
+                    got[t] = [float(x) for x in vec]
+        finally:
+            if renewer is not None:
+                renewer.stop()
+            for t, token in tokens.items():
+                try:
+                    cache.release_lock(lock_name("embedding", embedding_digest(t)), token)
+                except Exception as exc:   # 释放失败只能等 TTL
+                    logger.warning("释放 embedding 计算锁失败(等 TTL 过期):%s", exc)
+
+        return [got[t] for t in texts]  # type: ignore[misc]
     finally:
-        if renewer is not None:
-            renewer.stop()
-        for t, token in tokens.items():
-            try:
-                cache.release_lock(lock_name("embedding", embedding_digest(t)), token)
-            except Exception as exc:   # 释放失败只能等 TTL
-                logger.warning("释放 embedding 计算锁失败(等 TTL 过期):%s", exc)
-
-    return [got[t] for t in texts]  # type: ignore[misc]
+        record_cache_stats(layer=LAYER_EMBEDDING, unit="text", note=NOTE_LAYER, **stats)
