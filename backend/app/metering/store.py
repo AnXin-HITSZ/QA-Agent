@@ -227,6 +227,11 @@ class MysqlStore:
         data.pop("items", None)
         data.pop("kind", None)
         data.pop("schema", None)
+        # JSON 形态里「无价目」写作 null,但 price_version 列是 NOT NULL(默认值在 Python 侧给):
+        # 不还原成空串就会传显式 NULL → 1048,未命中价目的记录永远写不进去、补写反复失败。
+        # 注意 SQLite 的 ORM 批量插入会替 None 填列默认值,只在本地把错盖住 —— MySQL 分支是
+        # 内联多值 INSERT,不填默认值,生产就是这么炸的(test_metering_store.py 有行级用例看守)。
+        data["price_version"] = data.get("price_version") or ""
         data["occurred_at"] = _naive(e.occurred_at)
         for key in ("usage_quantity", "billing_quantity", "cost_amount"):
             val = data.get(key)
