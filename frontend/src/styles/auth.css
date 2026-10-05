@@ -220,6 +220,84 @@
   }
 }
 
+/* 未登录页面统一字号；限定在 .auth 内，不影响应用内账号表单。 */
+.auth {
+  font-size: 15px;
+  line-height: 1.6;
+}
+.auth .auth__card {
+  max-width: 480px;
+  min-width: 0;
+  padding: 32px;
+}
+.auth .auth__mark {
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.auth .auth__name { font-size: 21px; }
+.auth .auth__sub { font-size: 14px; }
+.auth .auth__title {
+  font-size: 28px;
+  line-height: 1.35;
+  margin: 24px 0 12px;
+}
+.auth .auth__lede {
+  font-size: 15px;
+  line-height: 1.75;
+  margin-bottom: 24px;
+}
+.auth .auth__lede--tight { margin-bottom: 0; }
+.auth .auth__field { margin-bottom: 18px; }
+.auth .auth__label {
+  font-size: 14px;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.auth .auth__input {
+  height: 44px;
+  font-size: 16px;
+}
+.auth .auth__btn {
+  height: auto;
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.auth .auth__hint,
+.auth .auth__note,
+.auth .auth__spin {
+  font-size: 14px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.auth .auth__hint { margin-top: 8px; }
+.auth .auth__actions { flex-wrap: wrap; }
+.auth .auth__meta {
+  margin-top: 24px;
+  padding-top: 16px;
+  font-size: 14px;
+}
+.auth .auth__link {
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 36px;
+  text-align: left;
+}
+.auth .auth__btn:focus-visible,
+.auth .auth__link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+@media (max-width: 480px) {
+  .auth { padding: 20px 12px; }
+  .auth .auth__card { padding: 24px 20px; }
+  .auth .auth__title { font-size: 26px; }
+}
+@media (max-height: 760px) {
+  .auth { align-items: start; }
+}
+
 /* ============ 登录后的账号页 / 管理员用户管理 ============
    这两个页面是应用内的标签页:内容栏宽与页头跟知识库 / SOP / 调用与费用同口径
    (max-width 取全局 --maxw,页头挂全局 .pghead),别自己定一套宽度。
