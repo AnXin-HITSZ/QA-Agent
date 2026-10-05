@@ -28,8 +28,11 @@ class ConversationSummary(BaseModel):
 
 class ConversationList(BaseModel):
     enabled: bool = Field(..., description="Redis 跨轮记忆是否配置启用;false 表示未配置(单轮模式)")
-    degraded: bool = Field(default=False, description="已启用但本次读取失败(超时/Redis 错误);true 时 items 恒空,前端提示重试")
+    degraded: bool = Field(default=False, description="已启用但本次读取失败(超时/Redis 错误);列表仍来自 MySQL 目录,但条目缺少消息数")
     items: list[ConversationSummary] = Field(default_factory=list, description="会话摘要,最近活跃在前")
+    total: int = Field(default=0, description="自己的会话总数(带 q 时是本次检索窗口内的命中数)")
+    offset: int = Field(default=0, description="本页起始偏移(回显请求参数)")
+    limit: int = Field(default=0, description="本页大小(回显请求参数)")
 
 
 class ConversationDetail(BaseModel):

@@ -35,5 +35,11 @@ redis>=5.0,<7.0
 # 建表 / 改表不引迁移框架:migrations/ 下是手工执行的纯 SQL(见该目录 README)。
 sqlalchemy>=2.0,<2.1
 pymysql>=1.1,<2
+# 认证与鉴权(用户 / 会话 / 权限,见 docs/认证鉴权与用户管理技术方案.md)
+# argon2-cffi:口令哈希(Argon2id);PyJWT:签发 / 校验访问令牌。
+# 两者都需装到生产环境,少一个认证接口就起不来(会在启动自检里明确报错,不静默降级)。
+argon2-cffi>=23.1
+PyJWT>=2.8
+# 发信走 SMTP(标准库 smtplib,不引第三方 SDK;见 app/auth/mailer.py)
 pytest>=8.2
 pytest-asyncio>=0.23

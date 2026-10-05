@@ -42,6 +42,16 @@ function remember(cat: string): void {
   }
 }
 
+// 登出 / 换账号时清空:分类是用户敲出来的,落在 localStorage 里 —— 换个人登录不该看见它。
+function reset(): void {
+  recent.value = [];
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // 存储不可用(隐私模式):本来就没写进去,清不掉也无妨
+  }
+}
+
 export function useTodoCategories() {
   const { items } = useTodos();
 
@@ -61,5 +71,5 @@ export function useTodoCategories() {
     return out;
   });
 
-  return { categories, remember };
+  return { categories, remember, reset };
 }

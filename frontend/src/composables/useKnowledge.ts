@@ -463,6 +463,30 @@ async function rollbackToPrevious(): Promise<void> {
   await loadTree(prefix.value);
 }
 
+// 登出 / 换账号时清空(模块级单例跨登录一直活着;不清就会让下一个账号看到上一份分类树 /
+// 上传进度 / 索引任务)。由 App 注册进 auth 的 onSignedOut。
+function reset(): void {
+  extractionMode.value = "";
+  mixedInvoice.value = false;
+  refreshOcr.value = false;
+  prefix.value = "";
+  tree.value = null;
+  loading.value = false;
+  error.value = "";
+  storageEnabled.value = true;
+  indexedSet.value = new Set();
+  indexReady.value = false;
+  uploadRows.value = [];
+  uploading.value = false;
+  job.value = null;
+  jobFiles.value = [];
+  jobFilesTotal.value = 0;
+  jobStarting.value = false;
+  jobError.value = "";
+  manifest.value = null;
+  watchedRows.clear();
+}
+
 export function useKnowledge() {
   return {
     // 提取方式(模块级共享设置)
@@ -510,5 +534,6 @@ export function useKnowledge() {
     goto,
     refresh,
     isIndexed,
+    reset,
   };
 }

@@ -296,6 +296,37 @@ const hasNext = computed(() => offset.value + limit.value < total.value);
 const windowSince = computed(() => summary.value?.since ?? null);
 const windowUntil = computed(() => summary.value?.until ?? null);
 
+// 登出 / 换账号时清空:数据 + 筛选条件一起归位(模块级单例跨登录一直活着,loaded 也要复位,
+// 否则下一个账号挂载时会以为「已经载过」)。由 App 注册进 auth 的 onSignedOut。
+function reset(): void {
+  range.value = "7d";
+  customSinceDate.value = addDaysIso(-7);
+  customSinceTime.value = "00:00";
+  customUntilDate.value = todayIso();
+  customUntilTime.value = "23:59";
+  service.value = "";
+  purpose.value = "";
+  status.value = "";
+  summary.value = null;
+  calls.value = [];
+  total.value = 0;
+  offset.value = 0;
+  limit.value = PAGE_SIZE;
+  prices.value = [];
+  loading.value = false;
+  summaryLoading.value = false;
+  error.value = "";
+  summaryError.value = "";
+  pricesError.value = "";
+  priceSaving.value = false;
+  priceError.value = "";
+  detail.value = null;
+  detailId.value = "";
+  detailLoading.value = false;
+  detailError.value = "";
+  loaded.value = false;
+}
+
 export function useMetering() {
   return {
     // 筛选
@@ -346,5 +377,6 @@ export function useMetering() {
     loadPrices,
     addPrice,
     removePrice,
+    reset,
   };
 }

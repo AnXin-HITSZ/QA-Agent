@@ -106,6 +106,17 @@ async function remove(id: string): Promise<void> {
   }
 }
 
+// 登出 / 换账号时清空(待办是全局的,但徽标数字 / 列表仍是上一个账号读出来的那份)。
+// loadedOnce 一并归位 —— 否则下一个账号挂载时会以为「已经载过」而不再拉取。
+function reset(): void {
+  items.value = [];
+  enabled.value = false;
+  degraded.value = false;
+  loading.value = false;
+  error.value = "";
+  loadedOnce = false;
+}
+
 export function useTodos() {
-  return { items, enabled, degraded, loading, error, openCount, load, ensureLoaded, add, toggle, remove };
+  return { items, enabled, degraded, loading, error, openCount, load, ensureLoaded, add, toggle, remove, reset };
 }

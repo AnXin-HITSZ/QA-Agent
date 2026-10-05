@@ -6,6 +6,7 @@ import { useTodoCategories } from "../composables/useTodoCategories";
 import { useTodoDrawer } from "../composables/useTodoDrawer";
 import { useTodos } from "../composables/useTodos";
 import { formatDue, formatDueShort, isOverdue } from "../lib/todoDate";
+import { isAdmin } from "../stores/auth";
 import DateField from "./DateField.vue";
 
 // 空分类的展示名。存储层存的是空串(后端同一个口径),中文只在这一层拼出来 ——
@@ -27,6 +28,10 @@ const { categories, remember } = useTodoCategories();
 
 // 首挂即拉一次（抽屉常驻 DOM，故应用启动就装填 → 工具键徽标也随之有数）。
 onMounted(ensureLoaded);
+
+// 写权限:待办全局共享,读对所有登录用户开放,增 / 改 / 删**仅管理员**(后端 routes/todos.py
+// 的守卫说了算)。这里按角色收起按钮 —— 界面上不给,不等于授权;真正的门在后端。
+const canWrite = computed(() => isAdmin());
 
 // 行内删除确认：先亮「删 / 取消」，避免误删。
 const confirmingId = ref<string | null>(null);
@@ -94,6 +99,22 @@ function dueLabel(t: Todo): string {
 function overdue(t: Todo): boolean {
   return !t.done && isOverdue(t.due_date);
 }
+
+// 「谁建的 / 谁最后改的」:后端存的是动作发生那一刻的身份快照(改过显示名也不追改),
+// 老数据(字段引入前写的)为 null —— 就说「记录人未知」,不猜成当前登录用户。
+function actorName(t: Todo, which: "created_by" | "updated_by"): string {
+  const a = t[which];
+  if (!a) return "";
+  return a.display_name || a.email || "未知账号";
+}
+
+function actorLine(t: Todo): string {
+  const created = actorName(t, "created_by");
+  const updated = actorName(t, "updated_by");
+  if (!created && !updated) return "记录人未知(较早的待办)";
+  if (created && updated && updated !== created) return `${created} 创建 · ${updated} 最后修改`;
+  return `${created || updated} 创建`;
+}
 </script>
 
 <template>
@@ -102,7 +123,7 @@ function overdue(t: Todo): boolean {
       <div>
         <div class="td__title">待办清单</div>
         <div v-if="enabled && !degraded" class="td__count">
-          {{ openCount }} 项未完成 · 全局共享
+          {{ openCount }} 项未完成 · 全局共享<span v-if="!canWrite"> · 只读</span>
         </div>
       </div>
       <button class="td__close" type="button" aria-label="收起待办" @click="close">✕</button>
@@ -118,11 +139,14 @@ function overdue(t: Todo): boolean {
       <div class="td__body">
         <!-- 新建:折叠按钮 ⇄ 展开表单(带标签的三段式:事项 / 分类 / 截止日期) -->
         <div class="td__add">
-          <button v-if="!adding" class="td__new" type="button" @click="startAdd">
+          <button v-if="!adding && canWrite" class="td__new" type="button" @click="startAdd">
             <span class="td__plus" aria-hidden="true">＋</span> 新建待办
           </button>
+          <p v-else-if="!adding" class="td__readonly">
+            待办全局共享,由管理员维护;你可以查看全部待办。
+          </p>
 
-          <div v-else class="td__form">
+          <div v-else-if="adding" class="td__form">
             <div class="td__formhd">
               <span class="td__formtitle">新建待办</span>
             </div>
@@ -230,6 +254,7 @@ function overdue(t: Todo): boolean {
             :class="{ 'is-done': t.done }"
           >
             <button
+              v-if="canWrite"
               class="todo__check"
               type="button"
               role="checkbox"
@@ -239,6 +264,15 @@ function overdue(t: Todo): boolean {
             >
               <span v-if="t.done" aria-hidden="true">✓</span>
             </button>
+            <!-- 只读:不用可点的方框表示「完成」状态(会让人以为能点),改用静态符号 -->
+            <span
+              v-else
+              class="todo__check todo__check--static"
+              role="img"
+              :aria-label="t.done ? '已完成' : '未完成'"
+            >
+              <span v-if="t.done" aria-hidden="true">✓</span>
+            </span>
             <div class="todo__main">
               <div class="todo__title">{{ t.title }}</div>
               <div class="todo__meta">
@@ -250,9 +284,10 @@ function overdue(t: Todo): boolean {
                 >
                   {{ dueLabel(t) }}
                 </span>
+                <span class="todo__who">{{ actorLine(t) }}</span>
               </div>
             </div>
-            <div class="todo__act">
+            <div v-if="canWrite" class="todo__act">
               <template v-if="confirmingId === t.id">
                 <button class="todo__yes" type="button" @click="onDelete(t.id)">删除</button>
                 <button class="todo__no" type="button" @click="confirmingId = null">取消</button>
@@ -287,7 +322,12 @@ function overdue(t: Todo): boolean {
             <line x1="8" y1="7.2" x2="8" y2="11.4" />
             <circle cx="8" cy="4.8" r=".9" fill="currentColor" stroke="none" />
           </svg>
-          <span>助手每次回答前都会读取<b>未完成待办</b>,但不会自行改动 —— 由你在这里勾选完成。</span>
+          <span v-if="canWrite">
+            助手每次回答前都会读取<b>未完成待办</b>,但不会自行改动 —— 由你在这里勾选完成。
+          </span>
+          <span v-else>
+            助手每次回答前都会读取<b>未完成待办</b>,但不会自行改动 —— 勾选完成由管理员操作。
+          </span>
         </p>
       </div>
     </template>
@@ -372,6 +412,16 @@ function overdue(t: Todo): boolean {
 .td__plus {
   font-size: 15px;
   line-height: 1;
+}
+/* 只读(非管理员):位置与「＋ 新建待办」按钮相同,说明为什么没有那个按钮 */
+.td__readonly {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 .td__form {
   margin: 6px 0 12px;
@@ -618,6 +668,13 @@ function overdue(t: Todo): boolean {
   border-color: var(--primary);
   color: var(--on-primary);
 }
+/* 只读的完成标记:同形状同配色,但不可点(鼠标也不变手型) */
+.todo__check--static {
+  cursor: default;
+}
+.todo__check--static:hover {
+  border-color: var(--line);
+}
 .todo__main {
   flex: 1;
   min-width: 0;
@@ -656,6 +713,11 @@ function overdue(t: Todo): boolean {
 .todo__due--over {
   color: var(--seal);
   font-weight: 500;
+}
+/* 「谁建的 / 谁最后改的」:整行最弱的一档信息,别跟分类和截止抢眼 */
+.todo__who {
+  font-size: 11px;
+  color: var(--muted);
 }
 .todo__act {
   display: flex;

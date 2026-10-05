@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
-from app.schemas.todo import Todo, TodoCreate, TodoUpdate
+from app.schemas.todo import Todo, TodoActor, TodoCreate, TodoUpdate
 
 # 待办在 Redis 里的键;带版本后缀,便于日后结构升级时并存 / 迁移。
 TODO_KEY = "qa:todos:v1"
@@ -82,7 +82,8 @@ class TodoStore:
         """未完成待办(原始 dict,按展示序);供 chat 路由渲染给 Agent。"""
         return [t for t in _sorted(await self._read()) if not t.get("done")]
 
-    async def add(self, create: TodoCreate) -> Todo:
+    async def add(self, create: TodoCreate, actor: TodoActor | None = None) -> Todo:
+        """新建一条。actor 是操作者快照,记进 created_by / updated_by(审计)。"""
         todo = Todo(
             id=uuid4().hex,
             title=create.title,
@@ -90,6 +91,8 @@ class TodoStore:
             done=False,
             created_at=_now_iso(),
             due_date=create.due_date,
+            created_by=actor,
+            updated_by=actor,
         )
 
         def _fn(items: list[dict]) -> tuple[Todo, list[dict]]:
@@ -97,9 +100,13 @@ class TodoStore:
 
         return await self._mutate(_fn)
 
-    async def update(self, todo_id: str, patch: TodoUpdate) -> Todo | None:
+    async def update(self, todo_id: str, patch: TodoUpdate,
+                     actor: TodoActor | None = None) -> Todo | None:
+        """局部更新。只动显式传入的字段,并把 updated_by 换成这次的操作者。"""
         # 只取显式传入的字段(exclude_unset):None 也可能是「不改」而非「置空」。
         changes = patch.model_dump(exclude_unset=True)
+        if actor is not None:            # 没给操作者就保持原样,别把上一次的审计信息抹掉
+            changes["updated_by"] = actor.model_dump()
 
         def _fn(items: list[dict]) -> tuple[Todo | None, list[dict]]:
             updated: Todo | None = None

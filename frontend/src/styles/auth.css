@@ -1,0 +1,406 @@
+/* 认证 / 账号 / 用户管理(登录前后的那几屏)。
+   与其它视图同一套令牌与手感:38px 输入框、radius-sm、科研青主色、印泥红只用于错误。 */
+
+/* ============ 未登录:居中的一张卡片 ============ */
+.auth {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 28px 18px;
+  background: var(--paper);
+}
+.auth__card {
+  width: 100%;
+  max-width: 420px;
+  padding: 30px 30px 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.auth__mark {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.auth__name {
+  font-family: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 19px;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+.auth__sub {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.auth__title {
+  margin: 18px 0 6px;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.auth__lede {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.auth__lede--tight {
+  margin: 14px 0 0; /* 紧跟在提示条后面:只要上间距,不要再压一条大留白 */
+}
+
+.auth__field {
+  margin-bottom: 14px;
+}
+.auth__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.auth__input {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.auth__input::placeholder {
+  color: var(--muted);
+}
+.auth__input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-tint);
+}
+.auth__input:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.auth__btn {
+  width: 100%;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--on-primary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.auth__btn:hover:not(:disabled) {
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+}
+.auth__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.auth__btn--ghost {
+  width: auto;
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+.auth__btn--ghost:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--surface);
+  color: var(--primary-strong);
+}
+.auth__btn--danger {
+  border-color: var(--seal);
+  background: var(--surface);
+  color: var(--seal);
+}
+.auth__btn--danger:hover:not(:disabled) {
+  border-color: var(--seal);
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+
+/* 表单与动作行 */
+.auth__actions {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  margin-top: 18px;
+}
+.auth__actions .auth__btn {
+  flex: 1;
+}
+
+/* 提示条:错误(印泥红)/ 成功或中性说明(科研青) */
+.auth__note {
+  margin: 14px 0 0;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.auth__note--err {
+  border: 1px solid color-mix(in srgb, var(--seal) 35%, transparent);
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+.auth__note--ok {
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  background: var(--primary-tint);
+  color: var(--primary-strong);
+}
+.auth__note--plain {
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.auth__meta {
+  margin: 16px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 12.5px;
+}
+.auth__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-size: 12.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.auth__link:hover {
+  color: var(--primary-strong);
+}
+.auth__link--quiet {
+  color: var(--muted);
+  text-decoration: none;
+}
+.auth__link--quiet:hover {
+  color: var(--primary);
+}
+.auth__hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.auth__spin {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* 窄屏:卡片贴边,少留白 */
+@media (max-width: 480px) {
+  .auth__card {
+    padding: 22px 18px 20px;
+  }
+}
+
+/* ============ 登录后的账号页 / 管理员用户管理 ============ */
+.pane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 30px 24px 56px;
+}
+.pane__inner {
+  max-width: 980px;
+  margin: 0 auto;
+}
+.pane__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.pane__title {
+  margin: 0;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  color: var(--ink);
+}
+.pane__sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 20px 22px;
+  margin-bottom: 18px;
+}
+.card__title {
+  margin: 0 0 4px;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.card__sub {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.card__sub--tail {
+  margin: 12px 0 0; /* 紧跟在筛选行后面,不留 card__sub 默认的下间距 */
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 14px;
+  margin: 0;
+  font-size: 13.5px;
+}
+.kv dt {
+  color: var(--muted);
+}
+.kv dd {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.badge--ok {
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  background: var(--primary-tint);
+  color: var(--primary-strong);
+}
+.badge--warn {
+  border-color: color-mix(in srgb, var(--seal) 30%, transparent);
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.tbl th,
+.tbl td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.tbl th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tbl tbody tr:last-child td {
+  border-bottom: none;
+}
+.tbl__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tbl__scroll {
+  overflow-x: auto;
+}
+.tbl__mono {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.mini {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s, color 0.14s;
+}
+.mini:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary-strong);
+}
+.mini:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.mini--primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.mini--primary:hover:not(:disabled) {
+  background: var(--primary-strong);
+  color: var(--on-primary);
+}
+.mini--danger {
+  border-color: color-mix(in srgb, var(--seal) 40%, transparent);
+  color: var(--seal);
+}
+.mini--danger:hover:not(:disabled) {
+  border-color: var(--seal);
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.row--sub {
+  margin-top: 10px;
+}
+.grow {
+  flex: 1;
+  min-width: 160px;
+}

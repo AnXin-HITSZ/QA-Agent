@@ -1,13 +1,27 @@
 """待办清单接口的请求 / 响应模型。
 
-全局一份、无鉴权(与历史对话同一取向):所有人看到同一份待办。
+全局一份:所有人看到同一份待办;读对所有登录用户开放,写(增 / 改 / 删)仅管理员 ——
+权限由路由上的守卫决定(见 routes/todos.py),这里的模型只管数据形状。
+
 Agent 只读——每轮对话前后端把「未完成待办」渲染进 system prompt 供其参考,
-但 Agent 不增删改;增删改一律走本文件定义的 CRUD 接口,由用户在前端操作。
+但 Agent 根本不具备增删改待办的工具(见 app/graph/tools.py);增删改一律走本文件定义的
+CRUD 接口,由人在前端操作。**不靠提示词约束权限**:权限是路由守卫的事。
+
+每条待办记 who:`created_by` / `updated_by` 存的是**动作发生那一刻**的身份快照(改过显示名
+的老记录不会跟着变),审计口径与 auth_audit 一致。旧数据(本字段引入前写下的)为 null。
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+
+
+class TodoActor(BaseModel):
+    """一条待办的「谁」:动作发生时的身份快照。"""
+
+    user_id: str = Field(default="", description="操作者的用户 ID")
+    display_name: str = Field(default="", description="操作者显示名(动作发生时的快照)")
+    email: str = Field(default="", description="操作者邮箱(动作发生时的快照)")
 
 
 class Todo(BaseModel):
@@ -17,6 +31,8 @@ class Todo(BaseModel):
     done: bool = Field(default=False, description="是否已完成")
     created_at: str = Field(..., description="创建时间(ISO 8601,后端生成)")
     due_date: str | None = Field(default=None, description="截止日期(YYYY-MM-DD);留空表示无截止")
+    created_by: TodoActor | None = Field(default=None, description="创建者;字段引入前的老数据为 null")
+    updated_by: TodoActor | None = Field(default=None, description="最后一次修改者;从未改过时与创建者相同")
 
 
 class TodoCreate(BaseModel):

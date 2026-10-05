@@ -164,7 +164,20 @@ async def test_graph_checkpointer_and_resume_after_sop_change(store, monkeypatch
     assert A in str(checkpoint.values)
 
 
-def test_api_stream_nonstream_and_history_return_stable_images(store, monkeypatch):
+@pytest.fixture
+def conv_dir(auth_db):
+    """真会话目录(临时 SQLite)+ 一条叫 test 的历史会话:回放要求 MySQL 里有归属行。"""
+    from app.auth import store as auth_store
+    from tests.conftest import STUB_ADMIN_ID
+
+    with auth_db.db.session_scope() as session:
+        auth_store.create_conversation(session, conv_id="c-test", user_id=STUB_ADMIN_ID,
+                                       thread_id="test", title="历史会话",
+                                       now=auth_db.db.utc_naive())
+    return auth_db
+
+
+def test_api_stream_nonstream_and_history_return_stable_images(conv_dir, store, monkeypatch):
     tool = read_message()
     messages = [HumanMessage(content="问题"), tool, AIMessage(content="答案")]
 

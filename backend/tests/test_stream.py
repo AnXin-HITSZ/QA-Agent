@@ -10,6 +10,16 @@ from app.api.routes.chat import _guarded
 from app.config import get_settings
 from app.main import app
 
+@pytest.fixture(autouse=True)
+def _conversation_dir(auth_db):
+    """聊天路由现在要真会话目录(不带 thread_id 的提问会先往 MySQL 写一行)。
+
+    本文件测的是流式事件协议,不测会话归属 —— 但「定线程」是路由的必经之路,
+    绕不开,所以给它一张临时 SQLite 的表。
+    """
+    return auth_db
+
+
 _TRAVEL = """---
 id: travel
 name: 差旅报销

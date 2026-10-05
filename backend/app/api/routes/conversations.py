@@ -1,20 +1,32 @@
-"""历史对话:扫描 Redis checkpointer,列出 / 读取 / 删除会话。
+"""历史对话:列出 / 读取 / 删除**自己的**会话。
 
-以后端 Redis 为准(单用户,无鉴权):
-- 列表 —— 扫描 checkpointer 索引里的全部线程(``alist(None)``),按最近活跃排序;
-- 读取 —— 取某线程最新状态(``aget_tuple``),回放成干净的 Q&A 文本;
-- 删除 —— ``adelete_thread`` 连带清掉该线程在 Redis 的全部 checkpoint / writes / 指针,记忆彻底抹除。
+两类存储各管一段(见 app/conversations/store.py 的模块说明):
+- **MySQL `conversations`** 是目录与授权凭据 —— 列表、分页、归属、删除状态机都看它,
+  所以「别人的会话」根本不会出现在列表里,也读不到、删不掉(对外一律 404);
+- **Redis checkpointer** 存正文,按线程 id 取用。
 
-Redis 未启用(降级为单轮)时:列表返回 enabled=false + 空列表,读取 / 删除返回 503。
+三条与旧版(单用户)不同的硬规则:
+1. 列表走 MySQL 分页,**不扫全库**;内容检索只在有上限的最近窗口里做(SEARCH_WINDOW);
+2. 归属判定在 MySQL 行上,不在线程 id 字符串上(那玩意客户端能自己拼);
+3. 删除是状态机:active → deleting → (Redis 抹除) → deleted,中途失败留在 deleting,
+   启动对账补删 —— 绝不「先删 Redis 再发现库里没删掉」,也绝不谎报成功。
+
+Redis 未启用(降级为单轮)时:列表仍可用(目录在 MySQL 里)但条目不带消息数,
+读取 / 删除返回 503。
 """
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
+from app import conversations
+from app.auth.deps import require_user
+from app.auth.service import Principal
 from app.config import get_settings
+from app.conversations import inflight
+from app.conversations.store import SEARCH_WINDOW
 from app.skills.images import image_attachments
 from app.schemas.conversation import (
     ConversationDetail,
@@ -26,7 +38,17 @@ from app.schemas.conversation import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix=get_settings().api_prefix, tags=["conversations"])
+router = APIRouter(prefix=get_settings().api_prefix, tags=["conversations"],
+                   dependencies=[Depends(require_user)])
+
+
+def _not_found() -> HTTPException:
+    """别人的会话、不存在的会话、正在删的会话 —— 对外**同一个** 404。
+
+    不区分三者:区分就等于告诉调用方「这个 id 是存在的,只是不属于你」(存在性泄漏)。
+    """
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                         detail={"code": "conversation_not_found", "message": "会话不存在"})
 
 
 def _checkpointer(request: Request):
@@ -147,83 +169,152 @@ def _match_of(replay: list[ConversationMessage], terms: list[str]) -> Conversati
     return ConversationMatch(role=hits[0].role, snippet=_snippet(hits[0].content, terms), count=len(hits))
 
 
-@router.get("/conversations", response_model=ConversationList)
-async def list_conversations(request: Request, q: str = "") -> ConversationList:
-    """扫描 checkpointer 里的全部线程,按最近活跃排序列出摘要。Redis 未启用则 enabled=false。
+class _MemoryDown(RuntimeError):
+    """这一次读 / 删 Redis 没成功(区别于「压根没配 Redis」)。"""
 
-    带 q 时顺带做内容检索:只留命中的对话,并在 match 里给出片段 / 条数。检索吃的是这次扫描
-    本来就要读出来的回放文本,不额外访问 Redis(discard 掉的那份正好拿来用)。
-    """
-    cp = _checkpointer(request)
+
+async def _read_thread(cp, thread_id: str) -> list[ConversationMessage]:
+    """读一条线程并回放成 Q&A;Redis 未启用返回 None,读失败抛 _MemoryDown。"""
     if cp is None:
-        return ConversationList(enabled=False, items=[])
-
-    terms = _terms(q)
-    items: list[ConversationSummary] = []
-    seen: set[str] = set()
-    # alist(None) 返回所有线程的 checkpoint,按 checkpoint_id(ULID,内含时间)倒序 ——
-    # 首次见到某线程即其最新状态,线程本身也随之「最近活跃在前」自然成序。
-    try:
-        async for tup in cp.alist(None):
-            tid = tup.config["configurable"]["thread_id"]
-            if tid in seen:
-                continue
-            seen.add(tid)
-            messages = _messages_of(tup)
-            replay = _replay(messages)
-            if not replay:
-                continue  # 只有系统 / 半截消息、无可展示内容的空壳线程不列
-            match = _match_of(replay, terms) if terms else None
-            if terms and match is None:
-                continue  # 搜索时只留命中的对话
-            items.append(
-                ConversationSummary(
-                    thread_id=tid,
-                    title=_title(messages),
-                    message_count=len(replay),
-                    updated_at=tup.checkpoint.get("ts"),
-                    match=match,
-                )
-            )
-    except Exception as exc:  # noqa: BLE001 —— 仅降级 Redis 不可用,其余原样上抛
-        if _redis_unavailable(exc):
-            logger.warning("历史对话:Redis 读取失败,列表降级为暂不可用:%s", exc)
-            return ConversationList(enabled=True, degraded=True, items=[])
-        raise
-    return ConversationList(enabled=True, items=items)
-
-
-@router.get("/conversations/{thread_id}", response_model=ConversationDetail)
-async def get_conversation(thread_id: str, request: Request) -> ConversationDetail:
-    """读取某线程最新状态,回放成 Q&A 文本序列。"""
-    cp = _checkpointer(request)
-    if cp is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="跨轮记忆未启用(未配置 Redis)")
+        return None  # type: ignore[return-value]  —— 由调用方按「单轮模式」处理
     try:
         tup = await cp.aget_tuple({"configurable": {"thread_id": thread_id}})
     except Exception as exc:  # noqa: BLE001
         if _redis_unavailable(exc):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="记忆服务暂时无响应,请稍后重试"
-            ) from exc
+            raise _MemoryDown(str(exc)) from exc
         raise
-    if tup is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="对话不存在")
-    return ConversationDetail(thread_id=thread_id, messages=_replay(_messages_of(tup)))
+    return _replay(_messages_of(tup))
+
+
+def _summary(row, replay: list[ConversationMessage] | None, terms: list[str]) -> ConversationSummary:
+    """目录行 + 回放文本 → 列表项。标题以目录里的为准(建会话时写的首条提问)。"""
+    title = (row.title or "").strip() or "新对话"
+    return ConversationSummary(
+        thread_id=row.thread_id,
+        title=title,
+        message_count=len(replay) if replay else 0,
+        updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        match=_match_of(replay, terms) if (replay and terms) else None,
+    )
+
+
+@router.get("/conversations", response_model=ConversationList)
+async def list_conversations(
+    request: Request,
+    q: str = Query(default="", max_length=100, description="按内容检索(空 = 不过滤)"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=30, ge=1, le=50),
+    principal: Principal = Depends(require_user),
+) -> ConversationList:
+    """列**自己的**会话:MySQL 分页(最近活跃在前),每页再按需取回放文本。
+
+    为什么这样分工:目录查询走 (user_id, status, updated_at) 索引,天然只含本人的会话,
+    且分页是真分页(不再扫全库);正文只有当前这一页的 ≤limit 条才去 Redis 读,读不到
+    也不影响列表本身 —— 目录在 MySQL 里,Redis 抖动时列表照常给出(标 degraded)。
+
+    带 q 时改用有界检索:在最近 SEARCH_WINDOW 条自己的会话里找,命中才返回(见 _search)。
+    """
+    terms = _terms(q)
+    if terms:
+        return await _search(request, principal, terms, offset, limit)
+
+    cp = _checkpointer(request)
+    rows, total = await conversations.list_for_user(user_id=principal.user_id,
+                                                   offset=offset, limit=limit)
+    items: list[ConversationSummary] = []
+    degraded = False
+    for row in rows:
+        try:
+            replay = await _read_thread(cp, row.thread_id)
+        except _MemoryDown as exc:
+            logger.warning("历史对话:Redis 读取失败,该页正文暂缺:%s", exc)
+            degraded = True
+            replay = None
+        items.append(_summary(row, replay, []))
+    return ConversationList(enabled=cp is not None, degraded=degraded, items=items,
+                            total=total, offset=offset, limit=limit)
+
+
+async def _search(request: Request, principal: Principal, terms: list[str],
+                  offset: int, limit: int) -> ConversationList:
+    """在自己的会话里按内容检索:窗口有上限,不做全库扫描。
+
+    窗口 = 最近 SEARCH_WINDOW 条(目录序),命中后在内存里分页 —— 所以 total 是**本窗口内**
+    的命中数,不是历史全量的。这一点对前端是可见的(它只用来显示「找到 N 条」),
+    真要全量检索得建索引,不在本期范围(见技术方案 §7)。
+    """
+    cp = _checkpointer(request)
+    rows, _ = await conversations.list_for_user(user_id=principal.user_id,
+                                               offset=0, limit=SEARCH_WINDOW)
+    hits: list[ConversationSummary] = []
+    degraded = False
+    for row in rows:
+        try:
+            replay = await _read_thread(cp, row.thread_id)
+        except _MemoryDown as exc:
+            logger.warning("历史对话:检索时 Redis 读取失败,结果不完整:%s", exc)
+            degraded = True
+            continue
+        if not replay:
+            continue
+        summary = _summary(row, replay, terms)
+        if summary.match is not None:
+            hits.append(summary)
+    page = hits[offset:offset + limit]
+    return ConversationList(enabled=cp is not None, degraded=degraded, items=page,
+                            total=len(hits), offset=offset, limit=limit)
+
+
+@router.get("/conversations/{thread_id}", response_model=ConversationDetail)
+async def get_conversation(thread_id: str, request: Request,
+                           principal: Principal = Depends(require_user)) -> ConversationDetail:
+    """读自己某条会话的正文。别人的 / 不存在的 / 正在删的,一律 404。"""
+    row = await conversations.owned_by_thread(thread_id=thread_id, user_id=principal.user_id)
+    if row is None:
+        raise _not_found()
+    try:
+        replay = await _read_thread(_checkpointer(request), thread_id)
+    except _MemoryDown as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "memory_unavailable", "message": "记忆服务暂时无响应,请稍后重试"},
+        ) from exc
+    # 目录里有、Redis 里还没有(刚建好就被中断):当成「暂无消息」,不是 404 —— 会话确实存在。
+    return ConversationDetail(thread_id=thread_id, messages=replay or [])
 
 
 @router.delete("/conversations/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_conversation(thread_id: str, request: Request) -> Response:
-    """删除某线程,连带清掉它在 Redis 的全部 checkpoint / writes / 指针。"""
+async def delete_conversation(thread_id: str, request: Request,
+                              principal: Principal = Depends(require_user)) -> Response:
+    """删除自己的会话:MySQL 状态机 → 等在途生成收尾 → 抹掉 Redis → 落墓碑。
+
+    顺序不能反:先把目录置为 deleting,新请求当场就进不来了(chat 会 404);这之后再抹
+    Redis。中途失败(Redis 不可用)如实回 503,行留在 deleting 由启动对账补删 ——
+    绝不先删正文再假装目录也删了。
+    """
+    row = await conversations.owned_by_thread(thread_id=thread_id, user_id=principal.user_id)
+    if row is None:
+        raise _not_found()
+    state = await conversations.begin_delete(conv_id=row.id, user_id=principal.user_id)
+    if state is None:                     # 归属在这一刻变了(并发删除 / 改归属)→ 仍按 404
+        raise _not_found()
+
     cp = _checkpointer(request)
     if cp is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="跨轮记忆未启用(未配置 Redis)")
+        # 单轮模式:没有正文可删,目录直接落墓碑(缩进到 deleted,不留 deleting 悬挂行)。
+        await conversations.finish_delete(conv_id=row.id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    await inflight.wait_idle(thread_id)
     try:
-        await cp.adelete_thread(thread_id)
+        await conversations.delete_thread_data(cp, thread_id)
     except Exception as exc:  # noqa: BLE001
         if _redis_unavailable(exc):
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="记忆服务暂时无响应,请稍后重试"
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "memory_unavailable",
+                        "message": "记忆服务暂时无响应:会话已不可访问,正文删除将在后台补完"},
             ) from exc
         raise
+    await conversations.finish_delete(conv_id=row.id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

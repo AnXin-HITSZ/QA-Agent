@@ -15,6 +15,11 @@ function close(): void {
   open.value = false;
 }
 
+// 登出 / 换账号时一并收起(抽屉开着就切走不会出事,但下一屏不该顶着一层遮罩)。
+function reset(): void {
+  open.value = false;
+}
+
 export function useTodoDrawer() {
-  return { open, toggle, close };
+  return { open, toggle, close, reset };
 }

@@ -16,8 +16,9 @@ import hashlib
 import logging
 from contextlib import contextmanager
 
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 
+from app.auth.deps import auth_ready, require_admin, require_user
 from app.config import get_settings
 from app.rag import documents, ingest, ocr_jobs, oss, store
 from app.rag.cache_store import ensure_available
@@ -42,7 +43,8 @@ from app.schemas.knowledge import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix=get_settings().api_prefix + "/knowledge", tags=["knowledge"])
-admin_router = APIRouter(prefix=get_settings().api_prefix + "/admin/knowledge", tags=["knowledge-admin"])
+admin_router = APIRouter(prefix=get_settings().api_prefix + "/admin/knowledge", tags=["knowledge-admin"],
+                         dependencies=[Depends(auth_ready), Depends(require_admin)])
 
 
 def _norm(prefix: str) -> str:
@@ -131,7 +133,7 @@ def _settle_deletion(pending: dict | None, key: str) -> None:
         _finish_deletion(pending)  # 统一由恢复流程校验身份并推进阶段
 
 
-@router.get("/tree", response_model=KnowledgeTree)
+@router.get("/tree", response_model=KnowledgeTree, dependencies=[Depends(require_user)])
 def get_tree(prefix: str = "") -> KnowledgeTree:
     """列某节点下直接一层(子分类节点 + 文件),供前端逐层展开分类树。"""
     with _dep_503():
@@ -143,7 +145,8 @@ def get_tree(prefix: str = "") -> KnowledgeTree:
     )
 
 
-@router.post("/folder", response_model=CreateFolderResult, status_code=status.HTTP_201_CREATED)
+@router.post("/folder", response_model=CreateFolderResult, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_admin)])
 def create_folder(body: CreateFolderRequest) -> CreateFolderResult:
     """在父节点下手建一个空分类节点(可嵌套:父节点本身可以是已有的多层前缀)。"""
     parent = _norm(body.prefix)
@@ -159,7 +162,7 @@ def create_folder(body: CreateFolderRequest) -> CreateFolderResult:
     return CreateFolderResult(prefix=node + "/")
 
 
-@router.post("/upload", response_model=UploadResult)
+@router.post("/upload", response_model=UploadResult, dependencies=[Depends(require_admin)])
 def upload_files(
     prefix: str = Form(default=""),
     files: list[UploadFile] = File(...),
@@ -190,7 +193,7 @@ def upload_files(
     return UploadResult(prefix=p, items=items)
 
 
-@router.delete("/object", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/object", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
 def delete_file(key: str) -> Response:
     """删单个文件。key 为知识库相对;拒绝以 / 结尾(那是节点,应走 /folder)。
 
@@ -209,7 +212,7 @@ def delete_file(key: str) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.delete("/folder", response_model=DeleteFolderResult)
+@router.delete("/folder", response_model=DeleteFolderResult, dependencies=[Depends(require_admin)])
 def delete_folder(prefix: str) -> DeleteFolderResult:
     """删整个分类节点:递归清掉该前缀下的全部对象。必须指定非空 prefix。
 

@@ -1,8 +1,12 @@
 """应用配置:从环境变量 / .env 读取,全局单例 settings。"""
 
+import logging
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -113,12 +117,84 @@ class Settings(BaseSettings):
     metering_flush_interval_seconds: float = 2.0
     metering_price_cache_seconds: float = 60.0   # 价格表内存缓存时长(改价最多滞后这么久生效)
 
+    # ---- 认证 / 鉴权 / 用户管理(docs/认证鉴权与用户管理技术方案.md)----
+    # 用户、登录会话、邮箱令牌、会话目录、审计都存在上面那个 MySQL 里(同一库、同一连接池;
+    # METERING_MYSQL_URL 就是「本应用的数据库」)。与计量不同,认证是**硬依赖**:
+    # 没配数据库 / 没配签名密钥时认证接口直接报错,绝不降级成匿名可用。
+    #
+    # access token 签名密钥:必填、且必须是够强的高熵串(>=32 字节)。生成:
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    # 不许用弱默认值(如 "change-me"),也不许每个 worker 各自随机生成 —— 多 worker 会互相不认。
+    auth_jwt_secret: str = ""
+    auth_jwt_issuer: str = "qa-agent"
+    auth_jwt_audience: str = "qa-agent-web"
+    # access token 短时效(分钟),过期用 refresh 换新的;refresh 会话绝对有效期(天),
+    # 不随刷新顺延 —— 不提供无限会话。
+    auth_access_token_minutes: int = 15
+    auth_refresh_token_days: int = 30
+    # 刷新宽限窗口(秒):同一枚 refresh token 在这个窗口内被第二次提交,视为前端并发 / 网络重试,
+    # 照常发新令牌;超出窗口再用「已消费的旧令牌」→ 判定为重放,撤销整个会话(见 service.refresh)。
+    auth_refresh_grace_seconds: int = 30
+    # 前端地址:邮件里的验证 / 重置链接指向它(链接里只带一次性令牌,不带任何凭证,
+    # 且令牌放在 URL 片段外也无妨 —— 页面加载时不会调用任何敏感接口,见技术方案 §5)。
+    auth_frontend_base_url: str = "http://localhost:5173"
+    # refresh cookie:HttpOnly + SameSite=Lax + Path=/api/v1/auth。
+    # 生产(HTTPS)必须 True;本地 http 开发要设 False,否则浏览器不回传 cookie。
+    auth_cookie_name: str = "qa_refresh"
+    auth_cookie_secure: bool = True
+    auth_cookie_domain: str = ""             # 留空 = 跟随请求主机(推荐);跨子域才填
+    # 可信代理层数(nginx / SLB 在应用前面有几层)。审计与限流要记真实客户端 IP:
+    # 0 = 不信任任何转发头,直接用 TCP 对端地址;1 = 取 X-Forwarded-For 最右一个(nginx 追加的)。
+    # 不要盲目信任 XFF —— 客户端可以自己伪造它。
+    auth_trusted_proxy_count: int = 0
+    # 验证邮箱 / 重置密码令牌的有效期(分钟)与重置令牌单次使用语义。
+    auth_verify_token_minutes: int = 60
+    auth_reset_token_minutes: int = 30
+    # 认证接口限流(Redis 固定窗口)。Redis 未配置 / 不可用时**失败关闭**(返回 503),
+    # 不放开限制 —— 否则正好在 Redis 出问题时给暴力破解开了门。
+    auth_rate_limit_enabled: bool = True
+
+    # ---- 发信(阿里云邮件推送 DirectMail 的 SMTP 通道;验证邮箱 / 重置密码)----
+    # MAIL_PROVIDER 为空 = 未配置:注册 / 找回密码接口明确报 503 并说明缺什么,
+    # 不静默失败、不假装发过信。fake 仅用于测试与本地演练(把邮件留在内存里)。
+    # 凭据是控制台给「发信地址」设的 SMTP 密码,和 RAM 的 AK/SK 无关。
+    mail_provider: str = ""                  # smtp / fake
+    mail_from_alias: str = ""                # 发件人显示名(例 QA-Agent 实验室助手)
+    mail_timeout_seconds: float = 10.0
+    # 465 = 隐式 TLS(SMTP_SSL);其它端口要求服务器支持 STARTTLS,不支持就拒绝发凭据。
+    mail_smtp_host: str = ""                 # 例:smtpdm.aliyuncs.com —— 按账号控制台确认
+    mail_smtp_port: int = 465
+    mail_smtp_username: str = ""             # 通常是完整发信地址(例 noreply@mail.example.com)
+    mail_smtp_password: str = ""             # 只从 .env 读,绝不提交
+    mail_smtp_from: str = ""                 # 只填裸地址;显示名走 MAIL_FROM_ALIAS
+
     # ---- CORS ----
+    # 带凭据(allow_credentials=True)时不能用 "*" 通配,必须逐个列出前端来源。
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _warn_comment_like_values(self) -> "Settings":
+        """点名「值以 # 开头」的配置项 —— 多半是把注释写在了等号后面。
+
+        实测(python-dotenv / pydantic-settings):`KEY=   # 说明`(空值 + 行内注释)解析出来的
+        值就是 `# 说明` 这一串,而不是空 —— 于是「留空 = 用默认行为」的键会带着一段中文注释
+        上路:cookie 域非法导致登录态存不下、发信地址成了注释文本、soffice 路径找不到……。
+        有值的行(`KEY=abc # 说明`)不受影响。
+
+        只告警、不自动清洗:自动去掉「# 之后的内容」会悄悄改掉某人真的以 # 开头的密钥,
+        那比报出来危险。修法永远是「注释单独一行」(见 .env.example 顶部约定)。
+        """
+        suspects = sorted(name for name, value in self
+                          if isinstance(value, str) and value.lstrip().startswith("#"))
+        if suspects:
+            logger.warning(
+                "配置项的值以 # 开头,像是把注释写在了等号后面(.env 里请把注释单独放一行):%s",
+                ", ".join(suspects))
+        return self
 
 
 @lru_cache

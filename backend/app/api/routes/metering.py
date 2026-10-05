@@ -8,8 +8,9 @@
   缺用量 / 缺价格时金额为空并给出原因,绝不返回 0;
 - **不合并**:不同币种、不同用量单位分开返回,不给跨币种 / 跨单位合计。
 
-权限:后端目前**没有**登录态,统一鉴权机制后续引入(见技术方案 §9);
-在那之前接口只应在受信网络内暴露,不要把服务直接放到公网。
+权限:路径在 /admin/ 下,**仅管理员**(require_admin)—— 费用是全局账,普通用户看不到
+(见 docs/认证鉴权与用户管理技术方案.md §6 权限矩阵)。前端隐藏入口只是界面礼貌,真正的门
+在这个依赖上;认证配置缺失时 auth_ready 先返回 503,而不是放行。
 """
 
 from __future__ import annotations
@@ -18,8 +19,9 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.auth.deps import auth_ready, require_admin
 from app.config import get_settings
 from app.metering import METERING_DISABLED_MESSAGE, db, get_writer, status as metering_status
 from app.metering.redact import safe_text
@@ -30,7 +32,8 @@ from app.schemas.metering import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix=get_settings().api_prefix + "/admin/metering", tags=["metering"])
+router = APIRouter(prefix=get_settings().api_prefix + "/admin/metering", tags=["metering"],
+                   dependencies=[Depends(auth_ready), Depends(require_admin)])
 
 STATUSES = ("success", "failure")
 DEFAULT_WINDOW_DAYS = 7

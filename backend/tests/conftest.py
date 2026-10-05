@@ -248,3 +248,196 @@ def metering_env(monkeypatch, tmp_path):
     install_writer(None)
     install_store(None)
     db.dispose()
+
+
+# ---- 认证 / 鉴权 ----
+#
+# 测试缝有两条,各自回答不同的问题:
+#
+# 1. **autouse 的 StubAuthService**:默认「已有一个管理员登录」。既有功能用例(计量 /
+#    索引 / SOP / 会话……)要测的是功能本身,不该被逐条加上登录仪式;而鉴权正确性不靠
+#    这些用例保证 —— 它由下面第 2 条的**真服务**与 test_auth_rbac.py 的**结构用例**
+#    (遍历路由表,漏挂依赖就失败)来守。
+# 2. **auth_env / auth_client 夹具**:真 AuthService + 真 SQL(临时 SQLite 文件)+
+#    假发信 + 内存限流。认证接口 / 状态机 / 令牌轮换这些用例走这条,断言的是真代码。
+#
+# MySQL 专有的行为(行锁 FOR UPDATE、COLLATE utf8mb4_bin 的精确匹配、真列宽)不在 SQLite
+# 上假装通过:见 tests/test_auth_mysql.py(需 AUTH_TEST_MYSQL_URL,否则跳过;
+# 与 tests/test_metering_mysql.py 的 METERING_TEST_MYSQL_URL 是同一种约定)。
+
+STUB_ADMIN_ID = "00000000-0000-4000-8000-00000000ad11"
+
+
+def stub_principal(*, user_id: str = STUB_ADMIN_ID, role: str = "admin",
+                   email: str = "stub-admin@example.com", status: str = "active",
+                   display_name: str = "桩管理员"):
+    """造一个 Principal(结构用例与替换用的桩都从这里取,避免各处手搓字段)。"""
+    from app.auth.service import Principal
+
+    return Principal(user_id=user_id, email=email, display_name=display_name, role=role,
+                     status=status, auth_version=1, session_id="stub-session")
+
+
+class StubAuthService:
+    """认证服务桩:只回答「这个令牌是谁」,一律回答「上面那个管理员」。
+
+    别的属性访问会直接炸(AttributeError)—— 认证路由若被非认证用例误触,应当大声失败,
+    而不是拿到一个静默的假结果。
+    """
+
+    def __init__(self, principal=None) -> None:
+        self.principal = principal or stub_principal()
+
+    async def load_principal(self, *, user_id: str, session_id: str):
+        return self.principal
+
+
+_REAL_AUTH_FIXTURES = {"auth_env", "auth_client"}
+
+
+@pytest.fixture(autouse=True)
+def _stub_auth(request, monkeypatch):
+    """默认假装「已经有一个管理员登录」(令牌校验这两步一并替换掉)。
+
+    用真认证的用例(auth_client / auth_env)会**跳过**这一步:那类用例要断言真实的
+    401 / 403 / 令牌轮换,必须走真服务与真签名校验。
+    """
+    if _REAL_AUTH_FIXTURES & set(request.fixturenames):
+        yield None
+        return
+
+    from app.auth import deps
+    from app.main import app
+
+    stub = StubAuthService()
+    monkeypatch.setattr(deps, "bearer_token", lambda authorization: "stub-access-token")
+    monkeypatch.setattr(deps, "decode_access_token", lambda token: {
+        "sub": stub.principal.user_id, "sid": stub.principal.session_id,
+        "ver": stub.principal.auth_version,
+    })
+    # 配置自检(auth_ready)也要一并假装就位:功能用例不该被「本机没配 AUTH_JWT_SECRET /
+    # 没连计量库」卡在 503 上 —— 那是运维配置,不是这些用例要测的东西。
+    # 注意这里替换的是**模块属性**(auth_ready 在函数体里现取),不是提前导入的名字。
+    from app.auth import db as auth_db
+    from app.auth import tokens
+    monkeypatch.setattr(auth_db, "configured", lambda: True)
+    monkeypatch.setattr(tokens, "jwt_secret", lambda: "stub-only-secret")
+    previous = getattr(app.state, "auth", None)
+    app.state.auth = stub
+    yield stub
+    if previous is None:
+        app.state.__delattr__("auth")
+    else:
+        app.state.auth = previous
+
+
+def register_sqlite_collations(engine) -> None:
+    """给 SQLite 注册 utf8mb4_bin(**真正的**二进制比较)。
+
+    模型里 users.email 显式 COLLATE utf8mb4_bin(免得库里默认的不区分重音排序规则把
+    a.b@x.com 与 a.b@x.com 之外的变体判成同一个地址)。SQLite 不认这个名字,建表会直接
+    报 "no such collation sequence";这里补一个等价的实现。
+
+    为什么是等价的:Python 的 str 比较按码点,而 UTF-8 的字节序与码点序一致 —— 所以
+    「按码点比」就是「按字节比」。这样 SQLite 上的唯一键冲突用例仍然是真的在测
+    「大小写 / 重音不同就是不同地址」,而不是把这条语义悄悄跳过去。
+    """
+    from sqlalchemy import event
+
+    def _binary(a: str, b: str) -> int:
+        return (a > b) - (a < b)
+
+    @event.listens_for(engine, "connect")
+    def _on_connect(dbapi_connection, _record):  # noqa: ANN001
+        dbapi_connection.create_collation("utf8mb4_bin", _binary)
+
+
+class Clock:
+    """可拨动的时钟:令牌过期 / 会话到期这类断言不该真的 sleep。"""
+
+    def __init__(self) -> None:
+        from datetime import datetime, timezone
+
+        self.now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, **kwargs):
+        from datetime import timedelta
+
+        self.now = self.now + timedelta(**kwargs)
+        return self.now
+
+
+@pytest.fixture
+def auth_db(monkeypatch, tmp_path):
+    """只要**真库**(临时 SQLite + 与迁移等价的真表),不要真登录。
+
+    给「需要真表、但身份用什么无所谓」的用例(如会话目录):它们继续用 autouse 的
+    「已登录管理员」桩,只把库换成真的。**刻意不放进 _REAL_AUTH_FIXTURES** ——
+    放了的话桩会跳过,这些用例就得先真登录一遍,白白绕远。
+
+    注意这里是 create_all 建表,不是跑迁移:迁移脚本本身由
+    tests/test_auth_migration.py / test_metering_migration.py 与手写 SQL 逐句比对看护。
+    """
+    from types import SimpleNamespace
+
+    from app.auth import db
+    from app.auth.tables import Base
+    from app.config import get_settings
+
+    s = get_settings()
+    monkeypatch.setattr(s, "metering_mysql_url",
+                        f"sqlite+pysqlite:///{(tmp_path / 'auth.db').as_posix()}")
+    db.dispose()                                   # 别让别的用例的引擎跨到这里
+    engine = db.get_engine()
+    register_sqlite_collations(engine)             # users.email 的 utf8mb4_bin
+    Base.metadata.create_all(engine)
+    yield SimpleNamespace(db=db, settings=s)
+    db.dispose()
+
+
+@pytest.fixture
+def auth_env(auth_db, monkeypatch):
+    """真认证环境:真 AuthService + SQLite 真表(auth_db)+ 假发信 + 内存限流。
+
+    返回 SimpleNamespace(service, mailer, limiter, clock, settings, db)。
+    """
+    from types import SimpleNamespace
+
+    from app.auth import mailer, ratelimit
+    from app.auth.ratelimit import MemoryLimiter
+    from app.auth.service import AuthService
+
+    s = auth_db.settings
+    # 密钥够强(>=32 字节)且是测试专用串;cookie 走 http://testserver,Secure 必须关。
+    monkeypatch.setattr(s, "auth_jwt_secret", "test-only-secret-" + "0" * 32)
+    monkeypatch.setattr(s, "auth_cookie_secure", False)
+    monkeypatch.setattr(s, "auth_cookie_domain", "")
+    monkeypatch.setattr(s, "auth_rate_limit_enabled", True)
+    monkeypatch.setattr(s, "auth_frontend_base_url", "http://front.test")
+
+    clock = Clock()
+    fake_mailer = mailer.FakeMailer()
+    limiter = MemoryLimiter()
+    mailer.install_mailer(fake_mailer)
+    ratelimit.install(limiter)
+
+    service = AuthService(now=clock)
+    env = SimpleNamespace(service=service, mailer=fake_mailer, limiter=limiter, clock=clock,
+                          settings=s, db=auth_db.db)
+    yield env
+    mailer.install_mailer(None)
+    ratelimit.install(None)
+
+
+@pytest.fixture
+def auth_client(auth_env):
+    """挂上真认证服务的 TestClient(不跑 lifespan:不连 Redis、不起后台线程)。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    app.state.auth = auth_env.service
+    return TestClient(app)

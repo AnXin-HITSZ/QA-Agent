@@ -1,4 +1,11 @@
 // 后端对话接口的类型与调用:非流式 /api/v1/chat + 流式 /api/v1/chat/stream。
+//
+// 所有请求都经 stores/auth 的 apiFetch 出去:自动带内存里的 access token,401 时先刷新
+// 再重试一次(令牌只走 Authorization 头 —— SSE 也一样,绝不放 URL 里:URL 会进日志、
+// 进 Referer、进浏览器历史)。SSE 中途断开**不重放**:重放等于再问一次模型(再花一次钱),
+// 接口层只如实报错,由用户决定要不要重问。
+
+import { apiFetch } from "./stores/auth";
 
 export interface ChatRequest {
   message: string;
@@ -43,7 +50,7 @@ export interface StreamHandlers {
 export async function chat(message: string, threadId?: string | null): Promise<ChatResponse> {
   let res: Response;
   try {
-    res = await fetch("/api/v1/chat", {
+    res = await apiFetch("/api/v1/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, thread_id: threadId ?? null } satisfies ChatRequest),
@@ -52,9 +59,24 @@ export async function chat(message: string, threadId?: string | null): Promise<C
     throw new Error("暂时连不上服务,请稍后重试。");
   }
   if (!res.ok) {
-    throw new Error(`后端返回错误(HTTP ${res.status})。稍后重试,或查看后端日志。`);
+    throw new Error(httpErrorText(res));
   }
   return (await res.json()) as ChatResponse;
+}
+
+// 把状态码翻译成给用户看的一句话。401 / 403 是权限与登录态问题,不该混进「稍后重试」。
+function httpErrorText(res: Response): string {
+  if (res.status === 401) return "登录状态已失效,请重新登录。";
+  if (res.status === 403) return "当前账号没有这个权限。";
+  if (res.status === 503) return "服务暂时不可用(认证或存储未配置),请联系管理员。";
+  return `后端返回错误(HTTP ${res.status})。稍后重试,或查看后端日志。`;
+}
+
+// 登录态 / 权限 / 服务不可用这三类错误,不管哪个接口都是同一件事,统一说同一句话;
+// 其余状态码返回 null,由各调用方补上「在做什么」的上下文(比如「删除对话失败」)。
+function commonErrorText(res: Response): string | null {
+  if (res.status === 401 || res.status === 403 || res.status === 503) return httpErrorText(res);
+  return null;
 }
 
 // 用户点「停止」造成的中断:与失败区分开,调用方据此不弹错误提示。
@@ -76,7 +98,9 @@ export async function chatStream(
 ): Promise<void> {
   let res: Response;
   try {
-    res = await fetch("/api/v1/chat/stream", {
+    // 令牌走 Authorization 头(不进 URL);401 只在**握手阶段**刷新重试一次 ——
+    // 流一旦开始就绝不重放(重放 = 再花一次模型的钱,由用户自己决定要不要重问)。
+    res = await apiFetch("/api/v1/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, thread_id: threadId ?? null } satisfies ChatRequest),
@@ -87,7 +111,7 @@ export async function chatStream(
     throw new Error("暂时连不上服务,请稍后重试。");
   }
   if (!res.ok || !res.body) {
-    throw new Error(`后端返回错误(HTTP ${res.status})。稍后重试,或查看后端日志。`);
+    throw new Error(httpErrorText(res));
   }
 
   let doneSeen = false;
@@ -216,7 +240,7 @@ export async function listConversations(q = ""): Promise<ConversationList> {
     ? `/api/v1/conversations?q=${encodeURIComponent(query)}`
     : "/api/v1/conversations";
   try {
-    const res = await fetch(url);
+    const res = await apiFetch(url);
     if (!res.ok) return { enabled: false, degraded: true, items: [] };
     const data = (await res.json()) as Partial<ConversationList>;
     return {
@@ -229,22 +253,26 @@ export async function listConversations(q = ""): Promise<ConversationList> {
   }
 }
 
-// 读取一通历史会话的 Q&A 文本,用于回放。
+// 读取一通历史会话的 Q&A 文本,用于回放。别人的 / 不存在的会话一律 404(不区分)。
 export async function getConversation(threadId: string): Promise<ConversationDetail> {
-  const res = await fetch(`/api/v1/conversations/${encodeURIComponent(threadId)}`);
+  const res = await apiFetch(`/api/v1/conversations/${encodeURIComponent(threadId)}`);
   if (!res.ok) {
-    throw new Error(`打开对话失败(HTTP ${res.status})。可能已被删除,或后端不可用。`);
+    // 404 单独说:它既可能是「已被删除」,也可能是「不是你的会话」—— 后端对外同一个码。
+    if (res.status === 404) throw new Error("打开对话失败:这通对话不存在(可能已被删除)。");
+    throw new Error(commonErrorText(res) ?? `打开对话失败(HTTP ${res.status})。稍后重试。`);
   }
   return (await res.json()) as ConversationDetail;
 }
 
 // 删除一通历史会话,连带清掉它在 Redis 的记忆。
+// 404 视为「已经删掉了」:重复点删除、或另一个标签页先删了,都应当安静地收敛到同一结果,
+// 而不是弹一句让人不知所措的报错。
 export async function deleteConversation(threadId: string): Promise<void> {
-  const res = await fetch(`/api/v1/conversations/${encodeURIComponent(threadId)}`, {
+  const res = await apiFetch(`/api/v1/conversations/${encodeURIComponent(threadId)}`, {
     method: "DELETE",
   });
-  if (!res.ok) {
-    throw new Error(`删除对话失败(HTTP ${res.status})。稍后重试。`);
+  if (!res.ok && res.status !== 404) {
+    throw new Error(commonErrorText(res) ?? `删除对话失败(HTTP ${res.status})。稍后重试。`);
   }
 }
 
@@ -407,10 +435,15 @@ export class ApiError extends Error {
 }
 
 // 优先用后端返回的 detail 文案(503 时是「未配置 …」的可读说明),否则用兜底。
+// detail 有三种形状:字符串(常规)、对象 {code,message}(认证接口)、数组(FastAPI 422)。
 async function detailOr(res: Response, fallback: string): Promise<string> {
   try {
     const body = (await res.json()) as { detail?: unknown };
     if (typeof body?.detail === "string" && body.detail) return body.detail;
+    if (body?.detail && typeof body.detail === "object" && !Array.isArray(body.detail)) {
+      const msg = (body.detail as { message?: unknown }).message;
+      if (typeof msg === "string" && msg) return msg;
+    }
     // FastAPI 校验失败(422):detail 是错误数组,取出各条 msg 拼一行(表单要显示给人看)。
     if (Array.isArray(body?.detail)) {
       const msgs = body.detail
@@ -431,7 +464,7 @@ async function detailOr(res: Response, fallback: string): Promise<string> {
 async function kfetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, init);
+    res = await apiFetch(url, init);
   } catch {
     throw new ApiError(0, "暂时连不上服务,请稍后重试。");
   }
@@ -442,7 +475,7 @@ async function kfetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 async function kfetchVoid(url: string, init?: RequestInit): Promise<void> {
   let res: Response;
   try {
-    res = await fetch(url, init);
+    res = await apiFetch(url, init);
   } catch {
     throw new ApiError(0, "暂时连不上服务,请稍后重试。");
   }
@@ -610,6 +643,14 @@ export async function deleteSop(id: string): Promise<void> {
 
 // ── 待办清单:全局一份,后端 Redis 为准(与历史对话同一取向)。Agent 只读,增删改一律走这里 ──
 
+// 操作者快照(谁建的 / 谁最后改的)。字段引入前的老待办是 null —— 展示层写「未知」,
+// 不假装成某个人。
+export interface TodoActor {
+  user_id: string;
+  display_name: string;
+  email: string;
+}
+
 export interface Todo {
   id: string;
   title: string;
@@ -617,6 +658,8 @@ export interface Todo {
   done: boolean;
   created_at: string; // ISO 8601
   due_date: string | null; // YYYY-MM-DD;null = 无截止
+  created_by: TodoActor | null; // 创建者;老数据为 null
+  updated_by: TodoActor | null; // 最后一次修改者;从未改过时与创建者相同
 }
 
 export interface TodoList {
@@ -643,7 +686,7 @@ export interface TodoUpdate {
 // 列出全部待办(未完成在前)。失败不谎称"未启用",标记 degraded=true → 前端提示重试。
 export async function listTodos(): Promise<TodoList> {
   try {
-    const res = await fetch("/api/v1/todos");
+    const res = await apiFetch("/api/v1/todos");
     if (!res.ok) return { enabled: false, degraded: true, items: [] };
     const data = (await res.json()) as Partial<TodoList>;
     return {

@@ -19,10 +19,11 @@ from contextlib import contextmanager
 from uuid import uuid4
 
 import frontmatter
-from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from PIL import Image, UnidentifiedImageError
 
+from app.auth.deps import require_admin, require_user
 from app.config import get_settings
 from app.rag import oss
 from app.schemas.skill import SopDetail, SopSummary, SopWrite
@@ -116,7 +117,7 @@ def _reread(store: oss.OssStore, sop_id: str) -> SopDetail:
     return _parse(sop_id, store.prefix + _key(sop_id), raw, (st or {}).get("last_modified"))
 
 
-@router.get("", response_model=list[SopSummary])
+@router.get("", response_model=list[SopSummary], dependencies=[Depends(require_user)])
 def list_sops() -> list[SopSummary]:
     """列出全部 SOP(不含正文);按 id 升序。单篇坏文件只跳过并告警,不影响整表。"""
     store = oss.sops_store()
@@ -138,7 +139,7 @@ def list_sops() -> list[SopSummary]:
     return out
 
 
-@router.post("/images", status_code=status.HTTP_201_CREATED)
+@router.post("/images", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
 def upload_image(file: UploadFile = File(...)) -> dict[str, str]:
     """上传正文图片;返回稳定访问路径,不把临时签名 URL 写进正文。"""
     data = file.file.read(_IMAGE_MAX_BYTES + 1)
@@ -163,7 +164,7 @@ def upload_image(file: UploadFile = File(...)) -> dict[str, str]:
     return {"key": key, "url": f"{router.prefix}/images/{image_id}"}
 
 
-@router.get("/images/{image_id}")
+@router.get("/images/{image_id}", dependencies=[Depends(require_user)])
 def get_image(image_id: str) -> RedirectResponse:
     """每次访问重新签名并跳转到私有 OSS 原件。"""
     if not _IMAGE_ID_RE.fullmatch(image_id):
@@ -177,7 +178,7 @@ def get_image(image_id: str) -> RedirectResponse:
     return RedirectResponse(url, status_code=307, headers={"Cache-Control": "no-store"})
 
 
-@router.get("/{sop_id}", response_model=SopDetail)
+@router.get("/{sop_id}", response_model=SopDetail, dependencies=[Depends(require_user)])
 def get_sop(sop_id: str) -> SopDetail:
     """读单篇 SOP 详情(含正文);不存在 404。"""
     sid = _validate_id(sop_id)
@@ -190,7 +191,8 @@ def get_sop(sop_id: str) -> SopDetail:
     return _parse(sid, store.prefix + _key(sid), raw, st.get("last_modified"))
 
 
-@router.post("", response_model=SopDetail, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=SopDetail, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_admin)])
 def create_sop(body: SopWrite) -> SopDetail:
     """新建 SOP;id 已存在返回 409。"""
     sid = _validate_id(body.id)
@@ -203,7 +205,7 @@ def create_sop(body: SopWrite) -> SopDetail:
     return _reread(store, sid)
 
 
-@router.put("/{sop_id}", response_model=SopDetail)
+@router.put("/{sop_id}", response_model=SopDetail, dependencies=[Depends(require_admin)])
 def update_sop(sop_id: str, body: SopWrite) -> SopDetail:
     """更新 SOP 内容(不可改 id);不存在 404,路径 id 与内容 id 不一致 400。"""
     sid = _validate_id(sop_id)
@@ -221,7 +223,7 @@ def update_sop(sop_id: str, body: SopWrite) -> SopDetail:
     return _reread(store, sid)
 
 
-@router.delete("/{sop_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{sop_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
 def delete_sop(sop_id: str) -> Response:
     """删除 SOP;不存在 404。"""
     sid = _validate_id(sop_id)

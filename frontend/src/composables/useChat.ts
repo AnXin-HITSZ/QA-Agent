@@ -211,6 +211,18 @@ async function removeConversation(tid: string): Promise<void> {
   await loadConversations();
 }
 
+// 登出 / 换账号时清空:这些是模块级单例,跨登录一直活着 —— 不清就会让下一个账号
+// 看到上一个账号的对话列表。由 App 注册进 auth 的 onSignedOut。
+function reset(): void {
+  messages.value = [];
+  loading.value = false;
+  error.value = "";
+  threadId.value = null;
+  conversations.value = [];
+  searchQuery.value = "";
+  searching.value = false;
+}
+
 export function useChat() {
   return {
     messages,
@@ -229,5 +241,6 @@ export function useChat() {
     openConversation,
     removeConversation,
     loadConversations,
+    reset,
   };
 }

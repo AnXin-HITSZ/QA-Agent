@@ -127,6 +127,23 @@ async function remove(id: string): Promise<void> {
   await loadList();
 }
 
+// 登出 / 换账号时清空(模块级单例跨登录一直活着)。loaded 也要归位 —— 否则下一个账号
+// 挂载时会以为「已经载过」而不再拉列表。由 App 注册进 auth 的 onSignedOut。
+function reset(): void {
+  list.value = [];
+  loading.value = false;
+  error.value = "";
+  storageEnabled.value = true;
+  loaded.value = false;
+  mode.value = "list";
+  current.value = null;
+  editingNew.value = false;
+  detailLoading.value = false;
+  detailError.value = "";
+  saving.value = false;
+  saveError.value = "";
+}
+
 export function useSops() {
   return {
     list,
@@ -147,5 +164,6 @@ export function useSops() {
     openEditor,
     save,
     remove,
+    reset,
   };
 }

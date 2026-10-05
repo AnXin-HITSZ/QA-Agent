@@ -24,6 +24,11 @@ function closeDrawer(): void {
   open.value = false;
 }
 
+// 登出 / 换账号时一并收起(与 useTodoDrawer.reset 对称)。
+function reset(): void {
+  open.value = false;
+}
+
 export function useSidebar() {
-  return { open, focusSearchSignal, toggleDrawer, openSearch, closeDrawer };
+  return { open, focusSearchSignal, toggleDrawer, openSearch, closeDrawer, reset };
 }

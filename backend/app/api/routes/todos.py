@@ -1,8 +1,11 @@
 """待办清单:全局一份的增删改查。
 
-存储在后端 Redis(单用户、无鉴权,与历史对话同一取向):
-- 列表 —— 读整份,未完成在前;
-- 新建 / 更新 / 删除 —— 读改写整份(存储层用乐观事务)。
+存储在后端 Redis(**所有人共享同一份**):
+- 列表 —— 读整份,未完成在前;所有登录用户都能读(用户侧的待办只读);
+- 新建 / 更新 / 删除 —— 仅管理员,读改写整份(存储层用乐观事务)。
+
+权限由依赖守卫决定(require_user / require_admin),前端隐藏按钮只是顺手。
+写操作把操作者记进 created_by / updated_by(身份快照,见 schemas/todo.py)。
 
 Redis 未启用(未配置)时:列表返回 enabled=false + 空列表,增删改返回 503。
 已启用但本次读写失败(超时 / Redis 错误):列表 degraded=true,增删改 503。
@@ -12,14 +15,22 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
+from app.auth.deps import require_admin, require_user
+from app.auth.service import Principal
 from app.config import get_settings
-from app.schemas.todo import Todo, TodoCreate, TodoList, TodoUpdate
+from app.schemas.todo import Todo, TodoActor, TodoCreate, TodoList, TodoUpdate
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix=get_settings().api_prefix, tags=["todos"])
+
+
+def _actor(principal: Principal) -> TodoActor:
+    """把当前登录者压成待办里的审计快照(动作发生时的显示名 / 邮箱)。"""
+    return TodoActor(user_id=principal.user_id, display_name=principal.display_name,
+                     email=principal.email)
 
 
 def _store(request: Request):
@@ -41,7 +52,7 @@ def _redis_unavailable(exc: BaseException) -> bool:
     return isinstance(exc, RedisError)
 
 
-@router.get("/todos", response_model=TodoList)
+@router.get("/todos", response_model=TodoList, dependencies=[Depends(require_user)])
 async def list_todos(request: Request) -> TodoList:
     """全部待办,未完成在前。Redis 未启用则 enabled=false。"""
     store = _store(request)
@@ -57,14 +68,16 @@ async def list_todos(request: Request) -> TodoList:
     return TodoList(enabled=True, items=items)
 
 
-@router.post("/todos", response_model=Todo, status_code=status.HTTP_201_CREATED)
-async def create_todo(body: TodoCreate, request: Request) -> Todo:
-    """新建一条待办,返回带 id / 创建时间的完整记录。"""
+@router.post("/todos", response_model=Todo, status_code=status.HTTP_201_CREATED,
+             dependencies=[Depends(require_admin)])
+async def create_todo(body: TodoCreate, request: Request,
+                      principal: Principal = Depends(require_admin)) -> Todo:
+    """新建一条待办,返回带 id / 创建时间 / 创建者的完整记录。"""
     store = _store(request)
     if store is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="待办存储未启用(未配置 Redis)")
     try:
-        return await store.add(body)
+        return await store.add(body, _actor(principal))
     except Exception as exc:  # noqa: BLE001
         if _redis_unavailable(exc):
             raise HTTPException(
@@ -73,14 +86,15 @@ async def create_todo(body: TodoCreate, request: Request) -> Todo:
         raise
 
 
-@router.patch("/todos/{todo_id}", response_model=Todo)
-async def update_todo(todo_id: str, body: TodoUpdate, request: Request) -> Todo:
-    """局部更新(勾选完成 / 改标题 / 改分类 / 改截止);仅传入字段生效。"""
+@router.patch("/todos/{todo_id}", response_model=Todo, dependencies=[Depends(require_admin)])
+async def update_todo(todo_id: str, body: TodoUpdate, request: Request,
+                      principal: Principal = Depends(require_admin)) -> Todo:
+    """局部更新(勾选完成 / 改标题 / 改分类 / 改截止);仅传入字段生效,并记下修改者。"""
     store = _store(request)
     if store is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="待办存储未启用(未配置 Redis)")
     try:
-        updated = await store.update(todo_id, body)
+        updated = await store.update(todo_id, body, _actor(principal))
     except Exception as exc:  # noqa: BLE001
         if _redis_unavailable(exc):
             raise HTTPException(
@@ -92,7 +106,7 @@ async def update_todo(todo_id: str, body: TodoUpdate, request: Request) -> Todo:
     return updated
 
 
-@router.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/todos/{todo_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
 async def delete_todo(todo_id: str, request: Request) -> Response:
     """删除一条待办。"""
     store = _store(request)

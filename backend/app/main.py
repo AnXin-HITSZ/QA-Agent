@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
-    chat, conversations, health, knowledge, metering, sops, todos,
+    admin_users, auth, chat, conversations, health, knowledge, metering, sops, todos,
 )
 from app.config import get_settings
 from app.graph import build_graph
@@ -57,6 +57,18 @@ async def lifespan(app: FastAPI):
     if checkpointer is None:
         logger.info("对话记忆:单轮模式(无跨轮记忆);配置 REDIS_URL 即可开启。")
 
+    # 认证服务:用户 / 会话 / 会话目录 / 审计都在 MySQL(METERING_MYSQL_URL 指向的库)。
+    # 这里只是装配对象,不建连接、不校验配置 —— 真正的「没配就明确报错」发生在请求路径上
+    # (app/auth/db.py 的 _require_configured → 503,绝不降级为匿名可用)。
+    from app.auth.service import AuthService
+
+    app.state.auth = AuthService()
+    from app.auth import db as auth_db
+
+    if not auth_db.configured():
+        logger.warning("认证:未配置 METERING_MYSQL_URL —— 认证 / 用户管理接口将返回 503;"
+                       "聊天等公开能力不受影响。见 docs/认证鉴权与用户管理技术方案.md §10。")
+
     # 待办清单存储:普通 Redis(单键 GET/SET),不依赖 RedisJSON/RediSearch,与 checkpointer
     # 各自独立 —— 即便跨轮记忆因缺模块降级,待办仍可用;失败置 None,接口层再优雅降级。
     todo_store = None
@@ -80,6 +92,18 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("索引任务对账失败(不影响启动):%s", exc)
 
+    # 删除会话对账:上次进程删了一半(卡在 deleting)的会话在这里删完 —— 用户点过删除的
+    # 正文不该因为一次重启就一直留在 Redis 里。Redis 不可用 / 库未配就跳过,不影响启动。
+    if checkpointer is not None:
+        try:
+            from app.conversations import reconcile_deleting
+
+            done = await reconcile_deleting(checkpointer)
+            if done:
+                logger.info("会话删除对账:补完 %d 条", done)
+        except Exception as exc:
+            logger.warning("会话删除对账失败(不影响启动):%s", exc)
+
     # 调用日志与费用统计:起后台补写线程(不建表、不阻塞启动;未配 METERING_MYSQL_URL 则什么都不做,
     # 索引与检索照常)。表结构由迁移脚本建立,见 docs/调用日志与费用统计技术方案.md §6。
     try:
@@ -97,6 +121,12 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        try:
+            from app.auth import ratelimit
+
+            await ratelimit.close()          # 限流 Redis 连接:不关会拖着 aiohttp 任务不放
+        except Exception as exc:
+            logger.warning("限流连接收尾失败:%s", exc)
         try:
             from app.metering import stop as metering_stop
 
@@ -121,7 +151,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # 认证异常 → 统一错误体(401/403/404/409/429/503)。一次装好,所有路由共用。
+    from app.auth import http as auth_http
+
+    auth_http.install(app)
+
     app.include_router(health.router)
+    app.include_router(auth.router)               # 注册 / 登录 / 刷新 / 设备管理
+    app.include_router(admin_users.router)        # 管理员:用户审批与审计
     app.include_router(chat.router)
     app.include_router(conversations.router)
     app.include_router(knowledge.router)
