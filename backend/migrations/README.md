@@ -56,8 +56,8 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 版本 | 文件 | 开发库 | 生产库 |
 | --- | --- | --- | --- |
 | 0001 | `0001_create_metering_tables` | 已应用 | 已应用 |
-| 0002 | `0002_widen_metering_identifiers` | 待应用 | 待应用 |
-| 0003 | `0003_auth_and_conversations` | 待应用 | 待应用 |
+| 0002 | `0002_widen_metering_identifiers` | 已应用 | 已应用 |
+| 0003 | `0003_auth_and_conversations` | 已应用 | 已应用 |
 
 ## 0001：调用日志与费用统计四张表
 
