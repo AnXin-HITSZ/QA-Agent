@@ -938,6 +938,8 @@
 }
 
 /* Dashboard layout: stable filters, progressive disclosure, responsive overlays. */
+/* 这条留白是四个标签页容器的一致口径(窄屏 540 一档见本文件末尾):
+   .kv(KnowledgeView)/ .sv(sop.css)/ .pane(auth.css)都照抄此处,改这里要四处同改。 */
 .mt { padding: 32px clamp(16px, 3vw, 48px) 48px; }
 .mt__sub { font-size: 13px; max-width: none; line-height: 1.8; }
 .mt__filters { display: flex; justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px 20px; margin-bottom: 22px; border-radius: 12px; }

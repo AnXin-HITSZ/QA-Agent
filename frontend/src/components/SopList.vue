@@ -32,7 +32,7 @@ async function onDelete(id: string): Promise<void> {
     <div class="sv__wrap">
       <header class="pghead">
         <div>
-          <h2 class="pghead__title">SOP 流程</h2>
+          <h1 class="pghead__title">SOP 流程</h1>
           <p class="pghead__sub">
             <template v-if="loading">载入中…</template>
             <template v-else-if="storageEnabled && count">

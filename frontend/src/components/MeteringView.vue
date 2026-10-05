@@ -312,7 +312,7 @@ async function onRemovePrice(id: number | null): Promise<void> {
     <div class="mt__wrap">
       <header class="pghead">
         <div>
-          <h2 class="pghead__title">调用与费用</h2>
+          <h1 class="pghead__title">调用与费用</h1>
           <p class="pghead__sub">追踪 Embedding 与 OCR 调用，了解用量与估算费用。</p>
         </div>
         <button class="mt__btn" type="button" :disabled="loading" @click="refresh">

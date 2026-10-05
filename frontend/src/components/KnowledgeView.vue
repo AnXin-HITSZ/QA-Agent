@@ -84,7 +84,7 @@ function formatSize(n: number): string {
     <div class="kv__wrap">
       <header class="pghead">
         <div>
-          <h2 class="pghead__title">知识库</h2>
+          <h1 class="pghead__title">知识库</h1>
           <p class="pghead__sub">
             管理各分类下的原件;上传 / 删除自动维护索引,版本回退在页面底部。
           </p>
@@ -209,14 +209,23 @@ function formatSize(n: number): string {
 /* 页面标题区走全局 .pghead(style.css)。注意 .kv 这个类名是全局可见的:
    别的样式文件里不许出现裸 `.kv { ... }` 规则(metering.css 曾误留一条,
    把这里变成 flex 行容器,正文栏收缩、比别的标签页窄一截)。 */
+/* 留白(上下左右)与调用与费用 / 账号页 / SOP 同一套口径:
+   32px clamp(16px, 3vw, 48px) 48px,窄屏一档 20px 12px 32px
+   —— 出处是 metering.css 的 .mt(:941 与 :995);auth.css 的 .pane、sop.css 的 .sv 同款。
+   max-width 相同还不够:窗口没宽到顶住上限时,正文实际多宽由留白决定,四处必须一起改。 */
 .kv {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 20px 24px;
+  padding: 32px clamp(16px, 3vw, 48px) 48px;
 }
 .kv__wrap {
   max-width: var(--maxw);
   margin: 0 auto;
+}
+@media (max-width: 540px) {
+  .kv {
+    padding: 20px 12px 32px;
+  }
 }
 .kv__crumb {
   margin-bottom: 14px;

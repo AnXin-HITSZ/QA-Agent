@@ -227,10 +227,10 @@
    裸写就是全局规则 —— 裸 `.kv` 会把知识库的 <main class="kv"> 变成「120px + 1fr」的网格、
    正文栏当场收缩(KnowledgeView 的注释里记过 metering.css 的同款事故),裸 `.card` 会顶掉
    调用与费用卡片的紧凑内边距。 */
-/* 左右留白照抄调用与费用的 .mt(metering.css:941 与 :995 的响应式两档):
-   max-width 相同还不够 —— 窗口没宽到顶住上限时,正文实际多宽由留白决定,
-   两处留白不一样就会出现「同为上限 1360,窄屏下却差几十像素」。
-   改这里必须同步改 metering.css 的 .mt,否则两边又会漂开。 */
+/* 留白(上下左右)与调用与费用 / 知识库 / SOP 同一套口径:
+   32px clamp(16px, 3vw, 48px) 48px,窄屏一档 20px 12px 32px。
+   出处是 metering.css 的 .mt(:941 与 :995);KnowledgeView 的 .kv、sop.css 的 .sv 同款。
+   max-width 相同还不够:窗口没宽到顶住上限时,正文实际多宽由留白决定,四处必须一起改。 */
 .pane {
   flex: 1;
   overflow-y: auto;
