@@ -159,12 +159,12 @@ onMounted(() => void loadSessions());
 <template>
   <div class="pane">
     <div class="pane__inner">
-      <div class="pane__head">
+      <header class="pghead">
         <div>
-          <h1 class="pane__title">我的账号</h1>
-          <p class="pane__sub">资料、密码与登录设备。</p>
+          <h1 class="pghead__title">我的账号</h1>
+          <p class="pghead__sub">资料、密码与登录设备。</p>
         </div>
-      </div>
+      </header>
 
       <!-- ── 资料 ── -->
       <section class="card">

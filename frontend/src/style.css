@@ -43,8 +43,8 @@ body {
   }
 }
 
-/* ============ 页面标题区(知识库 / SOP 流程 / 调用与费用共用) ============
-   三个标签页的「标题 + 标题下解释」口径只写在这里,各视图只挂类名、不再各写一份,
+/* ============ 页面标题区(知识库 / SOP 流程 / 调用与费用 / 账号 / 用户管理共用) ============
+   各标签页的「标题 + 标题下解释」口径只写在这里,各视图只挂类名、不再各写一份,
    免得字号 / 间距再慢慢漂开。 */
 .pghead {
   display: flex;
@@ -67,6 +67,32 @@ body {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.8;
+}
+
+/* ============ 小徽章(顶栏用户菜单 + 账号 / 用户管理页共用) ============
+   放在全局这一层是因为两个使用点分属不同视图(顶栏在 .app__main 下,页面在 .pane 下),
+   谁都包不住谁;名字够窄,且全局样式里只有这一处定义。 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.badge--ok {
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  background: var(--primary-tint);
+  color: var(--primary-strong);
+}
+.badge--warn {
+  border-color: color-mix(in srgb, var(--seal) 30%, transparent);
+  background: var(--seal-tint);
+  color: var(--seal);
 }
 
 /* ============ Markdown 渲染 ============ */

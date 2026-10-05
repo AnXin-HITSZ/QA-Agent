@@ -170,15 +170,15 @@ onMounted(() => void load());
 <template>
   <div class="pane">
     <div class="pane__inner">
-      <div class="pane__head">
+      <header class="pghead">
         <div>
-          <h1 class="pane__title">用户管理</h1>
-          <p class="pane__sub">审批注册、启停账号、调整角色。所有动作都记进审计。</p>
+          <h1 class="pghead__title">用户管理</h1>
+          <p class="pghead__sub">审批注册、启停账号、调整角色。所有动作都记进审计。</p>
         </div>
         <button class="mini" type="button" @click="toggleAudit()">
           {{ auditOpen && !auditFor ? "收起审计" : "最近操作审计" }}
         </button>
-      </div>
+      </header>
 
       <!-- ── 筛选 ── -->
       <section class="card">
