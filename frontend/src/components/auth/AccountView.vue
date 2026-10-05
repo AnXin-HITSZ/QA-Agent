@@ -157,7 +157,7 @@ onMounted(() => void loadSessions());
 </script>
 
 <template>
-  <div class="pane">
+  <div class="pane account-page">
     <div class="pane__inner">
       <header class="pghead">
         <div>
@@ -169,7 +169,7 @@ onMounted(() => void loadSessions());
       <!-- ── 资料 ── -->
       <section class="card">
         <h2 class="card__title">基本资料</h2>
-        <p class="card__sub">邮箱与显示名由管理员维护;角色与状态改动后需要重新登录才生效。</p>
+        <p class="card__sub">查看当前账号的身份信息与验证状态。</p>
         <dl v-if="me" class="kv">
           <dt>邮箱</dt>
           <dd>
@@ -197,7 +197,7 @@ onMounted(() => void loadSessions());
         <p class="card__sub">
           改完之后所有设备都会退出登录(包括当前这台),需要用新密码重新登录。
         </p>
-        <form novalidate @submit.prevent="submitPassword">
+        <form class="account-password" novalidate @submit.prevent="submitPassword">
           <div class="auth__field">
             <label class="auth__label" for="pw-current">当前密码</label>
             <input

@@ -50,6 +50,11 @@ const meId = computed(() => authState.user?.id ?? "");
 // ── 列表 ──
 const status = ref("");
 const q = ref("");
+const appliedQuery = ref("");
+const loaded = ref(false);
+let loadRevision = 0;
+const allCount = computed(() => Object.values(page.value.counts).reduce((sum, count) => sum + count, 0));
+const statusLabel = computed(() => STATUS_FILTERS.find(f => f.value === status.value)?.label ?? "全部");
 const offset = ref(0);
 const page = ref<AdminUserPage>({ items: [], total: 0, counts: {} });
 const loading = ref(true);
@@ -63,14 +68,19 @@ const hasPrev = computed(() => offset.value > 0);
 const hasNext = computed(() => offset.value + LIMIT < total.value);
 
 async function load(): Promise<void> {
+  const revision = ++loadRevision;
   loading.value = true;
   error.value = "";
   try {
-    page.value = await listUsers({ status: status.value, q: q.value.trim(), offset: offset.value, limit: LIMIT });
+    const result = await listUsers({ status: status.value, q: appliedQuery.value, offset: offset.value, limit: LIMIT });
+    if (revision !== loadRevision) return;
+    page.value = result;
+    loaded.value = true;
   } catch (e) {
+    if (revision !== loadRevision) return;
     error.value = e instanceof AuthError ? e.message : e instanceof Error ? e.message : String(e);
   } finally {
-    loading.value = false;
+    if (revision === loadRevision) loading.value = false;
   }
 }
 
@@ -81,7 +91,13 @@ function pickStatus(value: string): void {
   void load();
 }
 
+function resetFilters(): void {
+  q.value = ""; appliedQuery.value = ""; status.value = ""; offset.value = 0;
+  void load();
+}
+
 function search(): void {
+  appliedQuery.value = q.value.trim();
   offset.value = 0;
   void load();
 }
@@ -168,62 +184,47 @@ onMounted(() => void load());
 </script>
 
 <template>
-  <div class="pane">
+  <div class="pane users-page">
     <div class="pane__inner">
       <header class="pghead">
         <div>
           <h1 class="pghead__title">用户管理</h1>
-          <p class="pghead__sub">审批注册、启停账号、调整角色。所有动作都记进审计。</p>
+          <p class="pghead__sub">管理注册申请、账号状态与角色。</p>
         </div>
         <button class="mini" type="button" @click="toggleAudit()">
           {{ auditOpen && !auditFor ? "收起审计" : "最近操作审计" }}
         </button>
       </header>
 
-      <!-- ── 筛选 ── -->
-      <section class="card">
-        <div class="row">
-          <div class="row" role="group" aria-label="按状态筛选">
-            <button
-              v-for="f in STATUS_FILTERS"
-              :key="f.value"
-              class="mini"
-              type="button"
-              :class="{ 'mini--primary': status === f.value }"
-              :aria-pressed="status === f.value"
-              @click="pickStatus(f.value)"
-            >
-              {{ f.label }}
-              <span class="tbl__mono">{{ f.value ? (page.counts[f.value] ?? 0) : total }}</span>
-            </button>
-          </div>
-          <form class="row grow" role="search" @submit.prevent="search">
-            <label class="auth__label" for="user-q">搜索</label>
-            <input
-              id="user-q"
-              v-model="q"
-              class="auth__input grow"
-              type="search"
-              placeholder="邮箱或昵称"
-              @keyup.enter="search"
-            />
-            <button class="mini" type="submit" :disabled="loading">搜索</button>
-          </form>
+      <section class="card users-filters" aria-label="用户筛选">
+        <div class="users-status" role="group" aria-label="按状态筛选">
+          <button v-for="f in STATUS_FILTERS" :key="f.value" class="users-status__item" type="button"
+            :class="{ 'is-active': status === f.value }" :aria-pressed="status === f.value" @click="pickStatus(f.value)">
+            {{ f.label }}<span class="users-status__count">{{ !loaded || error ? '—' : f.value ? (page.counts[f.value] ?? 0) : allCount }}</span>
+          </button>
         </div>
-        <p class="card__sub card__sub--tail">
-          状态人数是<strong>全量</strong>计数(不受搜索框影响);搜索只在当前筛选里挑。
-        </p>
+        <div class="users-searchbar">
+          <form class="users-search" role="search" @submit.prevent="search">
+            <label class="users-sr" for="user-q">搜索邮箱或昵称</label>
+            <input id="user-q" v-model="q" class="auth__input" type="search" placeholder="搜索邮箱或昵称" />
+            <button class="mini mini--primary" type="submit" :disabled="loading">搜索</button>
+            <button class="mini" type="button" :disabled="!status && !q && !appliedQuery" @click="resetFilters">重置</button>
+          </form>
+          <p class="users-help">状态人数为全部用户数；搜索仅在当前状态下进行。</p>
+        </div>
       </section>
 
       <p v-if="error" class="auth__note auth__note--err" role="alert">{{ error }}</p>
       <p v-if="notice" class="auth__note auth__note--ok" role="status">{{ notice }}</p>
 
       <!-- ── 列表 ── -->
-      <section class="card">
-        <p v-if="loading" class="auth__spin" role="status">正在读取…</p>
+      <section class="card users-list" :aria-busy="loading">
+        <div class="users-list__head"><h2 class="card__title">{{ statusLabel }}用户<span v-if="appliedQuery"> · 搜索“{{ appliedQuery }}”</span></h2><span class="users-help" role="status">{{ loading ? '正在更新…' : error ? '读取失败' : `找到 ${total} 位用户` }}</span></div>
+        <p v-if="loading && !loaded" class="auth__spin" role="status">正在读取…</p>
 
+        <div v-else-if="error" class="users-empty"><p>无法读取用户列表</p><button class="mini" @click="load">重试</button></div>
         <template v-else-if="page.items.length">
-          <div class="tbl__scroll">
+          <div class="tbl__scroll" :class="{ 'users-updating': loading }">
             <table class="tbl">
               <thead>
                 <tr>
@@ -239,7 +240,7 @@ onMounted(() => void load());
                 <template v-for="u in page.items" :key="u.id">
                   <tr>
                     <td>
-                      <div>{{ u.display_name || "—" }}</div>
+                      <div class="users-name">{{ u.display_name || "—" }}</div>
                       <div class="tbl__mono">{{ u.email }}</div>
                       <span v-if="u.id === meId" class="badge">这是你自己</span>
                     </td>
@@ -251,8 +252,8 @@ onMounted(() => void load());
                     <td>
                       <div>{{ STATUS_TEXT[u.status] ?? u.status }}</div>
                       <div v-if="!u.email_verified" class="tbl__mono">邮箱未验证</div>
-                      <div v-if="u.review_note" class="tbl__mono" :title="u.review_note">
-                        备注:{{ u.review_note }}
+                      <div v-if="u.review_note" class="users-note" :title="u.review_note">
+                        <span>备注</span>{{ u.review_note }}
                       </div>
                     </td>
                     <td class="tbl__mono">{{ formatStamp(u.created_at) || "—" }}</td>
@@ -308,7 +309,7 @@ onMounted(() => void load());
                             :disabled="!!busyId"
                             @click="act(u, 'disable')"
                           >
-                            确认停用
+                            确认停用 {{ u.display_name || u.email }}
                           </button>
                         </template>
 
@@ -341,7 +342,7 @@ onMounted(() => void load());
                             :disabled="!!busyId"
                             @click="switchRole(u)"
                           >
-                            确认改角色
+                            确认修改 {{ u.display_name || u.email }} 的角色
                           </button>
                         </template>
 
@@ -380,16 +381,13 @@ onMounted(() => void load());
             </table>
           </div>
 
-          <div class="row row--sub">
-            <span class="tbl__mono">第 {{ shownFrom }}–{{ shownTo }} 条,共 {{ total }} 条</span>
-            <button class="mini" type="button" :disabled="!hasPrev || loading" @click="go(-1)">上一页</button>
-            <button class="mini" type="button" :disabled="!hasNext || loading" @click="go(1)">下一页</button>
-          </div>
+          <footer class="users-pager">
+            <span>共 {{ total }} 位用户 · 当前显示 {{ shownFrom }}–{{ shownTo }} 位</span>
+            <div class="row"><button class="mini" type="button" :disabled="!hasPrev || loading" @click="go(-1)">上一页</button><button class="mini" type="button" :disabled="!hasNext || loading" @click="go(1)">下一页</button></div>
+          </footer>
         </template>
 
-        <p v-else class="auth__hint">
-          {{ q ? "没有匹配的账号。" : "这个筛选下还没有账号。" }}
-        </p>
+        <div v-else class="users-empty"><p>暂无符合条件的用户</p><span class="users-help">共 0 位用户，可调整搜索内容或切换状态。</span><button v-if="status || appliedQuery" class="mini" @click="resetFilters">重置筛选</button></div>
       </section>
 
       <!-- ── 审计 ── -->

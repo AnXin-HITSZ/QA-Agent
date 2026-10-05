@@ -375,3 +375,49 @@
   flex: 1;
   min-width: 160px;
 }
+
+/* Account and administration: readable secondary text and stable list layout. */
+.pane .card { box-shadow: none; border-radius: 12px; padding: 24px; }
+.pane .card__title { font-size: 17px; line-height: 1.5; }
+.pane .card__sub, .pane .auth__hint, .pane .tbl__mono { font-size: 13px; line-height: 1.65; }
+.pane .auth__label, .pane .auth__input, .pane .tbl, .pane .kv { font-size: 14px; }
+.pane .tbl th { font-size: 13px; background: var(--surface-2); }
+.pane .tbl th, .pane .tbl td { padding: 15px 16px; }
+.pane .tbl td { line-height: 1.6; }
+.pane .mini { height: 38px; font-size: 14px; white-space: nowrap; }
+.pane .mini:focus-visible, .pane .users-status__item:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.pane .auth__actions { flex-wrap: wrap; }
+.pane .kv { row-gap: 14px; }
+.pane .card.users-filters { padding: 0; overflow: hidden; }
+.users-status { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 12px 22px 0; border-bottom: 1px solid var(--line); }
+.users-status__item { display: inline-flex; align-items: center; gap: 9px; padding: 12px 2px 14px; background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; }
+.users-status__item.is-active { color: var(--primary-strong); border-bottom-color: var(--primary); font-weight: 600; }
+.users-status__count { min-width: 24px; padding: 1px 7px; border-radius: 6px; background: var(--surface-2); font-size: 13px; text-align: center; font-variant-numeric: tabular-nums; }
+.is-active .users-status__count { background: var(--primary-tint); color: var(--primary-strong); }
+.users-searchbar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; padding: 20px 24px; }
+.users-search { display: flex; align-items: center; gap: 10px; width: min(100%, 560px); }
+.users-search .auth__input { flex: 1; width: 320px; min-width: 0; }
+.users-help { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.users-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.users-list { min-height: 240px; }
+.users-list__head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 20px; }
+.users-list__head h2 { overflow-wrap: anywhere; }
+.users-list__head h2 span { font-size: 14px; font-weight: 400; }
+.users-name { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+.users-note { margin-top: 8px; max-width: 300px; min-width: 160px; font-family: inherit; font-size: 13px; color: var(--muted); line-height: 1.65; overflow-wrap: anywhere; }
+.users-note > span { display: block; font-weight: 500; color: var(--ink); margin-bottom: 2px; }
+.users-pager { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; padding-top: 20px; margin-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.users-empty { min-height: 180px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; text-align: center; }
+.users-empty p { margin: 0; font-size: 16px; color: var(--ink); }
+.users-updating { opacity: .55; pointer-events: none; }
+.account-password { max-width: 480px; margin-top: 22px; }
+.account-page .card__sub { max-width: 75ch; }
+@media (max-width: 640px) {
+  .pane .card { padding: 18px; }
+  .users-status { gap: 2px 14px; padding: 10px 16px 0; }
+  .users-searchbar { padding: 16px; }
+  .users-search { flex-wrap: wrap; }
+  .users-search .auth__input { flex: 1 0 100%; width: 100%; }
+  .users-list__head { flex-wrap: wrap; gap: 4px; }
+  .pane .kv { grid-template-columns: 84px minmax(0, 1fr); }
+}
