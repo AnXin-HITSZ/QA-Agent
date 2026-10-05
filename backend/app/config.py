@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # 渲染像素上限保护(宽×高),超过则按比例降采样,避免超大页面撑爆内存 / 超出接口限制。
     ocr_max_page_pixels: int = 25_000_000
 
+    # ---- .doc 老格式转换(LibreOffice headless,见 app/rag/doc_convert.py)----
+    # 留空 = 从 PATH 找 soffice(ECS 上 apt 装完即可)。Windows 本地开发装了 LibreOffice
+    # 但没加进 PATH 时,在这里填绝对路径(例 C:\Program Files\LibreOffice\program\soffice.exe);
+    # 未装时上传 .doc 按「不支持」跳过并注明原因,不阻断整批。
+    soffice_bin: str = ""
+
     # ---- Redis(LangGraph checkpointer:跨轮对话记忆的持久化)----
     # 例:redis://:密码@<ECS-IP>:6379/0;为空则退化为单轮模式(无跨轮记忆)。
     # 注意:LangGraph 的 Redis Saver 依赖 RedisJSON + RediSearch 模块(Redis 8.0+ 内置,

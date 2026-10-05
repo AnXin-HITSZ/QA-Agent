@@ -16,6 +16,9 @@ oss2>=2.18
 pypdf>=4.0
 python-docx>=1.1
 openpyxl>=3.1
+# 老版 Excel(.xls,BIFF 二进制)只读解析。2.x 起不再支持 .xlsx(那个走 openpyxl),
+# 所以两个库并存、按扩展名分工。
+xlrd>=2.0
 python-pptx>=0.6
 Pillow>=10.0
 markdown-it-py>=3.0

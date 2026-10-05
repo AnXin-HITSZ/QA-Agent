@@ -7,6 +7,8 @@
 - 缓存:进程内 MemoryCache(方案要求的「隔离的测试存储」),不碰真实 Redis;
 - OCR:任何测试都不调用真实供应商 —— monkeypatch ocr.recognize_raw(网络边界,
   返回假响应 dict),两层缓存 / 归一化仍真实执行;识别结果全部由测试给定。
+- .doc 转换:一律按「本机没装 soffice」处理,测试不真起 LibreOffice 子进程
+  (见 _no_real_libreoffice;真转换只留 test_doc_convert.py 末尾装了才跑的一条)。
 """
 
 from __future__ import annotations
@@ -185,6 +187,18 @@ def kb_env(cache_env, monkeypatch, tmp_path):
 
     return SimpleNamespace(kb=kb, qdrant=client, embeddings=embeddings, cache=cache_env,
                            cache_dir=tmp_path / "ocr", settings=s)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_libreoffice(monkeypatch):
+    """.doc 转换默认离线:一律视为「本机没装 soffice」,任何测试都不真起 LibreOffice。
+
+    与「OCR 不调真实供应商」同一条原则:真转换只留 test_doc_convert.py 末尾一条,
+    它在采集期取真路径、装了才跑。
+    """
+    from app.rag import doc_convert
+
+    monkeypatch.setattr(doc_convert, "soffice_bin", lambda: "")
 
 
 # ---- 调用日志与费用统计 ----

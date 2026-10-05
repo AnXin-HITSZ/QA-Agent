@@ -6,14 +6,16 @@
   (同「零命中不崩」原则)。
 - 各解析库**惰性 import**(未装也能导入本模块,真用到才报错)。
 - 扫描件 PDF(无文本层)与图片(png/jpg)只标 `needs_ocr=True`,真 OCR 在 2d 接。
-- `.doc` 老格式需外部工具链(LibreOffice/antiword),本步标 unsupported;`.xls` 老格式需
-  xlrd(未装则标 unsupported);`.zip` v1 不解包。
+- `.doc` 老格式经 LibreOffice headless 转成 .docx 字节后再抽取(见 doc_convert;未装则标
+  unsupported);`.xls` 老格式需 xlrd(未装则标 unsupported);`.zip` v1 不解包。
 """
 
 from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+
+from app.rag import doc_convert
 
 
 @dataclass
@@ -51,6 +53,16 @@ def _cell(v) -> str:
     if v is None:
         return ""
     return str(v).strip()
+
+
+def _xls_num(v):
+    """BIFF(.xls)里的数字一律按浮点存:整数值归一成 int,免得文本里出现「1200.0」。
+
+    只影响显示成什么样;小数原样保留(1200.5 不动),openpyxl 那条路径本来就是 int。
+    """
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return v
 
 
 # ---- 各类型抽取器(签名统一:(data, ext) -> ExtractResult)----
@@ -134,23 +146,24 @@ def _from_xlsx(data: bytes, ext: str) -> ExtractResult:
 
 
 def _from_xls(data: bytes, ext: str) -> ExtractResult:
-    """.xls 老格式:需 xlrd;未装则标 unsupported(本步后置)。"""
+    """.xls 老格式:走 xlrd;环境里没装(未 pip install -r requirements.txt)则标 unsupported。"""
     try:
         import xlrd
     except Exception:
-        return ExtractResult(ext=ext, extractor="none", error="unsupported: .xls 老格式需 xlrd(未安装),本步后置")
+        return ExtractResult(ext=ext, extractor="none",
+                             error="unsupported: .xls 老格式需 xlrd 解析,当前环境未安装(安装 requirements.txt 里的 xlrd>=2.0 后重试)")
     try:
         book = xlrd.open_workbook(file_contents=data)
         blocks: list[str] = []
         for sheet in book.sheets():
             if sheet.nrows == 0:
                 continue
-            header = [_cell(sheet.cell_value(0, c)) for c in range(sheet.ncols)]
+            header = [_cell(_xls_num(sheet.cell_value(0, c))) for c in range(sheet.ncols)]
             blocks.append(f"[表: {sheet.name}]")
             for r in range(1, sheet.nrows):
                 pairs: list[str] = []
                 for c in range(sheet.ncols):
-                    cv = _cell(sheet.cell_value(r, c))
+                    cv = _cell(_xls_num(sheet.cell_value(r, c)))
                     if cv == "":
                         continue
                     pairs.append(f"{header[c]}: {cv}" if header[c] else cv)
@@ -196,8 +209,19 @@ def _from_image(data: bytes, ext: str) -> ExtractResult:
     return ExtractResult(needs_ocr=True, ext=ext, extractor="ocr-pending")
 
 
-def _unsupported_doc(data: bytes, ext: str) -> ExtractResult:
-    return ExtractResult(ext=ext, extractor="none", error="unsupported: .doc 老格式需外部转换(LibreOffice/antiword),本步未接")
+def _from_doc(data: bytes, ext: str) -> ExtractResult:
+    """.doc 老格式:先经 LibreOffice 转成 .docx 字节,再走同一条 docx 抽取路径。
+
+    转换失败(未装 / 超时 / 坏文件)按 unsupported / 转换失败记进 error,不抛。
+    """
+    docx, err = doc_convert.doc_to_docx(data)
+    if docx is None:
+        return ExtractResult(ext=ext, extractor="none", error=err or "doc 转换失败")
+    res = _from_docx(docx, ext)
+    res.extractor = "libreoffice+python-docx"
+    if res.error:
+        res.error = f"doc 转换成功但解析失败: {res.error}"
+    return res
 
 
 def _skip_zip(data: bytes, ext: str) -> ExtractResult:
@@ -214,7 +238,7 @@ _DISPATCH = {
     "png": _from_image,
     "jpg": _from_image,
     "jpeg": _from_image,
-    "doc": _unsupported_doc,
+    "doc": _from_doc,
     "zip": _skip_zip,
 }
 
