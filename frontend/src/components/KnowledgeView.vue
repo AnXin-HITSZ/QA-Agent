@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 
 import { useKnowledge } from "../composables/useKnowledge";
 import { errorText, formatWhen } from "../lib/format";
+import { isAdmin } from "../stores/auth";
 import KnowledgeBreadcrumb from "./KnowledgeBreadcrumb.vue";
 import KnowledgeToolbar from "./KnowledgeToolbar.vue";
 import ReindexBar from "./ReindexBar.vue";
@@ -25,12 +26,19 @@ const {
   refreshManifest,
 } = useKnowledge();
 
+// 知识库对普通用户只读:上传 / 新建分类 / 删除 / 索引任务 / 版本回退只对管理员渲染
+// (接口本身也都带管理员守卫,这里只是不把按钮摆出来)。
+const canWrite = computed(() => isAdmin());
+
 // 进入知识库视图即载入当前节点(单例保留了上次位置);
-// 同时恢复索引任务进度(可能由别的标签页 / 上次访问发起)与版本信息。
+// 管理员再恢复索引任务进度(可能由别的标签页 / 上次访问发起)与版本信息 ——
+// 这两个接口在 /admin/knowledge 前缀下,普通用户不请求。
 onMounted(() => {
   void loadTree(prefix.value);
-  void resumeJob();
-  void refreshManifest();
+  if (canWrite.value) {
+    void resumeJob();
+    void refreshManifest();
+  }
 });
 
 const folders = computed(() => tree.value?.folders ?? []);
@@ -86,7 +94,8 @@ function formatSize(n: number): string {
         <div>
           <h1 class="pghead__title">知识库</h1>
           <p class="pghead__sub">
-            管理各分类下的原件;上传 / 删除自动维护索引,版本回退在页面底部。
+            <template v-if="canWrite">管理各分类下的原件;上传 / 删除自动维护索引,版本回退在页面底部。</template>
+            <template v-else>浏览各分类下的原件。</template>
           </p>
         </div>
         <div class="kv__aside">
@@ -116,15 +125,18 @@ function formatSize(n: number): string {
         <button class="kv__retry" type="button" @click="refresh">重试</button>
       </section>
 
-      <!-- 已接通:工具条 + 内容 + 索引任务与版本 -->
+      <!-- 已接通:工具条 + 内容 + 索引任务与版本(后两者仅管理员可见) -->
       <template v-else>
-        <KnowledgeToolbar />
+        <KnowledgeToolbar v-if="canWrite" />
 
         <p v-if="opError" class="kv__opError" role="alert">{{ opError }}</p>
 
         <section v-if="isEmpty && !loading" class="kv__state kv__state--soft">
           <p class="kv__stateHd">这个分类还是空的</p>
-          <p class="kv__stateBody">用上方「新建分类」或「上传文件」往这里添内容。</p>
+          <p class="kv__stateBody">
+            <template v-if="canWrite">用上方「新建分类」或「上传文件」往这里添内容。</template>
+            <template v-else>该分类下暂时没有文件。</template>
+          </p>
         </section>
 
         <section v-else-if="!isEmpty" class="kv__panel">
@@ -142,7 +154,7 @@ function formatSize(n: number): string {
                 <span class="kv__name">{{ name }}</span>
                 <span class="kv__chev" aria-hidden="true">›</span>
               </button>
-              <div class="kv__act">
+              <div v-if="canWrite" class="kv__act">
                 <span v-if="deleting === 'd:' + name" class="kv__deleting">删除中…</span>
                 <template v-else-if="confirmKey === 'd:' + name">
                   <span class="kv__ask">删整个分类?</span>
@@ -175,7 +187,7 @@ function formatSize(n: number): string {
               </span>
               <span class="kv__size">{{ formatSize(f.size) }}</span>
               <span v-if="formatWhen(f.last_modified)" class="kv__when">{{ formatWhen(f.last_modified) }}</span>
-              <div class="kv__act">
+              <div v-if="canWrite" class="kv__act">
                 <span v-if="deleting === 'f:' + f.key" class="kv__deleting">删除中…</span>
                 <template v-else-if="confirmKey === 'f:' + f.key">
                   <button class="kv__yes" type="button" @click="delFile(f.key)">删除</button>
@@ -194,12 +206,12 @@ function formatSize(n: number): string {
             </li>
           </ul>
 
-          <p v-if="files.length && !indexReady" class="kv__note">
+          <p v-if="canWrite && files.length && !indexReady" class="kv__note">
             索引状态暂不可用(向量库未接通),不影响浏览。
           </p>
         </section>
 
-        <ReindexBar />
+        <ReindexBar v-if="canWrite" />
       </template>
     </div>
   </main>

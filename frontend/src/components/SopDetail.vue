@@ -3,9 +3,13 @@ import { computed } from "vue";
 
 import { useSops } from "../composables/useSops";
 import { formatWhen } from "../lib/format";
+import { isAdmin } from "../stores/auth";
 import MarkdownView from "./MarkdownView.vue";
 
 const { current, detailLoading, detailError, showList, openEditor } = useSops();
+
+// SOP 对普通用户只读:详情页不摆「编辑」按钮(接口本身也带管理员守卫)。
+const canWrite = computed(() => isAdmin());
 
 // 更新于 X · 存于 sops/id.md;时间未知时只显存放位置。
 const meta = computed(() => {
@@ -41,7 +45,7 @@ const meta = computed(() => {
               <h2 class="doc__name">{{ current.name }}</h2>
               <code class="sop__id">{{ current.id }}</code>
             </div>
-            <div class="doc__act">
+            <div v-if="canWrite" class="doc__act">
               <button class="btn-ghost" type="button" @click="openEditor(current.id)">编辑</button>
             </div>
           </div>

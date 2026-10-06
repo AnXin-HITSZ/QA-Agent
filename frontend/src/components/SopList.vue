@@ -3,8 +3,12 @@ import { computed, ref } from "vue";
 
 import { useSops } from "../composables/useSops";
 import { errorText, formatWhen } from "../lib/format";
+import { isAdmin } from "../stores/auth";
 
 const { list, loading, error, storageEnabled, openDetail, openEditor, loadList, remove } = useSops();
+
+// SOP 对普通用户只读:新建 / 编辑 / 删除只对管理员渲染(接口本身也都带管理员守卫)。
+const canWrite = computed(() => isAdmin());
 
 // 行内删除确认:同一时刻只有一张卡处于确认态(键为 SOP id)。
 const confirmId = ref<string | null>(null);
@@ -42,7 +46,7 @@ async function onDelete(id: string): Promise<void> {
           </p>
         </div>
         <button
-          v-if="storageEnabled"
+          v-if="storageEnabled && canWrite"
           class="btn-primary"
           type="button"
           @click="openEditor()"
@@ -70,7 +74,10 @@ async function onDelete(id: string): Promise<void> {
       <!-- 空:一篇都没有 -->
       <section v-else-if="!loading && !count" class="sv__state sv__state--soft">
         <p class="sv__stateHd">还没有 SOP 流程</p>
-        <p class="sv__stateBody">用右上角「新建 SOP」写下第一篇报销 / 办事流程。</p>
+        <p class="sv__stateBody">
+          <template v-if="canWrite">用右上角「新建 SOP」写下第一篇报销 / 办事流程。</template>
+          <template v-else>暂时还没有可查看的流程。</template>
+        </p>
       </section>
 
       <!-- 列表 -->
@@ -110,8 +117,8 @@ async function onDelete(id: string): Promise<void> {
                 </div>
                 <div v-else class="sop__act" @click.stop>
                   <button class="link" type="button" @click="openDetail(s.id)">查看</button>
-                  <button class="link" type="button" @click="openEditor(s.id)">编辑</button>
-                  <button class="link link--del" type="button" @click="confirmId = s.id">删除</button>
+                  <button v-if="canWrite" class="link" type="button" @click="openEditor(s.id)">编辑</button>
+                  <button v-if="canWrite" class="link link--del" type="button" @click="confirmId = s.id">删除</button>
                 </div>
               </div>
             </div>

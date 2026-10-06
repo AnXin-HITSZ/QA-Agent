@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { onErrorCaptured, onMounted, ref } from "vue";
+import { computed, onErrorCaptured, onMounted, ref } from "vue";
 
 import "../styles/sop.css";
 import { useSops } from "../composables/useSops";
+import { isAdmin } from "../stores/auth";
 import SopDetail from "./SopDetail.vue";
 import SopEditor from "./SopEditor.vue";
 import SopList from "./SopList.vue";
 
 const { mode, current, loaded, loadList, showList } = useSops();
+
+// SOP 对普通用户只读:编辑器整个不渲染(入口按钮已隐藏;兜底防手改状态)。
+const canWrite = computed(() => isAdmin());
 
 // 进入视图即载入一次(单例已载过则保留列表,不重复请求)。
 onMounted(() => {
@@ -48,7 +52,7 @@ function recover(): void {
   </main>
 
   <template v-else>
-    <SopEditor v-if="mode === 'editor'" />
+    <SopEditor v-if="mode === 'editor' && canWrite" />
     <SopDetail v-else-if="mode === 'detail'" />
     <SopList v-else />
   </template>

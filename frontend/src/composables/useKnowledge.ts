@@ -34,6 +34,7 @@ import {
   type KnowledgeTree,
   type UploadResult,
 } from "../api";
+import { isAdmin } from "../stores/auth";
 
 // ── 提取方式 ──
 
@@ -152,13 +153,19 @@ async function loadTree(p: string = prefix.value): Promise<void> {
     return;
   }
   // 索引徽标单独取:Qdrant 未接通不该阻断浏览,失败则静默降级(不显徽标)。
-  try {
-    const r = await indexedKeys(prefix.value);
-    indexedSet.value = new Set(r.keys);
-    indexReady.value = true;
-  } catch {
+  // 该接口在 /admin 前缀下,普通用户没有权限 —— 直接跳过,不白跑一次 403(视图也不显徽标)。
+  if (!isAdmin()) {
     indexedSet.value = new Set();
     indexReady.value = false;
+  } else {
+    try {
+      const r = await indexedKeys(prefix.value);
+      indexedSet.value = new Set(r.keys);
+      indexReady.value = true;
+    } catch {
+      indexedSet.value = new Set();
+      indexReady.value = false;
+    }
   }
   loading.value = false;
 }

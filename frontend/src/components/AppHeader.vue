@@ -19,6 +19,10 @@ const TABS: Array<{ name: AppRouteName; label: string }> = [
   { name: "metering", label: "调用与费用" },
 ];
 
+// 调用与费用只对管理员开放:普通用户的标签行里直接没有它
+// (直接输 hash 也会被 App.vue 的路由纠偏挡回对话)。
+const tabs = computed(() => (isAdmin() ? TABS : TABS.filter((t) => t.name !== "metering")));
+
 const me = computed(() => authState.user);
 const initial = computed(() => (me.value?.display_name || me.value?.email || "?").slice(0, 1).toUpperCase());
 const busy = ref(false);
@@ -85,7 +89,7 @@ async function signOut(all: boolean): Promise<void> {
     <div class="hd__right">
       <nav class="hd__tabs" aria-label="视图切换">
         <button
-          v-for="tab in TABS"
+          v-for="tab in tabs"
           :key="tab.name"
           class="hd__tab"
           type="button"

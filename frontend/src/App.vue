@@ -107,12 +107,18 @@ function go(name: RouteName, params: Record<string, string> = {}): void {
   location.hash = next; // 触发 hashchange → applyHash
 }
 
+// 只对管理员开放的视图:用户管理(接口全在 /admin 前缀下)、调用与费用(计量接口同样)。
+// 普通用户手改 hash / 翻旧书签进来时纠正回对话,不让「点开就是报错」发生。
+function blockedForRole(name: RouteName): boolean {
+  return (name === "users" || name === "metering") && !isAdmin();
+}
+
 // 登录态与路由对不上时纠偏,让地址栏和屏幕上是同一件事:
-// 已登录却停在认证页(或非管理员停在用户管理)→ 回对话;未登录却停在应用内路由 → 回登录页。
+// 已登录却停在认证页(或非管理员停在只对管理员开放的视图)→ 回对话;未登录却停在应用内路由 → 回登录页。
 // 前端这一层只是省得看到不相干的界面;**权限本身由后端把关**(见 docs 技术方案 §6)。
 function settle(): void {
   if (authState.user) {
-    if (isAuthRoute(route.value.name) || (route.value.name === "users" && !isAdmin())) go("chat");
+    if (isAuthRoute(route.value.name) || blockedForRole(route.value.name)) go("chat");
     return;
   }
   if (!isAuthRoute(route.value.name)) go("login");
@@ -170,7 +176,7 @@ onMounted(() => {
   // 首屏把 hash 规整成标准形式(不新增历史条目)。带令牌的邮件链接原样留着 ——
   // 令牌只在 hash 里,重写掉就等于把用户手上的链接弄丢。
   if (!route.value.token) {
-    const h = href(route.value.name === "users" && !isAdmin() ? "chat" : route.value.name);
+    const h = href(blockedForRole(route.value.name) ? "chat" : route.value.name);
     if (location.hash !== h) history.replaceState(null, "", h);
   }
 
