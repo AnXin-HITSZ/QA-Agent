@@ -13,6 +13,11 @@
 # 直接起会报 WinError 10013,看着像权限错、实为端口被独占)脚本自动向上找空闲端口,并把最终
 # 端口同步给前端代理(QA_AGENT_API_TARGET),两者不会走散。想钉死:QA_AGENT_BACK_PORT=8001
 # bash start-dev.sh(被占则直接报错,不替你换)。
+#
+# 数据库:本地不装 MySQL —— 账号 / 会话 / 调用日志都在 ECS 上(开发库 qa_agent_dev)。
+# 脚本按 backend/.env 里 MYSQL_URL 的本地端口自动架 SSH 隧道
+# (要求 `ssh aliyun-ecs` 免密可用),退出时只关本次起的隧道;端口已有监听(隧道/本机库)则复用,不动它。
+# SSH 别名默认 aliyun-ecs,换机器时用 QA_AGENT_SSH_ALIAS 覆盖,不要改脚本。
 
 set -euo pipefail
 
@@ -26,6 +31,9 @@ LAST_PORT="$FIRST_PORT"
 [ -n "$PIN" ] || LAST_PORT=$((FIRST_PORT + 19))   # 未钉死时最多自动试 8000–8019
 
 port_in_use() { netstat -ano 2>/dev/null | grep -qiE "[:.]$1[[:space:]].*listening"; }
+
+# /dev/tcp 是 bash 内建的重定向,不需要 nc:用来验证「端口真能连上」(隧道是否就绪)。
+port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
 BACK_PORT=""
 for p in $(seq "$FIRST_PORT" "$LAST_PORT"); do
@@ -72,13 +80,53 @@ export NO_PROXY="${QDRANT_HOST:+$QDRANT_HOST,}localhost,127.0.0.1${NO_PROXY:+,$N
 export no_proxy="$NO_PROXY"
 echo "NO_PROXY=$NO_PROXY"
 
-# 退出或中断(Ctrl+C)时,连带关掉前后端。
+# 退出或中断(Ctrl+C)时,连带关掉隧道与前后端(只关本脚本起的,复用的不动)。
 cleanup() {
   echo
-  echo ">> 正在停止前后端 ..."
-  kill "${BACK:-}" "${FRONT:-}" 2>/dev/null || true
+  echo ">> 正在停止隧道 / 前后端 ..."
+  kill "${BACK:-}" "${FRONT:-}" "${TUNNEL:-}" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
+
+# ---- MySQL:本地不装库,把 ECS 的 MySQL 经 SSH 隧道映射到 .env 里写的那个本地端口 ----
+# MYSQL_URL 形如 mysql+pymysql://user:pass@127.0.0.1:3306/qa_agent_dev —— 其中的
+# 127.0.0.1 就是隧道口(不是本机真有个库)。端口从 URL 里读,不另立一份配置,两边不会走散。
+MYSQL_URL_LINE="$(grep -E '^MYSQL_URL=' backend/.env 2>/dev/null | head -1 | tr -d '\r' || true)"
+DB_HOST="$(printf '%s' "$MYSQL_URL_LINE" | sed -E 's#^[^@]*@([^:/]+).*#\1#')"
+DB_PORT="$(printf '%s' "$MYSQL_URL_LINE" | sed -E 's#^[^@]*@[^:/]+:([0-9]+).*#\1#')"
+[[ "$DB_HOST" =~ ^[A-Za-z0-9._-]+$ ]] || DB_HOST=""   # 解析不出来:当没配,不猜
+[[ "$DB_PORT" =~ ^[0-9]+$ ]] || DB_PORT="3306"
+SSH_ALIAS="${QA_AGENT_SSH_ALIAS:-aliyun-ecs}"          # ~/.ssh/config 里的别名(装 MySQL 的那台 ECS)
+REMOTE_MYSQL="127.0.0.1:3306"                          # ECS 上 MySQL 的监听地址:sshd 在那头连它
+
+if [ -z "$MYSQL_URL_LINE" ]; then
+  echo ">> backend/.env 没配 MYSQL_URL,跳过隧道(登录 / 会话都会不可用)。"
+elif [ -z "$DB_HOST" ]; then
+  echo ">> MYSQL_URL 解析不出主机,跳过隧道(登录会不可用)。"
+elif [ "$DB_HOST" != "127.0.0.1" ] && [ "$DB_HOST" != "localhost" ]; then
+  echo ">> MYSQL_URL 指向 ${DB_HOST}(非本机),由它直连,不架隧道。"
+elif port_in_use "$DB_PORT"; then
+  echo ">> 本机 ${DB_PORT} 已在监听:复用现有隧道(退出时不会关掉它)。"
+else
+  echo ">> SSH 隧道 127.0.0.1:${DB_PORT} → ${SSH_ALIAS}:${REMOTE_MYSQL}(ECS MySQL,开发库 qa_agent_dev)"
+  # ExitOnForwardFailure:转发建不起来就让 ssh 立刻失败,而不是假装连上了。
+  ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -L "127.0.0.1:${DB_PORT}:${REMOTE_MYSQL}" "$SSH_ALIAS" &
+  TUNNEL=$!
+  TUNNEL_UP=0
+  for _ in $(seq 1 50); do
+    if port_open "$DB_PORT"; then TUNNEL_UP=1; break; fi
+    sleep 0.2
+  done
+  if [ "$TUNNEL_UP" = 1 ]; then
+    echo ">> 隧道就绪(pid ${TUNNEL})"
+  else
+    echo "✗ 隧道没起来:先确认 'ssh ${SSH_ALIAS}' 能免密直连。"
+    echo "  本地不装 MySQL,账号 / 会话 / 费用都读 ECS 的开发库;没有隧道就登录不了。"
+    kill "$TUNNEL" 2>/dev/null || true
+    exit 1
+  fi
+fi
 
 echo ">> 启动后端  http://127.0.0.1:${BACK_PORT}  (--reload 热重载,读 backend/.env)"
 ( cd backend && exec "$PY" -m uvicorn app.main:app --reload --host 127.0.0.1 --port "$BACK_PORT" ) &
