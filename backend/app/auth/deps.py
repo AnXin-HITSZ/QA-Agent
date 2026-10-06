@@ -41,7 +41,7 @@ async def auth_ready(request: Request) -> AuthService:
     """认证路由的**统一前置依赖**:取服务,并先确认关键配置在位。
 
     检查两件事,缺任何一件都是 503 + 明确原因(绝不降级、绝不给出误导性的 401):
-    - 数据库(METERING_MYSQL_URL):用户 / 会话都存那里;
+    - 数据库(MYSQL_URL):用户 / 会话都存那里;
     - 令牌签名密钥(AUTH_JWT_SECRET):空或过弱时 tokens.jwt_secret() 直接抛。
 
     写成依赖而不是散在每个函数体里:新增认证接口只要挂了它,就天然做了这套检查 ——
@@ -52,7 +52,7 @@ async def auth_ready(request: Request) -> AuthService:
 
     if not auth_db.configured():
         raise AuthNotConfigured(
-            "未配置数据库(METERING_MYSQL_URL):认证 / 用户管理不可用。"
+            "未配置数据库(MYSQL_URL):认证 / 用户管理不可用。"
             "见 docs/认证鉴权与用户管理技术方案.md §10。"
         )
     jwt_secret()                      # 空 / 过弱 / 仍是示例值 → AuthNotConfigured

@@ -467,7 +467,7 @@ def test_missing_secret_or_db_reports_503_not_anonymous(auth_client, auth_env, m
     assert r.status_code == 503
     assert r.json()["detail"]["code"] == "auth_not_configured"
 
-    monkeypatch.setattr(auth_env.settings, "metering_mysql_url", "")
+    monkeypatch.setattr(auth_env.settings, "mysql_url", "")
     r = auth_client.post("/api/v1/auth/register",
                          json={"email": "a@b.com", "password": "Lab-QA-2026!strong"})
     assert r.status_code == 503

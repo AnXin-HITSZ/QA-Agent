@@ -141,7 +141,7 @@ def app_db(mysql, dsn, monkeypatch):  # noqa: ARG001 —— mysql 是前置:先�
     from app.config import get_settings
 
     s = get_settings()
-    monkeypatch.setattr(s, "metering_mysql_url", dsn)
+    monkeypatch.setattr(s, "mysql_url", dsn)
     monkeypatch.setattr(s, "auth_jwt_secret", "auth-mysql-test-secret-" + "0" * 32)
     # 宽限窗口是本文件的重点之一:窗口为 0 时,并发刷新的后到者会被判成重放(见最后一条用例)。
     monkeypatch.setattr(s, "auth_refresh_grace_seconds", 30)

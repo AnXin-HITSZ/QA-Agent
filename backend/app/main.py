@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     if checkpointer is None:
         logger.info("对话记忆:单轮模式(无跨轮记忆);配置 REDIS_URL 即可开启。")
 
-    # 认证服务:用户 / 会话 / 会话目录 / 审计都在 MySQL(METERING_MYSQL_URL 指向的库)。
+    # 认证服务:用户 / 会话 / 会话目录 / 审计都在 MySQL(MYSQL_URL 指向的库)。
     # 这里只是装配对象,不建连接、不校验配置 —— 真正的「没配就明确报错」发生在请求路径上
     # (app/auth/db.py 的 _require_configured → 503,绝不降级为匿名可用)。
     from app.auth.service import AuthService
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
     from app.auth import db as auth_db
 
     if not auth_db.configured():
-        logger.warning("认证:未配置 METERING_MYSQL_URL —— 认证 / 用户管理接口将返回 503;"
+        logger.warning("认证:未配置 MYSQL_URL —— 认证 / 用户管理接口将返回 503;"
                        "聊天等公开能力不受影响。见 docs/认证鉴权与用户管理技术方案.md §10。")
 
     # 待办清单存储:普通 Redis(单键 GET/SET),不依赖 RedisJSON/RediSearch,与 checkpointer
@@ -104,7 +104,7 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("会话删除对账失败(不影响启动):%s", exc)
 
-    # 调用日志与费用统计:起后台补写线程(不建表、不阻塞启动;未配 METERING_MYSQL_URL 则什么都不做,
+    # 调用日志与费用统计:起后台补写线程(不建表、不阻塞启动;未配 MYSQL_URL 则什么都不做,
     # 索引与检索照常)。表结构由迁移脚本建立,见 docs/调用日志与费用统计技术方案.md §6。
     try:
         from app.metering import start as metering_start, status as metering_status

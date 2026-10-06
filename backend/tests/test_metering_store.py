@@ -57,7 +57,7 @@ def sqlite_env(monkeypatch, tmp_path):
 
     s = get_settings()
     monkeypatch.setattr(s, "metering_enabled", True)
-    monkeypatch.setattr(s, "metering_mysql_url",
+    monkeypatch.setattr(s, "mysql_url",
                         f"sqlite+pysqlite:///{(tmp_path / 'metering.db').as_posix()}")
     monkeypatch.setattr(s, "metering_pending_dir", str(tmp_path / "pending"))
 

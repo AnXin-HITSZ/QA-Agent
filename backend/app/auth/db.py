@@ -1,6 +1,6 @@
 """认证模块的数据库访问:与计量层共用同一个 MySQL 引擎 / 连接池 / 短事务约定。
 
-一个应用一个库:`METERING_MYSQL_URL` 指向的就是「本应用的数据库」,调用日志、用户、
+一个应用一个库:`MYSQL_URL` 指向的就是「本应用的数据库」,调用日志、用户、
 会话、会话目录、审计都在里面(见 docs/认证鉴权与用户管理技术方案.md §7)。
 不另建第二个连接配置,也不另建第二个池 —— 池总量按「workers × (pool + overflow)」算一次就好。
 
@@ -26,13 +26,13 @@ T = TypeVar("T")
 
 def configured() -> bool:
     """是否配了数据库地址(只做「能不能用」判断,不建连接)。"""
-    return bool((get_settings().metering_mysql_url or "").strip())
+    return bool((get_settings().mysql_url or "").strip())
 
 
 def _require_configured() -> None:
     if not configured():
         raise AuthNotConfigured(
-            "未配置数据库(METERING_MYSQL_URL):用户 / 会话 / 会话目录都存 MySQL,"
+            "未配置数据库(MYSQL_URL):用户 / 会话 / 会话目录都存 MySQL,"
             "认证接口不可用。请按 docs/认证鉴权与用户管理技术方案.md §10 配置后重启。"
         )
 
@@ -74,7 +74,7 @@ def utc_naive() -> datetime:
 def ping() -> tuple[bool, str]:
     """连通性自检(启动日志 / 运维排查用),绝不抛异常。"""
     if not configured():
-        return False, "未配置 METERING_MYSQL_URL"
+        return False, "未配置 MYSQL_URL"
     return _mysql.ping()
 
 

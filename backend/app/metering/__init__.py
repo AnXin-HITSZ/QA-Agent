@@ -52,7 +52,7 @@ __all__ = [
 ]
 
 METERING_DISABLED_MESSAGE = (
-    "调用日志与费用统计未启用:请在 backend/.env 配置 METERING_MYSQL_URL"
+    "调用日志与费用统计未启用:请在 backend/.env 配置 MYSQL_URL"
     "(见 docs/调用日志与费用统计技术方案.md §9);未配置时不影响索引与检索。"
 )
 

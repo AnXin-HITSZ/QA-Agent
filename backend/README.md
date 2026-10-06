@@ -356,7 +356,7 @@ none = 显式关闭并重复付费调用，仅限本地开发）、共用 `REDIS
 记录 embedding / OCR 的**真实外部调用**与按配置单价的**估算费用**：
 日志主存储是 **MySQL**（Redis 仍只做缓存与会话，Qdrant 仍只做向量），
 **不含聊天 LLM 调用**，**不接官方账单**，界面只报「估算费用」。
-未配置 `METERING_MYSQL_URL` 时整层静默关闭，不影响 OCR / 索引 / 检索。
+未配置 `MYSQL_URL` 时整层静默关闭，不影响 OCR / 索引 / 检索。
 
 ### 记什么、怎么记
 
@@ -402,7 +402,7 @@ none = 显式关闭并重复付费调用，仅限本地开发）、共用 `REDIS
 
 ### 配置
 
-`.env`（见 `.env.example`）：`METERING_MYSQL_URL` / `METERING_POOL_*` / 读写超时 /
+`.env`（见 `.env.example`）：`MYSQL_URL` / `MYSQL_POOL_*` / 读写超时 /
 `METERING_PENDING_DIR` / `METERING_QUEUE_MAX` / `METERING_FLUSH_BATCH` /
 `METERING_FLUSH_INTERVAL_SECONDS` / `METERING_PRICE_CACHE_SECONDS`。
 价格不内置、不硬编码：`price_config` 为空时所有金额显示「无法估算」。

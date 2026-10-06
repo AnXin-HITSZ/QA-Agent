@@ -1,7 +1,7 @@
 """MySQL 连接:惰性建引擎、短事务会话、可自检、关停时释放连接池(技术方案 §7)。
 
 约束(逐条对应方案):
-- 引擎惰性创建:未配置 METERING_MYSQL_URL 时不建任何连接,业务照常跑(计量静默关闭);
+- 引擎惰性创建:未配置 MYSQL_URL 时不建任何连接,业务照常跑(计量静默关闭);
 - 不建表 / 不改表:建表与升级只走 migrations/ 下手工执行的 SQL(见该目录 README),
   多个 uvicorn worker 启动时不会并发 DDL;
 - 连接池保守:每个进程一份池,总量 ≈ workers × (pool + overflow),见方案 §7 的算式;
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class MeteringNotConfigured(RuntimeError):
-    """未配置 METERING_MYSQL_URL:调用方据此静默关闭计量,不当成故障。"""
+    """未配置 MYSQL_URL:调用方据此静默关闭计量,不当成故障。"""
 
 
 _engine = None
@@ -33,16 +33,16 @@ _engine_url: str | None = None
 
 def configured() -> bool:
     """是否配了数据库地址(只为「能不能用」判断,不建连接)。"""
-    return bool((get_settings().metering_mysql_url or "").strip())
+    return bool((get_settings().mysql_url or "").strip())
 
 
 def get_engine():
     """按配置惰性创建引擎;未配置抛 MeteringNotConfigured。"""
     global _engine, _engine_url
-    url = (get_settings().metering_mysql_url or "").strip()
+    url = (get_settings().mysql_url or "").strip()
     if not url:
         raise MeteringNotConfigured(
-            "未配置 METERING_MYSQL_URL:调用日志与费用统计已关闭"
+            "未配置 MYSQL_URL:调用日志与费用统计已关闭"
             "(不影响 OCR / 索引 / 检索,见 docs/调用日志与费用统计技术方案.md)"
         )
     if _engine is not None and _engine_url == url:
@@ -58,11 +58,11 @@ def get_engine():
     args = {
         # 缺失的库 / 账号等配置错误要立刻暴露,不要静默重试
         "pool_pre_ping": True,
-        "pool_recycle": max(60, int(s.metering_mysql_pool_recycle_seconds)),
+        "pool_recycle": max(60, int(s.mysql_pool_recycle_seconds)),
         "connect_args": {
-            "connect_timeout": max(1.0, float(s.metering_mysql_connect_timeout_seconds)),
-            "read_timeout": max(1.0, float(s.metering_mysql_read_timeout_seconds)),
-            "write_timeout": max(1.0, float(s.metering_mysql_write_timeout_seconds)),
+            "connect_timeout": max(1.0, float(s.mysql_connect_timeout_seconds)),
+            "read_timeout": max(1.0, float(s.mysql_read_timeout_seconds)),
+            "write_timeout": max(1.0, float(s.mysql_write_timeout_seconds)),
             "charset": "utf8mb4",
         },
     }
@@ -70,8 +70,8 @@ def get_engine():
         args.pop("pool_recycle", None)
         args["connect_args"] = {}
     else:
-        args["pool_size"] = max(1, int(s.metering_mysql_pool_size))
-        args["max_overflow"] = max(0, int(s.metering_mysql_max_overflow))
+        args["pool_size"] = max(1, int(s.mysql_pool_size))
+        args["max_overflow"] = max(0, int(s.mysql_max_overflow))
     _engine = create_engine(url, **args)
     _engine_url = url
     return _engine

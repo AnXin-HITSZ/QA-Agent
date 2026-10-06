@@ -61,7 +61,7 @@
 - ⏭ **待你执行 / 未验证**:① ECS 上建 `qa_agent_dev` / `qa_agent_prod` 两库并执行
   `mysql <db> < migrations/0001_create_metering_tables.up.sql`(语句见方案 §9.2/§9.3 与 migrations/README.md);
   ② 按官方价格页核实后在前端「调用与费用 → 估算依据」里填入单价(不内置、不硬编码;为空时界面显示「无法估算」);
-  ③ 配置 `METERING_MYSQL_URL` 后做一次真实 OCR / 索引小样本验收(真实计费仍未验证)。
+  ③ 配置 `MYSQL_URL` 后做一次真实 OCR / 索引小样本验收(真实计费仍未验证)。
 
 ---
 

@@ -275,7 +275,7 @@ def test_record_call_never_raises_even_if_writer_is_broken(metering_env, monkeyp
 
 
 def test_record_call_is_noop_when_metering_disabled(metering_env, monkeypatch):
-    monkeypatch.setattr(metering_env.settings, "metering_mysql_url", "")
+    monkeypatch.setattr(metering_env.settings, "mysql_url", "")
     record_call(_embedding_call())
     assert metering_env.writer.status()["queued"] == 0
 

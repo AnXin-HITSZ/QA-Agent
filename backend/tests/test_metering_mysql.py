@@ -169,7 +169,7 @@ def store(dsn, mysql, monkeypatch, tmp_path):
 
     s = get_settings()
     monkeypatch.setattr(s, "metering_enabled", True)
-    monkeypatch.setattr(s, "metering_mysql_url", dsn)
+    monkeypatch.setattr(s, "mysql_url", dsn)
     monkeypatch.setattr(s, "metering_pending_dir", str(tmp_path / "pending"))
     monkeypatch.setattr(s, "metering_flush_interval_seconds", 3600.0)   # 只走显式 flush
     db.dispose()                       # 丢掉别的用例留下的引擎(URL 变了)
@@ -438,7 +438,7 @@ def test_writer_flushes_spills_and_backfills_against_real_mysql(store, dsn, monk
         assert store.get_call(ok.event_id) is not None           # 正常路径:队列 → MySQL
 
         # 把地址换成一个连不上的库:写入失败 → 事件必须落盘而不是消失
-        monkeypatch.setattr(s, "metering_mysql_url",
+        monkeypatch.setattr(s, "mysql_url",
                             "mysql+pymysql://metering:never-used@127.0.0.1:1/qa_agent_scratch")
         down = mk.embedding_call(usage_quantity=Decimal(100))
         writer.call(down)
@@ -448,7 +448,7 @@ def test_writer_flushes_spills_and_backfills_against_real_mysql(store, dsn, monk
         assert _count(mysql, "call_events") == 1                  # 故障期间确实没写进去
 
         # 数据库回来:补写目录里的事件要进库,且只进一次
-        monkeypatch.setattr(s, "metering_mysql_url", dsn)
+        monkeypatch.setattr(s, "mysql_url", dsn)
         db.dispose()
         writer.flush(timeout=10)
         status = writer.status()

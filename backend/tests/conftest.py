@@ -216,7 +216,7 @@ class NoThreadWriter:
 def metering_env(monkeypatch, tmp_path):
     """计量环境:内存仓库 + 不入队的后台线程模型 + 临时补写目录。
 
-    METERING_MYSQL_URL 指向本机一个**不存在**的端口:测试永远不会真的去连它
+    MYSQL_URL 指向本机一个**不存在**的端口:测试永远不会真的去连它
     (仓库已换成内存实现),只用来让 db.configured() 为真、计量开关打开。
     """
     from types import SimpleNamespace
@@ -235,7 +235,7 @@ def metering_env(monkeypatch, tmp_path):
 
     s = get_settings()
     monkeypatch.setattr(s, "metering_enabled", True)
-    monkeypatch.setattr(s, "metering_mysql_url",
+    monkeypatch.setattr(s, "mysql_url",
                         "mysql+pymysql://metering:never-used@127.0.0.1:1/qa_agent_test")
     monkeypatch.setattr(s, "metering_pending_dir", str(tmp_path / "pending"))
     monkeypatch.setattr(s, "metering_flush_batch", 200)
@@ -388,7 +388,7 @@ def auth_db(monkeypatch, tmp_path):
     from app.config import get_settings
 
     s = get_settings()
-    monkeypatch.setattr(s, "metering_mysql_url",
+    monkeypatch.setattr(s, "mysql_url",
                         f"sqlite+pysqlite:///{(tmp_path / 'auth.db').as_posix()}")
     db.dispose()                                   # 别让别的用例的引擎跨到这里
     engine = db.get_engine()

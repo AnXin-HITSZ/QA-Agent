@@ -366,7 +366,7 @@ async function onRemovePrice(id: number | null): Promise<void> {
       <!-- 口径与健康提示(按重要性依次出现) -->
       <p v-if="persistence && !persistence.enabled" class="mt__note">
         <strong>调用日志与费用统计未启用。</strong
-        >{{ persistence.message || "请在 backend/.env 配置 METERING_MYSQL_URL 后重启后端。" }}
+        >{{ persistence.message || "请在 backend/.env 配置 MYSQL_URL 后重启后端。" }}
         未配置不影响 OCR / 索引 / 检索,只是不留调用记录。
       </p>
       <p v-if="persistence && persistence.enabled && persistence.db_ok === false" class="mt__note mt__note--warn">

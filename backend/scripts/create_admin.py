@@ -18,7 +18,7 @@
 - 已存在同名邮箱时**拒绝执行**,不改密码、不覆盖 —— 改密码是另一件事(reset_password),
   不要用一个「建管理员」的脚本顺手完成,免得手滑把线上管理员的口令悄悄换掉。
 
-跑之前要配好 METERING_MYSQL_URL 且已执行 0003 迁移(见 docs/认证鉴权与用户管理技术方案.md §9)。
+跑之前要配好 MYSQL_URL 且已执行 0003 迁移(见 docs/认证鉴权与用户管理技术方案.md §9)。
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not db.configured():
-        print("错误:未配置 METERING_MYSQL_URL —— 用户表在 MySQL 里,先按技术方案 §10 配置。",
+        print("错误:未配置 MYSQL_URL —— 用户表在 MySQL 里,先按技术方案 §10 配置。",
               file=sys.stderr)
         return EXIT_NOT_CONFIGURED
 
