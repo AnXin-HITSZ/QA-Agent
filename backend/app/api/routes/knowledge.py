@@ -1,4 +1,4 @@
-"""知识库分类树:建节点 / 列一层 / 上传文件 / 删文件 / 删节点。
+"""知识库分类树:建节点 / 列一层 / 下载 / 上传文件 / 删文件 / 删节点。
 
 原件存阿里云 OSS(见 app/rag/oss.py);**分类树 = OSS key 前缀,由用户在前端手建**。
 用户只能把散文件塞进某个节点(平铺,`prefix + 文件名`),不能上传目录结构 —— 分类
@@ -27,6 +27,7 @@ from app.schemas.knowledge import (
     CreateFolderRequest,
     CreateFolderResult,
     DeleteFolderResult,
+    DownloadUrlResult,
     IndexedKeysResult,
     IndexHistoryEntry,
     IndexJobFiles,
@@ -143,6 +144,27 @@ def get_tree(prefix: str = "") -> KnowledgeTree:
         folders=result["folders"],
         files=[KnowledgeFile(**f) for f in result["files"]],
     )
+
+
+@router.get("/download", response_model=DownloadUrlResult, dependencies=[Depends(require_user)])
+def download_file(key: str) -> DownloadUrlResult:
+    """给单个原件签一个短时效下载 URL(浏览器直接下载,不是打开预览)。
+
+    挂在普通 router(不是 /admin):浏览原件的普通用户也需要取走文件。链接 5 分钟有效、
+    点击才签一次,不预签整表;签名里带 response-content-disposition=attachment(含
+    RFC 5987 中文文件名)—— 跨域下 HTML 的 download 属性会被忽略,「下载而不是打开」
+    只能靠响应头。纯 OSS 签名(本地计算,不发网络请求),不计入「调用与费用」。
+    """
+    k = (key or "").strip().lstrip("/")
+    if not k or k.endswith("/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="key 不能为空、且不能以 / 结尾(下载仅针对文件)",
+        )
+    name = k.rsplit("/", 1)[-1]  # 下载头里的原名 = key 最后一段
+    with _dep_503():
+        url = oss.knowledge_store().sign_url(k, expires=300, filename=name)
+    return DownloadUrlResult(url=url)
 
 
 @router.post("/folder", response_model=CreateFolderResult, status_code=status.HTTP_201_CREATED,

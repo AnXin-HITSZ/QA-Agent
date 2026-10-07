@@ -120,6 +120,14 @@ class FakeKnowledgeStore:
             self.delete_object(k)
         return len(victims)
 
+    def sign_url(self, key: str, expires: int = 900, method: str = "GET",
+                 filename: str | None = None) -> str:
+        """签名 URL 的离线替身(不真签名):把关键参数带进串里,供下载接口用例断言。"""
+        q = f"expires={expires}"
+        if filename:
+            q += f"&disposition=attachment;filename*={filename}"
+        return f"https://oss.test/{self.prefix}{key}?{q}"
+
     def touch(self, key: str, mtime: int | None = None) -> None:
         """模拟源文件被改写(mtime 变化 = 发布前应当拒绝)。"""
         self.mtimes[key] = (mtime if mtime is not None else self.mtimes.get(key, _FAKE_MTIME) + 1)

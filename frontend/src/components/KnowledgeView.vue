@@ -20,14 +20,17 @@ const {
   goto,
   refresh,
   isIndexed,
+  downloadingKey,
+  downloadFile,
   removeFile,
   removeFolder,
   resumeJob,
   refreshManifest,
 } = useKnowledge();
 
-// 知识库对普通用户只读:上传 / 新建分类 / 删除 / 索引任务 / 版本回退只对管理员渲染
-// (接口本身也都带管理员守卫,这里只是不把按钮摆出来)。
+// 知识库对普通用户基本只读;唯一的例外是下载 —— 取走原件不是管理操作,普通用户与
+// 管理员都可用(接口挂在 /knowledge 普通路由,行尾按钮常显)。上传 / 新建分类 / 删除 /
+// 索引任务 / 版本回退只对管理员渲染(接口本身也都带管理员守卫,这里只是不把按钮摆出来)。
 const canWrite = computed(() => isAdmin());
 
 // 进入知识库视图即载入当前节点(单例保留了上次位置);
@@ -75,6 +78,16 @@ async function delFolder(name: string): Promise<void> {
     opError.value = errorText(e);
   } finally {
     deleting.value = null;
+  }
+}
+
+// 下载:取短时效签名链接交给浏览器(响应带 attachment,不会离开本页)。
+async function dlFile(key: string): Promise<void> {
+  opError.value = "";
+  try {
+    await downloadFile(key);
+  } catch (e) {
+    opError.value = `下载失败:${errorText(e)}`;
   }
 }
 
@@ -187,21 +200,33 @@ function formatSize(n: number): string {
               </span>
               <span class="kv__size">{{ formatSize(f.size) }}</span>
               <span v-if="formatWhen(f.last_modified)" class="kv__when">{{ formatWhen(f.last_modified) }}</span>
-              <div v-if="canWrite" class="kv__act">
-                <span v-if="deleting === 'f:' + f.key" class="kv__deleting">删除中…</span>
-                <template v-else-if="confirmKey === 'f:' + f.key">
-                  <button class="kv__yes" type="button" @click="delFile(f.key)">删除</button>
-                  <button class="kv__no" type="button" @click="confirmKey = null">取消</button>
-                </template>
+              <div class="kv__act">
+                <span v-if="downloadingKey === f.key" class="kv__downloading">下载中…</span>
                 <button
                   v-else
-                  class="kv__del"
+                  class="kv__dl"
                   type="button"
-                  aria-label="删除该文件"
-                  @click="confirmKey = 'f:' + f.key"
+                  :aria-label="`下载该文件:${f.name}`"
+                  @click="dlFile(f.key)"
                 >
-                  ✕
+                  下载
                 </button>
+                <template v-if="canWrite">
+                  <span v-if="deleting === 'f:' + f.key" class="kv__deleting">删除中…</span>
+                  <template v-else-if="confirmKey === 'f:' + f.key">
+                    <button class="kv__yes" type="button" @click="delFile(f.key)">删除</button>
+                    <button class="kv__no" type="button" @click="confirmKey = null">取消</button>
+                  </template>
+                  <button
+                    v-else
+                    class="kv__del"
+                    type="button"
+                    aria-label="删除该文件"
+                    @click="confirmKey = 'f:' + f.key"
+                  >
+                    ✕
+                  </button>
+                </template>
               </div>
             </li>
           </ul>
@@ -439,13 +464,30 @@ function formatSize(n: number): string {
   text-align: right;
 }
 
-/* 行内删除确认 */
+/* 行尾动作:下载(常显;安全动作,悬停走主色)+ 行内删除确认 */
 .kv__act {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
   min-height: 24px;
+}
+.kv__dl {
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.kv__dl:hover,
+.kv__dl:focus-visible {
+  color: var(--primary);
+  background: var(--primary-tint);
 }
 .kv__del {
   width: 24px;
@@ -458,12 +500,7 @@ function formatSize(n: number): string {
   color: var(--muted);
   font-size: 13px;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s, color 0.12s, background 0.12s;
-}
-.kv__row:hover .kv__del,
-.kv__del:focus-visible {
-  opacity: 1;
+  transition: color 0.12s, background 0.12s;
 }
 .kv__del:hover {
   color: var(--seal);
@@ -473,7 +510,8 @@ function formatSize(n: number): string {
   color: var(--muted);
   font-size: 12px;
 }
-.kv__deleting {
+.kv__deleting,
+.kv__downloading {
   color: var(--muted);
   font-size: 12px;
 }
@@ -510,9 +548,6 @@ function formatSize(n: number): string {
 @media (max-width: 560px) {
   .kv__when {
     display: none;
-  }
-  .kv__del {
-    opacity: 1;
   }
 }
 </style>

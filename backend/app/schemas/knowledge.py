@@ -33,6 +33,10 @@ class KnowledgeTree(BaseModel):
     files: list[KnowledgeFile] = Field(default_factory=list, description="该节点下的文件")
 
 
+class DownloadUrlResult(BaseModel):
+    url: str = Field(..., description="短时效签名下载 URL(带 attachment 响应头,点开即下载)")
+
+
 class CreateFolderRequest(BaseModel):
     prefix: str = Field(default="", description="父节点(知识库相对前缀;根为空串)")
     name: str = Field(..., min_length=1, description="新建分类节点名(单层,不含 /)")

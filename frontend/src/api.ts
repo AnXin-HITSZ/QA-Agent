@@ -276,7 +276,7 @@ export async function deleteConversation(threadId: string): Promise<void> {
   }
 }
 
-// ── 知识库管理:分类树浏览 + 上传 / 删除 + 增量索引(对齐后端 /knowledge 与 /admin/knowledge)──
+// ── 知识库管理:分类树浏览 + 上传 / 下载 / 删除 + 增量索引(对齐后端 /knowledge 与 /admin/knowledge)──
 
 // 一个原件的元信息(列节点时用)。key 为知识库相对,唯一标识(删除 / 索引都用它)。
 export interface KnowledgeFile {
@@ -485,6 +485,15 @@ async function kfetchVoid(url: string, init?: RequestInit): Promise<void> {
 // 列某节点直接一层(子节点 + 文件)。OSS 未配置 → 抛 ApiError(status 503)。
 export async function getTree(prefix = ""): Promise<KnowledgeTree> {
   return kfetchJson<KnowledgeTree>(`/api/v1/knowledge/tree?prefix=${encodeURIComponent(prefix)}`);
+}
+
+// 取某原件的短时效签名下载 URL(300 秒,点了才签)。普通用户与管理员都可用:
+// 接口挂在 /knowledge 普通路由(不是 /admin);URL 带 attachment 响应头,点开即下载。
+export async function downloadFile(key: string): Promise<string> {
+  const r = await kfetchJson<{ url: string }>(
+    `/api/v1/knowledge/download?key=${encodeURIComponent(key)}`,
+  );
+  return r.url;
 }
 
 // 在父节点下手建一个空分类节点(单层名,不含 /)。

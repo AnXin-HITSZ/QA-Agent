@@ -1,4 +1,5 @@
-// 知识库浏览与管理:逐层浏览 + 新建分类 / 上传(上传后建索引任务)/ 删除 / 索引任务 / 版本回退。
+// 知识库浏览与管理:逐层浏览 + 下载原件 + 新建分类 / 上传(上传后建索引任务)/ 删除 /
+// 索引任务 / 版本回退。
 // 模块级单例:知识库视图、工具条与索引任务面板共享同一份状态,不层层透传。
 //
 // 所有索引都走同一个任务入口 POST /index-jobs(202 + 轮询):上传后的自动索引与单文件重试
@@ -17,6 +18,7 @@ import {
   createIndexJob,
   deleteFile as apiDeleteFile,
   deleteFolder as apiDeleteFolder,
+  downloadFile as apiDownloadFile,
   getCurrentIndexJob,
   getIndexJob,
   getIndexJobFiles,
@@ -314,6 +316,29 @@ async function removeFolder(p: string): Promise<number> {
   return r.deleted;
 }
 
+// ── 下载(普通用户与管理员都可用;只取原件,不改树)──
+
+// 正在取签名链接的那行 key(行尾换成「下载中…」,同时防重复点)。
+const downloadingKey = ref<string | null>(null);
+
+// 取原件签名 URL 并交给浏览器下载:临时 <a> 点击(URL 带 attachment 响应头,
+// 浏览器不会离开本页)。失败抛出,交调用方就地提示。
+async function downloadFile(key: string): Promise<void> {
+  if (downloadingKey.value) return; // 同一时刻只签一条,连点别的行不叠请求
+  downloadingKey.value = key;
+  try {
+    const url = await apiDownloadFile(key);
+    const a = document.createElement("a");
+    a.href = url;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    downloadingKey.value = null;
+  }
+}
+
 // ── 索引任务(202 + 轮询)──
 
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -491,6 +516,7 @@ function reset(): void {
   jobStarting.value = false;
   jobError.value = "";
   manifest.value = null;
+  downloadingKey.value = null;
   watchedRows.clear();
 }
 
@@ -521,6 +547,9 @@ export function useKnowledge() {
     makeFolder,
     removeFile,
     removeFolder,
+    // 下载(普通用户与管理员都可用;行尾常显)
+    downloadingKey,
+    downloadFile,
     // 索引任务
     job,
     jobFiles,

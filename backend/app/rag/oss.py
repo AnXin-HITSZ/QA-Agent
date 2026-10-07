@@ -265,9 +265,22 @@ class OssStore:
             out.append({"key": rel, "size": obj.size, "last_modified": obj.last_modified})
         return out
 
-    def sign_url(self, key: str, expires: int = 900, method: str = "GET") -> str:
-        """生成短时效签名 URL(默认 15 分钟),供前端下载/预览原件;私有桶下必需。"""
-        return get_bucket().sign_url(method, self._full(key), expires, slash_safe=True)
+    def sign_url(self, key: str, expires: int = 900, method: str = "GET",
+                 filename: str | None = None) -> str:
+        """生成短时效签名 URL(默认 15 分钟),供前端下载/预览原件;私有桶下必需。
+
+        filename 非空时把 response-content-disposition: attachment 签进 URL —— 跨域下
+        HTML 的 download 属性会被忽略,想让浏览器「下载而不是打开」只能靠响应头;
+        filename* 按 RFC 5987 百分号编码(中文文件名也能保住)。
+        """
+        params = None
+        if filename:
+            params = {
+                "response-content-disposition":
+                    f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            }
+        return get_bucket().sign_url(method, self._full(key), expires,
+                                     params=params, slash_safe=True)
 
     def check_connection(self, sample: int = 5) -> dict:
         """连通性自检:列举本前缀下最多 sample 个对象。仿 Qdrant 的 get_collections() —— 起服务前手动验 OSS 是否配通;失败让异常上抛。"""
