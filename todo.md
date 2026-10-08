@@ -127,7 +127,7 @@
 - **无本地兜底**:不保留本地目录读取,完全重构为 OSS 读。
 - **废弃字段 `sops_dir` 直接删除**(第 2 步随 loader 重写一并删)。
 - **不迁移现有 `backend/sops/*.md`**:那是测试文档,不迁。
-- **前端布局:全屏三态切换版**(列表 → 详情 → 编辑),即 `frontend/mockups/sop-view.html` 原型;非左右分栏(`sop-view-split.html` 为已否决备选,保留作参考)。
+- **前端布局:全屏三态切换版**(列表 → 详情 → 编辑),即 `frontend/mock/sop-view.html` 原型;非左右分栏(`sop-view-split.html` 为已否决备选,保留作参考)。
 
 ### 步骤与进度(一步一步;不用工作流)
 

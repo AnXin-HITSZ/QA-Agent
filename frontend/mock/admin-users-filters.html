@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>用户管理 · 筛选与搜索布局 mock(待 review)</title>
+<style>
+  /* 令牌直接抄 src/styles/tokens.css(浅色) —— mock 只为看样式,不接构建。
+     类名与真实组件一致(.card/.mini/.auth__input/.row/.tbl…),定稿后可 1:1 落到
+     AdminUsersView.vue 与 auth.css。字体若本机没装 IBM Plex 会回落系统字体,字号/间距不受影响。 */
+  :root {
+    --paper: #edf1f1;
+    --surface: #ffffff;
+    --surface-2: #f4f7f7;
+    --ink: #17272e;
+    --muted: #5b6a70;
+    --line: #dae0e1;
+    --primary: #0e6e78;
+    --primary-strong: #0a555d;
+    --primary-tint: #e2eff0;
+    --seal: #9b2c2c;
+    --on-primary: #ffffff;
+    --focus: #0e6e78;
+    --radius: 14px;
+    --radius-sm: 9px;
+    --radius-xs: 6px;
+    --maxw: 1360px;
+    --shadow: 0 1px 2px rgba(23, 39, 46, 0.05), 0 18px 40px -28px rgba(23, 39, 46, 0.35);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px clamp(16px, 4vw, 56px) 72px;
+    background: var(--paper);
+    color: var(--ink);
+    font: 14px/1.7 "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .lead { color: var(--muted); font-size: 13px; margin: 0 0 30px; max-width: 960px; }
+  .sec { margin-bottom: 44px; }
+  .sec > header { margin-bottom: 12px; max-width: 960px; }
+  .sec h2 { font-size: 15px; margin: 0 0 4px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0; }
+  .cap b { color: var(--ink); font-weight: 600; }
+  .tag {
+    display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--surface-2);
+    color: var(--muted); font-size: 11.5px; font-weight: 400; vertical-align: 1px;
+  }
+  .tag--rec { border-color: color-mix(in srgb, var(--primary) 30%, transparent); background: var(--primary-tint); color: var(--primary-strong); }
+
+  /* ───────── 页面框架(对应 .pane / .pane__inner,按线上宽度) ───────── */
+  .page { padding: 24px clamp(16px, 3vw, 48px) 12px; }
+  .page__inner { max-width: var(--maxw); margin: 0 auto; }
+
+  /* ───────── 页头(全局 .pghead) ───────── */
+  .pghead { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 26px; }
+  .pghead__title { margin: 0; font-family: "Space Grotesk", "IBM Plex Sans", sans-serif; font-size: 26px; font-weight: 600; letter-spacing: -0.035em; }
+  .pghead__sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.8; }
+
+  /* ───────── 卡片(对应 .pane .card) ───────── */
+  .card {
+    border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+    box-shadow: var(--shadow); padding: 20px 22px; margin-bottom: 18px;
+  }
+  .card__sub { margin: 0 0 16px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+  .card__sub--tail { margin: 12px 0 0; }
+  .card__sub strong { color: var(--ink); font-weight: 600; }
+
+  /* ───────── 控件(对应 .pane .row / .mini / .auth__input) ───────── */
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row--sub { margin-top: 10px; }
+  .grow { flex: 1; min-width: 160px; }
+  .mini {
+    height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer;
+    transition: border-color .14s, background .14s, color .14s;
+  }
+  .mini:hover:not(:disabled) { border-color: var(--primary); color: var(--primary-strong); }
+  .mini:disabled { opacity: .5; cursor: not-allowed; }
+  .mini--primary { border-color: var(--primary); background: var(--primary); color: var(--on-primary); }
+  .mini--primary:hover:not(:disabled) { background: var(--primary-strong); color: var(--on-primary); }
+  .auth__label { display: block; margin-bottom: 6px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+  .auth__input {
+    width: 100%; height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    background: var(--surface); font: inherit; font-size: 13.5px; color: var(--ink); outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .auth__input::placeholder { color: var(--muted); }
+  .auth__input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }
+
+  /* ───────── 表格(对应 .pane .tbl / .badge) ───────── */
+  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tbl th, .tbl td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .tbl th { color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; }
+  .tbl tbody tr:last-child td { border-bottom: none; }
+  .tbl__mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--muted); }
+  .tbl__acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .badge {
+    display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border: 1px solid var(--line);
+    border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; white-space: nowrap;
+  }
+  .badge--ok { border-color: color-mix(in srgb, var(--primary) 30%, transparent); background: var(--primary-tint); color: var(--primary-strong); }
+
+  /* ───────── 新布局(拟新增的两条,挂在 .pane 下) ─────────
+     ① 搜索行:与筛选行分开,独占一行;输入宽度收敛到 420px(方案 B 则不要 max-width)
+     ② 搜索按钮:从 30px 补到与输入框同高 38px */
+  .srch { margin-top: 14px; max-width: 420px; }
+  .srch--wide { max-width: none; }
+  .mini--field { height: 38px; padding: 0 16px; font-size: 13.5px; }
+</style>
+</head>
+<body>
+  <h1>用户管理 · 筛选与搜索布局 mock</h1>
+  <p class="lead">
+    诉求:筛选选项独占第一行,搜索移到第二行,顺手把这一小块收拾干净。
+    ① 是现状(对照用),② ③ 是两套两行方案(只差搜索框宽度),④ 是整页效果。
+    数据用你截图里的那条(1 个管理员账号)。
+  </p>
+
+  <!-- ═══════════ ① 现状 ═══════════ -->
+  <section class="sec">
+    <header>
+      <h2>① 现状(对照)<span class="tag">问题都在这一行里</span></h2>
+      <p class="cap">
+        搜索被塞进筛选行:可见标签「搜索」夹在中间像第七个选项;输入框被 <b>.grow</b> 拉满余宽;
+        「搜索」按钮 30px,比 38px 的输入框矮一截;另:回车会触发两次请求(表单 submit 与输入框 keyup.enter 各一次)。
+      </p>
+    </header>
+    <div class="page"><div class="page__inner">
+      <section class="card">
+        <div class="row">
+          <div class="row" role="group" aria-label="按状态筛选">
+            <button class="mini mini--primary" type="button">全部 <span class="tbl__mono">1</span></button>
+            <button class="mini" type="button">待验证 <span class="tbl__mono">0</span></button>
+            <button class="mini" type="button">待审批 <span class="tbl__mono">0</span></button>
+            <button class="mini" type="button">正常 <span class="tbl__mono">1</span></button>
+            <button class="mini" type="button">已拒绝 <span class="tbl__mono">0</span></button>
+            <button class="mini" type="button">已停用 <span class="tbl__mono">0</span></button>
+          </div>
+          <form class="row grow" role="search" onsubmit="return false">
+            <label class="auth__label" for="q-now">搜索</label>
+            <input id="q-now" class="auth__input grow" type="search" placeholder="邮箱或昵称" />
+            <button class="mini" type="submit">搜索</button>
+          </form>
+        </div>
+        <p class="card__sub card__sub--tail">状态人数是<strong>全量</strong>计数(不受搜索框影响);搜索只在当前筛选里挑。</p>
+      </section>
+    </div></div>
+  </section>
+
+  <!-- ═══════════ ② 方案 A ═══════════ -->
+  <section class="sec">
+    <header>
+      <h2>② 方案 A:筛选一行、搜索一行,输入收敛到 420px<span class="tag tag--rec">推荐</span></h2>
+      <p class="cap">
+        第一行 6 个筛选按钮(窄屏自动换行);第二行 输入框 + 搜索按钮,同高 38px、左对齐。
+        去掉可见「搜索」标签(占位符「邮箱或昵称」+ 输入框 aria-label 兜底);回车只走表单 submit,不再双发。
+      </p>
+    </header>
+    <div class="page"><div class="page__inner">
+      <section class="card">
+        <div class="row" role="group" aria-label="按状态筛选">
+          <button class="mini mini--primary" type="button">全部 <span class="tbl__mono">1</span></button>
+          <button class="mini" type="button">待验证 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">待审批 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">正常 <span class="tbl__mono">1</span></button>
+          <button class="mini" type="button">已拒绝 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">已停用 <span class="tbl__mono">0</span></button>
+        </div>
+        <form class="row srch" role="search" onsubmit="return false">
+          <input class="auth__input grow" type="search" placeholder="邮箱或昵称" aria-label="搜索邮箱或昵称" />
+          <button class="mini mini--field" type="submit">搜索</button>
+        </form>
+        <p class="card__sub card__sub--tail">状态人数是<strong>全量</strong>计数(不受搜索框影响);搜索只在当前筛选里挑。</p>
+      </section>
+    </div></div>
+  </section>
+
+  <!-- ═══════════ ③ 方案 B ═══════════ -->
+  <section class="sec">
+    <header>
+      <h2>③ 方案 B:同样两行,输入框撑满整行</h2>
+      <p class="cap">
+        更像一条「搜索栏」,长邮箱一览无余;代价是整行空旷,和卡片里 30/38px 的紧凑控件群比显得大。
+      </p>
+    </header>
+    <div class="page"><div class="page__inner">
+      <section class="card">
+        <div class="row" role="group" aria-label="按状态筛选">
+          <button class="mini mini--primary" type="button">全部 <span class="tbl__mono">1</span></button>
+          <button class="mini" type="button">待验证 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">待审批 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">正常 <span class="tbl__mono">1</span></button>
+          <button class="mini" type="button">已拒绝 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">已停用 <span class="tbl__mono">0</span></button>
+        </div>
+        <form class="row srch srch--wide" role="search" onsubmit="return false">
+          <input class="auth__input grow" type="search" placeholder="邮箱或昵称" aria-label="搜索邮箱或昵称" />
+          <button class="mini mini--field" type="submit">搜索</button>
+        </form>
+        <p class="card__sub card__sub--tail">状态人数是<strong>全量</strong>计数(不受搜索框影响);搜索只在当前筛选里挑。</p>
+      </section>
+    </div></div>
+  </section>
+
+  <!-- ═══════════ ④ 整页效果 ═══════════ -->
+  <section class="sec">
+    <header>
+      <h2>④ 整页效果(方案 A,含页头与表格卡片)</h2>
+      <p class="cap">按线上宽度渲染:正文栏上限 1360px,四周留白 32px / clamp(16px, 3vw, 48px) / 48px。</p>
+    </header>
+    <div class="page"><div class="page__inner">
+      <header class="pghead">
+        <div>
+          <h1 class="pghead__title">用户管理</h1>
+          <p class="pghead__sub">审批注册、启停账号、调整角色。所有动作都记进审计。</p>
+        </div>
+        <button class="mini" type="button">最近操作审计</button>
+      </header>
+
+      <section class="card">
+        <div class="row" role="group" aria-label="按状态筛选">
+          <button class="mini mini--primary" type="button">全部 <span class="tbl__mono">1</span></button>
+          <button class="mini" type="button">待验证 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">待审批 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">正常 <span class="tbl__mono">1</span></button>
+          <button class="mini" type="button">已拒绝 <span class="tbl__mono">0</span></button>
+          <button class="mini" type="button">已停用 <span class="tbl__mono">0</span></button>
+        </div>
+        <form class="row srch" role="search" onsubmit="return false">
+          <input class="auth__input grow" type="search" placeholder="邮箱或昵称" aria-label="搜索邮箱或昵称" />
+          <button class="mini mini--field" type="submit">搜索</button>
+        </form>
+        <p class="card__sub card__sub--tail">状态人数是<strong>全量</strong>计数(不受搜索框影响);搜索只在当前筛选里挑。</p>
+      </section>
+
+      <section class="card">
+        <table class="tbl">
+          <thead>
+            <tr><th>账号</th><th>角色</th><th>状态</th><th>注册</th><th>最近登录</th><th>操作</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <div>AnXin</div>
+                <div class="tbl__mono">anxin.hitsz@outlook.com</div>
+                <span class="badge">这是你自己</span>
+              </td>
+              <td><span class="badge badge--ok">管理员</span></td>
+              <td>
+                <div>正常</div>
+                <div class="tbl__mono">备注:首个管理员,命令行建立(未经管理员审批)</div>
+              </td>
+              <td class="tbl__mono">10-05 10:08:16</td>
+              <td class="tbl__mono">10-05 10:12:00</td>
+              <td><div class="tbl__acts"><button class="mini" type="button">审计</button></div></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="row row--sub">
+          <span class="tbl__mono">第 1–1 条,共 1 条</span>
+          <button class="mini" type="button" disabled>上一页</button>
+          <button class="mini" type="button" disabled>下一页</button>
+        </div>
+      </section>
+    </div></div>
+  </section>
+
+  <!-- ═══════════ ⑤ 实现对照 ═══════════ -->
+  <section class="sec">
+    <header><h2>⑤ 若定稿,代码里改什么(供实现对照)</h2></header>
+    <ul style="max-width:960px; font-size:13px; color:var(--ink); padding-left:20px; margin:0;">
+      <li style="margin:4px 0;"><b>模板</b>(AdminUsersView.vue 筛选卡):chips 容器保持 <span class="tbl__mono">.row</span>;表单另起一行写成 <span class="tbl__mono">&lt;form class="row srch" role="search" @submit.prevent="search"&gt;</span>,去掉可见 <span class="tbl__mono">&lt;label class="auth__label"&gt;</span>(改 <span class="tbl__mono">aria-label</span>),删掉输入框上的 <span class="tbl__mono">@keyup.enter="search"</span>。</li>
+      <li style="margin:4px 0;"><b>样式</b>(auth.css,新增两条,挂在 .pane 下):<span class="tbl__mono">.pane .srch { margin-top: 14px; max-width: 420px; }</span>、<span class="tbl__mono">.pane .mini--field { height: 38px; padding: 0 16px; font-size: 13.5px; }</span>。</li>
+      <li style="margin:4px 0;">方案 B 则 <span class="tbl__mono">.srch</span> 不要 max-width(或加 <span class="tbl__mono">.srch--wide</span>)。</li>
+      <li style="margin:4px 0;">卡片底部那行说明(<span class="tbl__mono">card__sub--tail</span>)不动。</li>
+    </ul>
+  </section>
+</body>
+</html>

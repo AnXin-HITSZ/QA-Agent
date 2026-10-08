@@ -1,5 +1,5 @@
 /* SOP 流程视图的共享样式:由 SopView 一次性引入,列表 / 详情 / 编辑三个子组件共用。
-   取自 mockups/sop-view.html(已批准原型)。刻意不定义 .md(全局 style.css 已有)、
+   取自 mock/sop-view.html(已批准原型)。刻意不定义 .md(全局 style.css 已有)、
    页头 .hd(AppHeader 内)与设计令牌(tokens.css)。内容栏宽取全局 --maxw,四个标签页统一;
    页面标题区(标题 + 标题下解释)走全局 .pghead(style.css),本文件不再自带一套。 */
 

@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>调用与费用 · 时间范围控件 mock(定稿)</title>
+<style>
+  /* 令牌直接抄 src/styles/tokens.css(浅色) —— mock 只为看样式,不接构建 */
+  :root {
+    --paper: #edf1f1;
+    --surface: #ffffff;
+    --surface-2: #f4f7f7;
+    --ink: #17272e;
+    --muted: #5b6a70;
+    --line: #dae0e1;
+    --primary: #0e6e78;
+    --primary-strong: #0a555d;
+    --primary-tint: #e2eff0;
+    --on-primary: #ffffff;
+    --seal: #b3402f; /* mock 占位,以 tokens.css 为准 */
+    --focus: #0e6e78;
+    --radius-sm: 9px;
+    --radius-xs: 6px;
+    --shadow: 0 1px 2px rgba(23, 39, 46, 0.05), 0 18px 40px -28px rgba(23, 39, 46, 0.35);
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px clamp(16px, 4vw, 56px) 64px;
+    background: var(--paper);
+    color: var(--ink);
+    font: 14px/1.7 "IBM Plex Sans", "Noto Sans SC", system-ui, -apple-system, sans-serif;
+  }
+  h1 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  .lead { color: var(--muted); font-size: 13px; margin: 0 0 28px; max-width: 940px; }
+  .note { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; max-width: 940px; }
+  .note b { color: var(--ink); font-weight: 600; }
+  .sec { margin-bottom: 40px; }
+  .sec > header { margin-bottom: 14px; }
+  .row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  .cap { font-size: 12px; color: var(--muted); margin: 0 0 8px; }
+  .cap b { color: var(--ink); font-weight: 600; }
+
+  /* ───────── ① 筛选条(对应 .mt__filters + SelectField,已定稿,仅作参照) ───────── */
+  .filters {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+    padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--surface); margin-bottom: 10px;
+  }
+  .dateTrigger {
+    height: 38px; padding: 0 14px; min-width: 170px; margin-right: auto;
+    display: inline-flex; align-items: center; justify-content: space-between; gap: 10px;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+    color: var(--ink); font: inherit; font-size: 13.5px; cursor: pointer;
+  }
+  .dateTrigger:hover { border-color: var(--primary); }
+  .dateTrigger__t { display: inline-flex; align-items: center; gap: 7px; }
+
+  .sf { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .sf__label { font-size: 13px; }
+  .sf__body { position: relative; }
+  .sf__btn {
+    height: 38px; min-width: 150px; max-width: 260px; padding: 0 12px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+    color: var(--ink); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .sf__btn:hover { border-color: var(--primary); }
+  .sf--open .sf__btn { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }
+  .sf__value { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .sf__cv { width: 11px; height: 11px; flex: 0 0 auto; color: var(--muted); fill: none; stroke: currentColor;
+            stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .16s, color .16s; }
+  .sf--open .sf__cv { transform: rotate(180deg); color: var(--primary-strong); }
+  .sf__list {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+    min-width: 100%; max-width: 340px; max-height: 264px; overflow-y: auto;
+    margin: 0; padding: 4px; list-style: none;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+  .sf__opt {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    height: 32px; padding: 0 8px 0 10px; border-radius: var(--radius-xs);
+    color: var(--ink); font-size: 13px; white-space: nowrap; cursor: pointer;
+  }
+  .sf__opt.is-active { background: var(--surface-2); }
+  .sf__opt.is-sel { color: var(--primary-strong); font-weight: 600; }
+  .sf__opt.is-sel.is-active { background: var(--primary-tint); }
+  .sf__optT { overflow: hidden; text-overflow: ellipsis; }
+  .sf__check { width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.9;
+               stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ───────── 对话框外壳(对应 .mt__dateDialog / .mt__dateContent) ───────── */
+  .dlg {
+    width: min(420px, calc(100vw - 32px)); padding: 24px;
+    border: 1px solid var(--line); border-radius: 16px; background: var(--surface);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2);
+  }
+  .dlg__hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  .dlg__hd h3 { margin: 0; font-size: 18px; }
+  .dlg__x { border: 0; background: none; color: var(--primary); font: inherit; font-size: 14px; cursor: pointer; padding: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip {
+    height: 30px; padding: 0 13px; display: inline-flex; align-items: center;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+    color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer;
+  }
+  .chip:hover { border-color: var(--primary); color: var(--primary-strong); }
+  .chip.is-on { border-color: var(--primary); background: var(--primary-tint); color: var(--primary-strong); font-weight: 600; }
+  .dlg__sub { margin: 16px 0 0; color: var(--muted); font-size: 13px; }
+  .dlg__err { margin: 16px 0 0; color: var(--seal); font-size: 12.5px; }
+  .dlg__act { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+  .btn { height: 38px; padding: 0 16px; border-radius: var(--radius-sm); font: inherit; font-size: 13.5px; cursor: pointer; }
+  .btn--ghost { border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+  .btn--ghost:hover { border-color: var(--primary); color: var(--primary-strong); }
+  .btn--primary { border: 1px solid var(--primary); background: var(--primary); color: var(--on-primary); font-weight: 600; }
+  .btn--primary:hover { background: var(--primary-strong); border-color: var(--primary-strong); }
+
+  /* ───────── 字段:标签行(右端「清除」)+ 日期时刻组合框 ───────── */
+  .fld { margin-bottom: 14px; }
+  .fld__label { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+  .fld__name { font-size: 12px; color: var(--muted); }
+  .fld__clear { padding: 0; border: 0; background: transparent; color: var(--muted);
+                font: inherit; font-size: 12px; cursor: pointer; transition: color .14s; }
+  .fld__clear:hover { color: var(--primary); }
+
+  /* ───────── 组合框:「📅 日期  │  ◷ 时刻」,两个热区、各自弹层 ───────── */
+  .dt {
+    position: relative;
+    display: flex; align-items: stretch; width: 100%; height: 38px;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+    transition: border-color .14s;
+  }
+  .dt:hover { border-color: var(--primary); }
+  .dt__date, .dt__time {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 0; background: transparent; color: var(--ink);
+    font: inherit; font-size: 12.5px; cursor: pointer; padding: 0 12px;
+    transition: background .14s, color .14s;
+  }
+  .dt__date { flex: 1 1 auto; min-width: 0; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+  .dt__date .df__cv { margin-left: auto; }
+  .dt__time { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+  .dt__date:hover, .dt__time:hover { background: var(--surface-2); color: var(--primary-strong); }
+  .dt__date.is-open, .dt__time.is-open { background: var(--primary-tint); color: var(--primary-strong); }
+  .dt__date:focus-visible, .dt__time:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .dt__sp { width: 1px; flex: 0 0 auto; margin: 6px 0; background: var(--line); }
+  .dt__val { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ink); }
+  .dt__val.is-empty { color: var(--muted); } /* 未选日期 = 占位,灰 */
+  .dt.is-open { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-tint); }
+
+  .df__ic { width: 14px; height: 14px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.5;
+            stroke-linecap: round; stroke-linejoin: round; }
+  .df__cv { width: 11px; height: 11px; flex-shrink: 0; color: var(--muted); fill: none; stroke: currentColor; stroke-width: 1.8;
+            stroke-linecap: round; stroke-linejoin: round; transition: transform .16s; }
+
+  /* ───────── 日期浮层(类名与数值照搬 DateField 源码,浮层模式;贴组合框左边) ───────── */
+  .df__cal {
+    position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 264px;
+    padding: 11px 11px 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    background: var(--surface); box-shadow: var(--shadow);
+  }
+  .df__calhd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+  .df__caltitle { font-family: "Space Grotesk", "IBM Plex Sans", "Noto Sans SC", sans-serif;
+                  font-weight: 600; font-size: 13.5px; color: var(--ink); }
+  .df__calnav {
+    width: 26px; height: 26px; display: grid; place-items: center; border: 0;
+    border-radius: var(--radius-xs); background: transparent; color: var(--muted); cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .df__calnav:hover { background: var(--surface-2); color: var(--primary); }
+  .df__calnav svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7;
+                    stroke-linecap: round; stroke-linejoin: round; }
+  .df__calgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .df__wd { height: 24px; display: grid; place-items: center; font-size: 11px; color: var(--muted); }
+  .df__day {
+    height: 30px; display: grid; place-items: center; border: 1px solid transparent;
+    border-radius: var(--radius-xs); background: transparent; color: var(--ink);
+    font: inherit; font-size: 12.5px; cursor: pointer; transition: background .12s;
+  }
+  .df__day:hover { background: var(--surface-2); }
+  .df__day.is-out { color: color-mix(in srgb, var(--muted) 45%, transparent); }
+  .df__day.is-today { border-color: var(--primary); color: var(--primary-strong); font-weight: 600; }
+  .df__day.is-sel { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
+  .df__day.is-sel:hover { background: var(--primary-strong); }
+
+  /* ───────── 时刻浮层(时/分两列;贴组合框右边) ───────── */
+  .tf__val { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .tf__pop {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: 188px;
+    padding: 9px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+    background: var(--surface); box-shadow: var(--shadow);
+  }
+  .tf__hd { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 4px; }
+  .tf__hd span { text-align: center; font-size: 11px; color: var(--muted); }
+  .tf__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .tf__col { max-height: 204px; overflow-y: auto; scrollbar-width: thin; }
+  .tf__item {
+    width: 100%; height: 30px; display: grid; place-items: center; border: 1px solid transparent;
+    border-radius: var(--radius-xs); background: transparent; color: var(--ink);
+    font: inherit; font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums;
+    cursor: pointer; transition: background .12s;
+  }
+  .tf__item:hover { background: var(--surface-2); }
+  .tf__item.is-sel { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
+  .tf__foot { display: flex; align-items: center; justify-content: space-between; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .df__link { border: 0; background: none; padding: 2px; color: var(--primary-strong); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .df__link:hover { text-decoration: underline; }
+
+  .callout {
+    margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: var(--radius-sm); background: var(--surface); color: var(--muted); font-size: 12.5px;
+  }
+  .callout b { color: var(--ink); }
+  .callout ul { margin: 6px 0 0; padding-left: 18px; }
+  .callout li { margin: 3px 0; }
+  .callout code { font-family: var(--mono); font-size: 11.5px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 6px; background: var(--primary-tint); color: var(--primary-strong); margin-left: 8px; vertical-align: 2px; }
+</style>
+</head>
+<body>
+  <h1>调用与费用 · 时间范围控件 mock(定稿)</h1>
+  <p class="lead">
+    日期与时刻合成一个 38px 组合框:左半区「📅 日期 ⌄」、右半区「◷ 时刻 ⌄」,中间细分隔线;未选日期时左半区显示占位「选择日期」(灰),
+    框恒为整行宽,行内不产生任何位移。浮层可点开、日历可翻月、时刻两列可滚可点。本页即实装依据。
+  </p>
+
+  <!-- ① 下拉列表对齐(已定稿,仅作参照) -->
+  <section class="sec">
+    <header>
+      <h2>① 下拉列表:与选择框左边缘对齐 <span class="tag">已改,仅作参照</span></h2>
+    </header>
+    <div class="filters">
+      <button class="dateTrigger" type="button">
+        <span class="dateTrigger__t">
+          <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="5.6" /><polyline points="8,4.8 8,8 10.4,9.6" />
+          </svg>
+          最近 7 天
+        </span>
+        <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+      </button>
+      <div class="sf sf--open">
+        <span class="sf__label">服务</span>
+        <div class="sf__body">
+          <button class="sf__btn" type="button">
+            <span class="sf__value">全部服务</span>
+            <svg class="sf__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+          </button>
+          <ul class="sf__list">
+            <li class="sf__opt is-sel is-active"><span class="sf__optT">全部服务</span>
+              <svg class="sf__check" viewBox="0 0 14 14" aria-hidden="true"><polyline points="2.5,7.5 5.5,10.5 11.5,3.5" /></svg></li>
+            <li class="sf__opt"><span class="sf__optT">embedding(向量化)</span></li>
+            <li class="sf__opt"><span class="sf__optT">ocr(文字 / 票据识别)</span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="sf">
+        <span class="sf__label">用途</span>
+        <div class="sf__body">
+          <button class="sf__btn" type="button">
+            <span class="sf__value">全部用途</span>
+            <svg class="sf__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+          </button>
+        </div>
+      </div>
+      <div class="sf">
+        <span class="sf__label">状态</span>
+        <div class="sf__body">
+          <button class="sf__btn" type="button">
+            <span class="sf__value">全部状态</span>
+            <svg class="sf__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+          </button>
+        </div>
+      </div>
+      <button class="df__link" type="button">重置</button>
+    </div>
+  </section>
+
+  <!-- ② 时间范围对话框 -->
+  <section class="sec">
+    <header>
+      <h2>② 时间范围对话框:日期 + 时刻 = 一个组合框</h2>
+      <p class="note">
+        每行 = 标签行(右端「清除」)+ 组合框。组合框左半区选日期、右半区选时刻;未选日期时左半区显示占位「选择日期」。
+      </p>
+    </header>
+
+    <div class="row">
+      <!-- 卡 A:日历半区展开 -->
+      <div>
+        <p class="cap"><b>卡 A</b> · 点左半区 → 日历浮层贴在框的左边</p>
+        <div class="dlg">
+          <div class="dlg__hd">
+            <h3>选择时间范围</h3>
+            <button class="dlg__x" type="button" aria-label="关闭">✕</button>
+          </div>
+          <div class="chips">
+            <button class="chip" type="button">最近 24 小时</button>
+            <button class="chip" type="button">今天</button>
+            <button class="chip is-on" type="button">最近 7 天</button>
+            <button class="chip" type="button">最近 30 天</button>
+          </div>
+          <p class="dlg__sub">自定义范围 · 本地时间</p>
+
+          <div class="fld">
+            <div class="fld__label">
+              <span class="fld__name">开始时间</span>
+              <button class="fld__clear" type="button" data-cal-clear>清除</button>
+            </div>
+            <div class="dt" data-dt data-sel="2026-09-27" data-open="cal">
+              <button class="dt__date" type="button" data-cal-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="11" height="9.5" rx="1.5" />
+                  <line x1="2.5" y1="6.5" x2="13.5" y2="6.5" />
+                  <line x1="5.5" y1="2.2" x2="5.5" y2="4.6" />
+                  <line x1="10.5" y1="2.2" x2="10.5" y2="4.6" />
+                </svg>
+                <span class="dt__val" data-cal-val></span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+              <span class="dt__sp" aria-hidden="true"></span>
+              <button class="dt__time" type="button" data-tf-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5.6" /><polyline points="8,4.8 8,8 10.4,9.6" />
+                </svg>
+                <span class="tf__val" data-tf-val>00:00</span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="fld">
+            <div class="fld__label">
+              <span class="fld__name">结束时间</span>
+              <button class="fld__clear" type="button" data-cal-clear>清除</button>
+            </div>
+            <div class="dt" data-dt data-sel="2026-10-04" data-eod>
+              <button class="dt__date" type="button" data-cal-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="11" height="9.5" rx="1.5" />
+                  <line x1="2.5" y1="6.5" x2="13.5" y2="6.5" />
+                  <line x1="5.5" y1="2.2" x2="5.5" y2="4.6" />
+                  <line x1="10.5" y1="2.2" x2="10.5" y2="4.6" />
+                </svg>
+                <span class="dt__val" data-cal-val></span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+              <span class="dt__sp" aria-hidden="true"></span>
+              <button class="dt__time" type="button" data-tf-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5.6" /><polyline points="8,4.8 8,8 10.4,9.6" />
+                </svg>
+                <span class="tf__val" data-tf-val>23:59</span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <p class="dlg__sub">统计至结束时刻之前；修改后点击应用生效。</p>
+          <div class="dlg__act">
+            <button class="btn btn--ghost" type="button">取消</button>
+            <button class="btn btn--primary" type="button">应用范围</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 卡 B:时刻半区展开 -->
+      <div>
+        <p class="cap"><b>卡 B</b> · 点右半区 → 时刻浮层贴在框的右边(页脚 = 当天 23:59 + 现在)</p>
+        <div class="dlg">
+          <div class="dlg__hd">
+            <h3>选择时间范围</h3>
+            <button class="dlg__x" type="button" aria-label="关闭">✕</button>
+          </div>
+          <div class="chips">
+            <button class="chip" type="button">最近 24 小时</button>
+            <button class="chip" type="button">今天</button>
+            <button class="chip is-on" type="button">最近 7 天</button>
+            <button class="chip" type="button">最近 30 天</button>
+          </div>
+          <p class="dlg__sub">自定义范围 · 本地时间</p>
+
+          <div class="fld">
+            <div class="fld__label">
+              <span class="fld__name">开始时间</span>
+              <button class="fld__clear" type="button" data-cal-clear>清除</button>
+            </div>
+            <div class="dt" data-dt data-sel="2026-09-27">
+              <button class="dt__date" type="button" data-cal-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="11" height="9.5" rx="1.5" />
+                  <line x1="2.5" y1="6.5" x2="13.5" y2="6.5" />
+                  <line x1="5.5" y1="2.2" x2="5.5" y2="4.6" />
+                  <line x1="10.5" y1="2.2" x2="10.5" y2="4.6" />
+                </svg>
+                <span class="dt__val" data-cal-val></span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+              <span class="dt__sp" aria-hidden="true"></span>
+              <button class="dt__time" type="button" data-tf-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5.6" /><polyline points="8,4.8 8,8 10.4,9.6" />
+                </svg>
+                <span class="tf__val" data-tf-val>00:00</span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="fld">
+            <div class="fld__label">
+              <span class="fld__name">结束时间</span>
+              <button class="fld__clear" type="button" data-cal-clear>清除</button>
+            </div>
+            <div class="dt" data-dt data-sel="2026-10-04" data-eod data-open="tf">
+              <button class="dt__date" type="button" data-cal-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="11" height="9.5" rx="1.5" />
+                  <line x1="2.5" y1="6.5" x2="13.5" y2="6.5" />
+                  <line x1="5.5" y1="2.2" x2="5.5" y2="4.6" />
+                  <line x1="10.5" y1="2.2" x2="10.5" y2="4.6" />
+                </svg>
+                <span class="dt__val" data-cal-val></span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+              <span class="dt__sp" aria-hidden="true"></span>
+              <button class="dt__time" type="button" data-tf-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5.6" /><polyline points="8,4.8 8,8 10.4,9.6" />
+                </svg>
+                <span class="tf__val" data-tf-val>23:59</span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <p class="dlg__sub">统计至结束时刻之前；修改后点击应用生效。</p>
+          <div class="dlg__act">
+            <button class="btn btn--ghost" type="button">取消</button>
+            <button class="btn btn--primary" type="button">应用范围</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 卡 C:未选日期的占位态 -->
+      <div>
+        <p class="cap"><b>卡 C</b> · 未选日期 = 占位「选择日期」,框的形状与卡 A/B 一致;应用由现有校验拦下</p>
+        <div class="dlg">
+          <div class="dlg__hd">
+            <h3>选择时间范围</h3>
+            <button class="dlg__x" type="button" aria-label="关闭">✕</button>
+          </div>
+          <div class="chips">
+            <button class="chip" type="button">最近 24 小时</button>
+            <button class="chip" type="button">今天</button>
+            <button class="chip is-on" type="button">最近 7 天</button>
+            <button class="chip" type="button">最近 30 天</button>
+          </div>
+          <p class="dlg__sub">自定义范围 · 本地时间</p>
+
+          <div class="fld">
+            <div class="fld__label">
+              <span class="fld__name">开始时间</span>
+              <button class="fld__clear" type="button" data-cal-clear hidden>清除</button>
+            </div>
+            <div class="dt" data-dt data-sel="">
+              <button class="dt__date" type="button" data-cal-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="11" height="9.5" rx="1.5" />
+                  <line x1="2.5" y1="6.5" x2="13.5" y2="6.5" />
+                  <line x1="5.5" y1="2.2" x2="5.5" y2="4.6" />
+                  <line x1="10.5" y1="2.2" x2="10.5" y2="4.6" />
+                </svg>
+                <span class="dt__val is-empty" data-cal-val></span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+              <span class="dt__sp" aria-hidden="true"></span>
+              <button class="dt__time" type="button" data-tf-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5.6" /><polyline points="8,4.8 8,8 10.4,9.6" />
+                </svg>
+                <span class="tf__val" data-tf-val>00:00</span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="fld">
+            <div class="fld__label">
+              <span class="fld__name">结束时间</span>
+              <button class="fld__clear" type="button" data-cal-clear>清除</button>
+            </div>
+            <div class="dt" data-dt data-sel="2026-10-04" data-eod>
+              <button class="dt__date" type="button" data-cal-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <rect x="2.5" y="3.5" width="11" height="9.5" rx="1.5" />
+                  <line x1="2.5" y1="6.5" x2="13.5" y2="6.5" />
+                  <line x1="5.5" y1="2.2" x2="5.5" y2="4.6" />
+                  <line x1="10.5" y1="2.2" x2="10.5" y2="4.6" />
+                </svg>
+                <span class="dt__val" data-cal-val></span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+              <span class="dt__sp" aria-hidden="true"></span>
+              <button class="dt__time" type="button" data-tf-btn>
+                <svg class="df__ic" viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="8" r="5.6" /><polyline points="8,4.8 8,8 10.4,9.6" />
+                </svg>
+                <span class="tf__val" data-tf-val>23:59</span>
+                <svg class="df__cv" viewBox="0 0 12 12" aria-hidden="true"><polyline points="2.5,4.5 6,8 9.5,4.5" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <p class="dlg__err" role="alert">请选择有效时间，结束时间须晚于开始时间。</p>
+          <div class="dlg__act">
+            <button class="btn btn--ghost" type="button">取消</button>
+            <button class="btn btn--primary" type="button">应用范围</button>
+          </div>
+        </div>
+      </div>
+
+
+    </div>
+
+    <p class="note">
+      浮层都是浮在内容上的(点别处收起),对话框宽度保持现在的 420px 即可。三个卡分别是:日历展开 / 时刻展开 / 未选日期的占位态。
+    </p>
+  </section>
+
+  <!-- 定稿要点 -->
+  <div class="callout">
+    <b>定稿(即实装依据)</b>
+    <ul>
+      <li>日期 + 时刻 = 一个 38px 组合框:左半区「📅 日期 ⌄」、右半区「◷ 时刻 ⌄」,中间细分隔线;点左半区开日历(贴框左边)、点右半区开时刻(贴框右边)。</li>
+      <li>未选日期 = 左半区占位「选择日期」(灰);框恒为整行宽,选没选日期都不位移。</li>
+      <li>「清除」在标签行右端,只清日期(回到占位);点「应用范围」由现有校验拦下(卡 C)。</li>
+      <li>顶部范围胶囊:最近 24 小时 / 今天 / 最近 7 天 / 最近 30 天;「今天」= 今日 00:00 → 现在,点完即应用并关窗。</li>
+      <li>时刻浮层页脚:结束时间 =「当天 23:59」+「现在」;开始时间只有「现在」。</li>
+    </ul>
+    <b>实装内容(下一步)</b>
+    <ul>
+      <li>日历浮层抽成共用小组件,待办清单的 DateField 与新组合框共用它,日历逻辑只留一份;新增组合框组件(日期 + 时刻)接入本对话框。</li>
+      <li>范围胶囊文案改成整条(现在模板拼的是「最近 + 后缀」,不改会拼出「最近 今天」)。</li>
+    </ul>
+  </div>
+
+<script>
+  const pad = (n) => String(n).padStart(2, "0");
+  const isoOf = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const NOW = new Date();
+  const TODAY = isoOf(NOW);
+  const PLACEHOLDER = "选择日期";
+
+  /* 通用:点浮层/组件之外,收起所有浮层 */
+  function closeSf(sf) {
+    const list = sf.querySelector(".sf__list");
+    if (list) list.hidden = true;
+    sf.classList.remove("sf--open");
+  }
+  function closePopsOf(dt) {
+    const cal = dt.querySelector(".df__cal");
+    const tfp = dt.querySelector(".tf__pop");
+    if (cal) cal.hidden = true;
+    if (tfp) tfp.hidden = true;
+    dt.querySelector("[data-cal-btn]")?.classList.remove("is-open");
+    dt.querySelector("[data-tf-btn]")?.classList.remove("is-open");
+    dt.classList.remove("is-open");
+  }
+  document.addEventListener("pointerdown", (e) => {
+    document.querySelectorAll(".sf").forEach((sf) => { if (!sf.contains(e.target)) closeSf(sf); });
+    document.querySelectorAll(".dt[data-dt]").forEach((dt) => { if (!dt.contains(e.target)) closePopsOf(dt); });
+  });
+
+  /* ① 下拉列表(演示用) */
+  document.querySelectorAll(".sf").forEach((sf) => {
+    const btn = sf.querySelector(".sf__btn");
+    const list = sf.querySelector(".sf__list");
+    if (!btn || !list) return;
+    list.hidden = !sf.classList.contains("sf--open");
+    btn.addEventListener("click", () => {
+      const willOpen = list.hidden;
+      document.querySelectorAll(".sf").forEach(closeSf);
+      if (willOpen) { list.hidden = false; sf.classList.add("sf--open"); }
+    });
+    list.querySelectorAll(".sf__opt").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        list.querySelectorAll(".sf__opt").forEach((o) => o.classList.remove("is-sel", "is-active"));
+        opt.classList.add("is-sel", "is-active");
+        sf.querySelector(".sf__value").textContent = opt.querySelector(".sf__optT").textContent;
+        closeSf(sf);
+      });
+    });
+  });
+
+  /* ② 组合框:日期半区 + 时刻半区 */
+  document.querySelectorAll(".dt[data-dt]").forEach((dt) => {
+    const calBtn = dt.querySelector("[data-cal-btn]");
+    const tfBtn = dt.querySelector("[data-tf-btn]");
+    const valEl = dt.querySelector("[data-cal-val]");
+    const tfVal = dt.querySelector("[data-tf-val]");
+    const clearBtn = dt.closest(".fld").querySelector("[data-cal-clear]");
+
+    const state = { sel: dt.dataset.sel || null };
+    const cur = state.sel ? new Date(state.sel + "T00:00:00") : NOW;
+    state.mon = cur.getMonth();
+    state.y = cur.getFullYear();
+    const [h0, m0] = tfVal.textContent.trim().split(":");
+    state.h = h0;
+    state.min = m0;
+
+    /* —— 日历浮层(内部结构 = DateField 的 .df__cal) —— */
+    const calPop = document.createElement("div");
+    calPop.className = "df__cal";
+    calPop.hidden = true;
+    calPop.setAttribute("role", "dialog");
+    calPop.innerHTML = `
+      <div class="df__calhd">
+        <button class="df__calnav" type="button" data-prev aria-label="上个月">
+          <svg viewBox="0 0 14 14" aria-hidden="true"><polyline points="8.5,3 4.5,7 8.5,11" /></svg>
+        </button>
+        <span class="df__caltitle" data-title></span>
+        <button class="df__calnav" type="button" data-next aria-label="下个月">
+          <svg viewBox="0 0 14 14" aria-hidden="true"><polyline points="5.5,3 9.5,7 5.5,11" /></svg>
+        </button>
+      </div>
+      <div class="df__calgrid" data-grid></div>`;
+    dt.appendChild(calPop);
+    const title = calPop.querySelector("[data-title]");
+    const grid = calPop.querySelector("[data-grid]");
+
+    /* —— 时刻浮层(时 / 分两列) —— */
+    const tfPop = document.createElement("div");
+    tfPop.className = "tf__pop";
+    tfPop.hidden = true;
+    tfPop.innerHTML = `
+      <div class="tf__hd"><span>时</span><span>分</span></div>
+      <div class="tf__cols">
+        <div class="tf__col" data-col-h></div>
+        <div class="tf__col" data-col-m></div>
+      </div>
+      <div class="tf__foot">
+        ${dt.hasAttribute("data-eod") ? `<button class="df__link" type="button" data-eod>当天 23:59</button>` : `<span></span>`}
+        <button class="df__link" type="button" data-now>现在</button>
+      </div>`;
+    dt.appendChild(tfPop);
+    const colH = tfPop.querySelector("[data-col-h]");
+    const colM = tfPop.querySelector("[data-col-m]");
+
+    function render() {
+      title.textContent = `${state.y}年 ${state.mon + 1}月`;
+      const lead = (new Date(state.y, state.mon, 1).getDay() + 6) % 7;
+      const days = new Date(state.y, state.mon + 1, 0).getDate();
+      const total = Math.ceil((lead + days) / 7) * 7;
+      const start = new Date(state.y, state.mon, 1 - lead);
+      grid.innerHTML = ["一", "二", "三", "四", "五", "六", "日"]
+        .map((w) => `<span class="df__wd">${w}</span>`).join("");
+      for (let i = 0; i < total; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        const key = isoOf(d);
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "df__day";
+        b.textContent = String(d.getDate());
+        if (d.getMonth() !== state.mon) b.classList.add("is-out");
+        if (key === TODAY) b.classList.add("is-today");
+        if (key === state.sel) b.classList.add("is-sel");
+        b.addEventListener("click", () => {
+          state.sel = key;
+          syncDate();
+          render();
+          closePopsOf(dt); // 选中即收起(与 DateField 一致)
+        });
+        grid.appendChild(b);
+      }
+    }
+    function syncDate() {
+      valEl.textContent = state.sel || PLACEHOLDER;
+      valEl.classList.toggle("is-empty", !state.sel);
+      clearBtn.hidden = !state.sel;
+    }
+    function fill(col, from, to, key) {
+      col.innerHTML = "";
+      for (let n = from; n <= to; n++) {
+        const v = pad(n);
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "tf__item" + (state[key] === v ? " is-sel" : "");
+        b.textContent = v;
+        b.addEventListener("click", () => { state[key] = v; paintTime(); });
+        col.appendChild(b);
+      }
+    }
+    function scrollToSel(col) {
+      const el = col.querySelector(".is-sel");
+      if (el) col.scrollTop = (el.offsetTop - col.offsetTop) - col.clientHeight / 2 + el.offsetHeight / 2;
+    }
+    function paintTime() {
+      fill(colH, 0, 23, "h");
+      fill(colM, 0, 59, "min");
+      tfVal.textContent = `${state.h}:${state.min}`;
+      scrollToSel(colH);
+      scrollToSel(colM);
+    }
+
+    function openCal() {
+      closePopsOf(dt);
+      const d = state.sel ? new Date(state.sel + "T00:00:00") : new Date();
+      state.y = d.getFullYear();
+      state.mon = d.getMonth();
+      render();
+      calPop.hidden = false;
+      calBtn.classList.add("is-open");
+      dt.classList.add("is-open");
+    }
+    function openTf() {
+      closePopsOf(dt);
+      paintTime();
+      tfPop.hidden = false;
+      tfBtn.classList.add("is-open");
+      dt.classList.add("is-open");
+    }
+    calBtn.addEventListener("click", () => { calPop.hidden ? openCal() : closePopsOf(dt); });
+    tfBtn.addEventListener("click", () => { tfPop.hidden ? openTf() : closePopsOf(dt); });
+    calPop.querySelector("[data-prev]").addEventListener("click", () => { state.mon--; if (state.mon < 0) { state.mon = 11; state.y--; } render(); });
+    calPop.querySelector("[data-next]").addEventListener("click", () => { state.mon++; if (state.mon > 11) { state.mon = 0; state.y++; } render(); });
+    clearBtn.addEventListener("click", () => { state.sel = null; syncDate(); render(); closePopsOf(dt); });
+    tfPop.querySelector("[data-now]").addEventListener("click", () => {
+      const n = new Date();
+      state.h = pad(n.getHours());
+      state.min = pad(n.getMinutes());
+      paintTime();
+    });
+    tfPop.querySelector("[data-eod]")?.addEventListener("click", () => {
+      state.h = "23";
+      state.min = "59";
+      paintTime();
+    });
+
+    syncDate();
+    render();
+    paintTime();
+    if (dt.dataset.open === "cal") openCal();
+    if (dt.dataset.open === "tf") { tfPop.hidden = false; tfBtn.classList.add("is-open"); dt.classList.add("is-open"); paintTime(); }
+  });
+
+</script>
+</body>
+</html>
