@@ -9,6 +9,9 @@
 
 线程局部收集:一次调用期间只有本线程的钩子会写入,互不干扰;收集窗口结束后立即取走。
 钩子里只读 usage,不落任何请求体 / 密钥。
+
+本模块同时提供两个接线小工具(probe_client / provider_of),给所有外部调用客户端共用:
+embedding(rag/embeddings.py)与长期记忆的聊天模型(memory/llm.py)。
 """
 
 from __future__ import annotations
@@ -17,11 +20,15 @@ import logging
 import threading
 from contextlib import contextmanager
 from typing import Iterator
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-# 供应商用量里可能出现的 token 字段(OpenAI 兼容 / DashScope 兼容模式都覆盖)
-_TOKEN_KEYS = ("prompt_tokens", "input_tokens", "total_tokens")
+# 供应商用量里可能出现的 token 字段(OpenAI 兼容 / DashScope 兼容模式都覆盖)。
+# 聊天模型的补全 token 也要收(chat_tokens 用),顺序保持「看护已有语义」:prompt_tokens
+# 在前,老调用(embedding)取到的仍是第一个命中的键,不受新增键影响。
+_TOKEN_KEYS = ("prompt_tokens", "input_tokens", "total_tokens",
+               "completion_tokens", "output_tokens")
 
 
 class UsageProbe:
@@ -87,7 +94,11 @@ def attempts(entries: list[dict]) -> int:
 
 
 def prompt_tokens(entries: list[dict]) -> int | None:
-    """汇总供应商报的输入 token;一次都没报返回 None(不猜)。"""
+    """汇总供应商报的输入 token;一次都没报返回 None(不猜)。
+
+    只给 embedding 用(向量化一次请求一条 usage,prompt_tokens 就是输入量)。
+    聊天模型的输入 + 输出分开在 chat_tokens() 里取。
+    """
     total = 0
     seen = False
     for entry in entries:
@@ -99,6 +110,47 @@ def prompt_tokens(entries: list[dict]) -> int | None:
                 seen = True
                 break
     return total if seen else None
+
+
+def chat_tokens(entries: list[dict]) -> tuple[int | None, int | None, int | None] | None:
+    """从可观测响应里取聊天用量:(输入, 输出, 合计);一次都没报返回 None(不猜)。
+
+    取**最后一次**带 usage 的响应(SDK 重试时只有最终成功的那些才有意义)。
+    合计缺失但输入/输出都在时按两者相加 —— 这是对供应商报的数字做加法,不是按字数折算。
+    """
+    for entry in reversed(entries):
+        usage = entry.get("usage") or {}
+        inp = usage.get("prompt_tokens", usage.get("input_tokens"))
+        out = usage.get("completion_tokens", usage.get("output_tokens"))
+        total = usage.get("total_tokens")
+        inp = int(inp) if isinstance(inp, (int, float)) else None
+        out = int(out) if isinstance(out, (int, float)) else None
+        if isinstance(total, (int, float)):
+            total = int(total)
+        elif inp is not None or out is not None:
+            total = (inp or 0) + (out or 0)
+        else:
+            continue
+        return inp, out, total
+    return None
+
+
+# ---- 接线小工具(所有付外部调用客户端共用) ----
+
+def probe_client(probe: UsageProbe):
+    """建带用量钩子的 httpx 客户端(惰性 import,未用该客户端时不加载 httpx)。
+
+    传给 OpenAI 兼容 SDK 的 http_client:钩子在那里取供应商报的 usage 与真实请求次数。
+    """
+    import httpx
+
+    return httpx.Client(event_hooks={"response": [probe.hook]}, follow_redirects=True)
+
+
+def provider_of(base_url: str) -> str:
+    """供应商标签取端点主机名:价目表按它配置,与「实际打到哪个网关」一致。"""
+    host = urlsplit(base_url or "").hostname or ""
+    return host or "openai-compatible"
 
 
 NULL_PROBE = UsageProbe()   # 未接探针时的空实现(collecting 返回空列表)

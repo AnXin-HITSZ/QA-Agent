@@ -32,13 +32,17 @@ SYSTEM_PROMPT = (
 async def agent(state: ChatState, config: RunnableConfig) -> dict:
     """一步推理:产出最终回答,或产出对工具的调用请求(交给 tools 节点执行)。
 
-    待办感知(只读):chat 路由在调图前把「未完成待办」渲染好放进
-    config.configurable.todos_prompt,这里追加到系统提示后 —— 不写进 state、不入
-    checkpoint,故每轮都是最新;无待办 / 未启用时为空串,系统提示零变化。
+    两段只读上下文都由 chat 路由在调图前渲染好放进 config.configurable(**不写进 state、
+    不入 checkpoint**),这里追加到系统提示之后 —— 每轮现取现用,检索到的内容不会在
+    Redis 里一轮轮累积;两者都没有时为空串,系统提示零变化:
+    - todos_prompt:未完成待办;
+    - memory_prompt:长期记忆检索结果(§9:标注为参考数据,不能覆盖上面的系统指令)。
     """
     model = get_llm().bind_tools(TOOLS)
-    todos_prompt = (config.get("configurable") or {}).get("todos_prompt") or ""
-    system = SYSTEM_PROMPT + todos_prompt
+    configurable = config.get("configurable") or {}
+    todos_prompt = configurable.get("todos_prompt") or ""
+    memory_prompt = configurable.get("memory_prompt") or ""
+    system = SYSTEM_PROMPT + memory_prompt + todos_prompt
     prepared = await asyncio.to_thread(prepare_image_messages, state["messages"])
     messages = [SystemMessage(content=system), *prepared]
     ai = await model.ainvoke(messages)

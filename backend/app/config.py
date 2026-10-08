@@ -121,6 +121,92 @@ class Settings(BaseSettings):
     mysql_read_timeout_seconds: float = 10.0
     mysql_write_timeout_seconds: float = 10.0
 
+    # ---- 长期记忆(跨会话用户记忆;docs/长期记忆系统技术方案.md)----
+    # 事实源在 MySQL(上面那个 MYSQL_URL 指向的库,0004 迁移建四张表);
+    # Qdrant 用**独立集合**做可重建索引(不与知识库 QDRANT_COLLECTION 混用)。
+    # 软依赖:没配 MySQL / Qdrant / LLM 时聊天照常,只是不带长期记忆;
+    # 记忆管理接口会返回 503 并说明缺什么,绝不假装「你没有记忆」。
+    # —— 两个「暂停」开关(§12:必须分开说清,且都**不删任何数据**)——
+    # 三个开关的语义各不相同,别混用:
+    #   memory_enabled=false          整个功能关闭(聊天不带记忆、不登记提取);
+    #   memory_write_enabled=false    暂停**自动**写入:不登记新的提取任务、后台不再执行
+    #                                 (已排队的任务原样留着,恢复后继续);「我的记忆」里
+    #                                 用户自己手添 / 编辑 / 删除不受影响 —— 那是显式意图;
+    #   memory_search_enabled=false   暂停**回答时的**记忆检索:聊天不再注入记忆、也不再花
+    #                                 检索的那次向量化调用;「我的记忆」页里用户主动检索照常。
+    # 任何一个都不会删数据:恢复开关即恢复行为(已存记忆、审计、索引都在原地)。
+    memory_enabled: bool = True
+    memory_write_enabled: bool = True
+    memory_search_enabled: bool = True
+    memory_collection: str = "user_memory"     # Qdrant 集合名(知识库是 qdrant_collection)
+    memory_max_text_chars: int = 800           # 单条记忆正文上限(超出截断)
+    memory_max_message_chars: int = 2000       # 任务 payload 里单条消息的截断上限
+    # 提取 / 维护决策走同一个聊天模型(复用上面的 LLM_* 配置),要求端点返回 JSON 对象。
+    # 端点不支持 response_format=json_object(会 400)时置 false;结构校验与有限重试照常。
+    # 注意:json_object 只保证「是 JSON」,不代表字段齐全 —— 结构约束仍由 Pydantic 校验。
+    memory_llm_json_mode: bool = True
+    # 提取结果格式错误时的重试次数(单次任务内,只重试「输出不合法」,不重试业务异常)。
+    memory_extract_retries: int = 1
+    # —— 维护决策(§6:新事实 vs 已有候选 → ADD / UPDATE / DELETE / NONE)——
+    # 关掉就退回「只新增 + 按正文去重」的 Phase 2 行为:不会改也不会删已有记忆。
+    # 关掉后维护质量下降是**显式**的(结果里带 degraded 说明),不是静默降级。
+    memory_maintenance_enabled: bool = True
+    memory_maintenance_retries: int = 1        # 仅重试「事件结构不合法」,网络错误交给任务退避
+    memory_maintenance_max_actions: int = 5    # 一条事实最多产出几个事件(防止大面积改写)
+    # 后台提取任务:轮询间隔 / 单轮领取上限 / 重试与租约(崩溃恢复靠租约过期重排)。
+    memory_worker_enabled: bool = True
+    memory_worker_interval_seconds: float = 5.0
+    memory_worker_tick_limit: int = 3          # 每轮最多处理几个任务(<=0 = 不限)
+    memory_worker_index_batch: int = 50        # 空闲轮次里一次补写多少条待索引记忆(自愈)
+    memory_job_max_attempts: int = 3
+    memory_job_backoff_seconds: float = 30.0   # 指数退避基数:30s → 60s → 120s
+    memory_job_lease_seconds: float = 300.0    # 单次任务的租约时长(须大于一次提取的最长耗时)
+    # 执行期间续租间隔:长模型调用不能把租约放凉(放凉 = 别人可以接管,同一件事跑两遍)。
+    # 必须明显小于租约时长(留出几次失败的机会);数据库抖动只是「这次没续上」,不算失去租约 ——
+    # 真正的闸门是提交事实前那道 fencing 校验(见 worker._LeaseGuard 与 repo.assert_claim_valid)。
+    memory_job_renew_seconds: float = 30.0
+    # 索引自愈:补一轮待索引(条数) / 对账间隔(秒,逐条核验当前点及 payload → 选择性修复标记) / 总开关。
+    memory_worker_ops_batch: int = 20          # 每轮最多做掉几条删除 / 清理台账
+    memory_worker_drift_seconds: float = 300.0
+    memory_worker_index_repair: bool = True    # false = 周期性对账与选择性修复一起停(连核验也不跑)
+    # 删除 / 彻底清除留下的向量清理台账:重试次数用尽会落 failed(界面显示「清理失败」)。
+    memory_op_max_attempts: int = 8
+    memory_op_backoff_seconds: float = 30.0
+    # ---- 记忆检索(§8:稠密 + BM25 双路召回 → 校验 → RRF → 重排序 → top_k)----
+    # 三个数分开配,不要互相推导:候选取多少(两路各自)、送去重排多少、最后留多少。
+    # 召回面要明显大于最终条数,否则 RRF 与重排序没有可挑选的余地。
+    memory_vector_k: int = 20                  # 稠密(Qdrant)召回条数(校验后要留这么多)
+    memory_vector_oversample: int = 20         # 向量侧多取的候选:补上被版本 / 状态过滤掉的
+    memory_bm25_k: int = 20                    # 关键词(BM25)召回条数
+    memory_rerank_k: int = 20                  # 送进重排序的候选条数(≤ vector_k + bm25_k)
+    memory_top_k: int = 6                      # 进上下文的最终条数
+    memory_rrf_k: int = 60                     # RRF 平滑常数(名次权重 1/(k+rank))
+    memory_context_chars: int = 2000           # 注入提示词的记忆总字符预算(超出截断并标注)
+    memory_bm25_corpus_limit: int = 1000       # BM25 语料上限(单用户有效记忆条数,超出只取最近部分)
+    # 维护决策(ADD/UPDATE/DELETE/NOOP)看的是「有没有和它冲突的旧记忆」,与回答问题
+    # 目标不同:候选要更大(宁可多看几条,漏掉冲突就会写重),最终条数也更多。见 §8 末段。
+    memory_maintenance_vector_k: int = 30
+    memory_maintenance_bm25_k: int = 30
+    memory_maintenance_rerank_k: int = 30
+    memory_maintenance_top_k: int = 10
+
+    # ---- 重排序(阿里云百炼 text-rerank;检索软依赖,不可用就回退 RRF)----
+    # 与 embedding / LLM 一样走 DashScope 系端点,但**是独立模型与独立接口**,不共用 LLM_*。
+    # 未配置时检索照常(降级为 RRF 融合顺序),不报错、不假装重排过。
+    rerank_enabled: bool = False
+    rerank_model: str = ""                     # 例:qwen3.7-text-rerank(按百炼当前模型名填)
+    # 例:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+    rerank_api_url: str = ""
+    rerank_api_key: str = ""                   # 密钥只从环境变量读,绝不写进代码或日志
+    rerank_timeout_seconds: float = 15.0
+    # 单次重排的输入上限(超出按融合顺序截断并记降级):供应商建议的文档数上限是 500,
+    # 这里再按字符数收一道,避免把超长正文整段发出去。
+    memory_rerank_max_docs: int = 50
+    memory_rerank_max_chars: int = 8000
+    # 维护决策用的排序说明(回答检索留空,用供应商默认的问答检索提示)。英文短句即可。
+    memory_rerank_instruct: str = ("Given a newly extracted fact, retrieve existing memories "
+                                   "that state the same or conflicting information about the user")
+
     # ---- 认证 / 鉴权 / 用户管理(docs/认证鉴权与用户管理技术方案.md)----
     # 用户、登录会话、邮箱令牌、会话目录、审计都存在上面那个 MySQL 里(同一库、同一连接池)。
     # 与计量不同,认证是**硬依赖**:没配数据库 / 没配签名密钥时认证接口直接报错,绝不降级成匿名可用。

@@ -7,7 +7,8 @@ contextvar 在业务入口处「就地标注」,计量层在发请求时读取:
 - 每个索引任务开头标注 purpose=document_index + job_id(作用域覆盖整批文件);
 - 每个文件登记身份后标注 document_id + oss_key(作用域覆盖该文件的提取与向量化);
 - 每页识别前标注 page_no(作用域覆盖该页);
-- 检索(聊天)默认 purpose=query,不标注文件信息。
+- 检索(聊天)默认 purpose=query,不标注文件信息;
+- 长期记忆的每次外部调用(提取 / 维护决策 / 检索)在入口标注 memory_* 用途(见下面常量)。
 
 contextvar 是线程 / 协程隔离的:两个索引任务、索引线程与请求线程互不串味。
 标注失败不影响业务 —— 计量层拿不到上下文时照常记录,只是归属字段为空。
@@ -22,6 +23,12 @@ from typing import Iterator
 
 PURPOSE_INDEX = "document_index"
 PURPOSE_QUERY = "query"
+# 长期记忆的三段用途(调用日志里按它区分「记忆在干什么」):
+# 提取(对话 → 事实)、维护决策(新旧记忆 ADD/UPDATE/DELETE)、检索(回答问题前的召回)。
+# 记忆写入 / 查询的 Embedding 与 rerank 都沿用这三者之一,不再另设。
+PURPOSE_MEMORY_EXTRACT = "memory_extract"
+PURPOSE_MEMORY_MAINTENANCE = "memory_maintenance"
+PURPOSE_MEMORY_SEARCH = "memory_search"
 
 
 @dataclass(frozen=True)

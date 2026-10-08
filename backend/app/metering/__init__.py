@@ -30,8 +30,9 @@ from app.metering.context import bind as bind_context
 from app.metering.model import (
     BILLING_BILLABLE, BILLING_UNKNOWN, COST_ESTIMATED, COST_UNKNOWN, LAYER_EMBEDDING,
     LAYER_OCR_RAW, LAYER_OCR_TEXT, NOTE_PRICE_NOT_CONFIGURED, NOTE_PRICE_NOT_LOADED,
-    SERVICE_EMBEDDING, SERVICE_OCR, STATUS_FAILURE, STATUS_SUCCESS, USAGE_SOURCE_LOCAL_COUNT,
-    USAGE_SOURCE_UNKNOWN, USAGE_SOURCE_VENDOR, CallEvent, CallItem, CacheEvent, utcnow,
+    SERVICE_EMBEDDING, SERVICE_LLM, SERVICE_OCR, SERVICE_RERANK, STATUS_FAILURE, STATUS_SUCCESS,
+    USAGE_SOURCE_LOCAL_COUNT, USAGE_SOURCE_UNKNOWN, USAGE_SOURCE_VENDOR, CallEvent, CallItem,
+    CacheEvent, utcnow,
 )
 from app.metering.pricing import Quote
 from app.metering.redact import safe_endpoint, safe_text
@@ -47,7 +48,7 @@ __all__ = [
     "record_cache", "record_cache_stats", "record_call", "start", "status", "stop",
     "use_context", "METERING_DISABLED_MESSAGE",
     "LAYER_EMBEDDING", "LAYER_OCR_RAW", "LAYER_OCR_TEXT",
-    "SERVICE_EMBEDDING", "SERVICE_OCR",
+    "SERVICE_EMBEDDING", "SERVICE_OCR", "SERVICE_LLM", "SERVICE_RERANK",
     "USAGE_SOURCE_VENDOR", "USAGE_SOURCE_LOCAL_COUNT", "USAGE_SOURCE_UNKNOWN",
 ]
 

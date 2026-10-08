@@ -27,8 +27,16 @@ import { addDaysIso, todayIso } from "../lib/todoDate";
 
 // 时间范围预设。自定义时用「日期 + 时刻」组合框选起止(合成 datetime-local 串)。
 export type RangeKey = "24h" | "today" | "7d" | "30d" | "custom";
-export type ServiceKey = "" | "embedding" | "ocr";
-export type PurposeKey = "" | "document_index" | "query";
+// 服务 / 用途的取值对齐后端 app/metering/model.py 与 app/metering/context.py;
+// llm 与 rerank 是长期记忆引入的两类调用(与记忆页的「记忆提取 / 维护 / 召回」一一对应)。
+export type ServiceKey = "" | "embedding" | "ocr" | "llm" | "rerank";
+export type PurposeKey =
+  | ""
+  | "document_index"
+  | "query"
+  | "memory_extract"
+  | "memory_maintenance"
+  | "memory_search";
 export type StatusKey = "" | "success" | "failure";
 
 const RANGE_HOURS: Record<Exclude<RangeKey, "custom" | "today">, number> = {

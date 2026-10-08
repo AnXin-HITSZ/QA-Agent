@@ -100,9 +100,11 @@ def _filters(*, since: str | None, until: str | None, service: str | None = None
 def list_calls(
     since: str | None = Query(default=None, description="起始时间(ISO8601 或 epoch 秒;缺省 = 最近 7 天)"),
     until: str | None = Query(default=None, description="结束时间(不含;缺省 = 现在)"),
-    service: str | None = Query(default=None, description="embedding / ocr"),
+    service: str | None = Query(default=None, description="embedding / ocr / llm / rerank"),
     call_status: str | None = Query(default=None, alias="status", description="success / failure"),
-    purpose: str | None = Query(default=None, description="document_index / query"),
+    purpose: str | None = Query(default=None,
+                                description=("document_index / query / "
+                                             "memory_extract / memory_maintenance / memory_search")),
     job_id: str | None = Query(default=None, description="索引任务 id"),
     document_id: str | None = Query(default=None, description="文件身份 id"),
     offset: int = Query(default=0, ge=0, description="偏移"),
@@ -132,8 +134,10 @@ def get_call(event_id: str) -> dict:
 def summary(
     since: str | None = Query(default=None, description="起始时间(ISO8601 或 epoch 秒;缺省 = 最近 7 天)"),
     until: str | None = Query(default=None, description="结束时间(不含;缺省 = 现在)"),
-    service: str | None = Query(default=None, description="embedding / ocr"),
-    purpose: str | None = Query(default=None, description="document_index / query"),
+    service: str | None = Query(default=None, description="embedding / ocr / llm / rerank"),
+    purpose: str | None = Query(default=None,
+                                description=("document_index / query / "
+                                             "memory_extract / memory_maintenance / memory_search")),
     job_id: str | None = Query(default=None, description="索引任务 id"),
     document_id: str | None = Query(default=None, description="文件身份 id"),
 ) -> dict:

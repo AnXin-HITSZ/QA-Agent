@@ -1,0 +1,393 @@
+/* 「我的记忆」视图样式:由 MemoryView 一次性引入。
+   沿用全局设计令牌(tokens.css)与调用与费用页的控件口径(34px 按钮 / radius-sm 卡片 /
+   左侧 3px 竖条的提示条),不重定义字体与配色。
+   这里唯一的偏差:正文栏比全局 --maxw 窄 —— 记忆是一条条散文,行宽压到 76ch 左右更好读。 */
+
+/* ---------- 外壳 ---------- */
+.mem {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px 48px;
+}
+.mem__wrap {
+  max-width: 940px;
+  margin: 0 auto;
+}
+.mem__acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mem__sub {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* ---------- 控件(与 .mt__btn 同一口径) ---------- */
+.mem__btn {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.mem__btn:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.mem__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.mem__btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.mem__btn--primary {
+  border-color: var(--primary);
+  background: var(--primary-tint);
+  color: var(--primary-strong);
+}
+.mem__btn--primary:hover:not(:disabled) {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.mem__btn--danger {
+  border-color: color-mix(in srgb, var(--seal) 40%, var(--line));
+  color: var(--seal);
+}
+.mem__btn--danger:hover:not(:disabled) {
+  border-color: var(--seal);
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+/* 行内文字按钮:不加框,靠颜色与下划区分「这是可以点的」 */
+.mem__btn--link {
+  height: auto;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+.mem__btn--link:hover:not(:disabled) {
+  color: var(--primary-strong);
+}
+
+.mem__input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+}
+.mem__input::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+.mem__input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+  border-color: var(--primary);
+}
+
+/* ---------- 状态条(开关 / 规模 / 后台) ---------- */
+.mstat {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.mstat__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-left: 1px solid var(--line);
+}
+.mstat__cell:first-child {
+  border-left: 0;
+}
+@media (max-width: 700px) {
+  .mstat {
+    grid-template-columns: 1fr 1fr;
+  }
+  .mstat__cell:nth-child(odd) {
+    border-left: 0;
+  }
+  .mstat__cell:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+}
+.mstat__k {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.mstat__v {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.mstat__v small {
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+.mstat__v.is-warn {
+  color: var(--seal);
+}
+.mstat__x {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 提示条(暂停 / 降级 / 结果汇报) ---------- */
+.mem__note {
+  margin: 0 0 10px;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.mem__note strong {
+  color: var(--ink);
+}
+.mem__note--warn {
+  border-left-color: var(--seal);
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+.mem__note--warn strong {
+  color: inherit;
+}
+.mem__err {
+  margin: 8px 0 0;
+  color: var(--seal);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---------- 检索 / 手添 ---------- */
+.mem__tools {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  margin-bottom: 14px;
+}
+.mem__field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+/* 检索那行与列表之间留一点视觉分组:它管的是「看哪几条」,下一行管的是「写一条」 */
+.mem__field--search {
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--line);
+}
+
+/* ---------- 记忆卡片 ---------- */
+.mem__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.mcard {
+  border: 1px solid var(--line);
+  /* 左侧一道竖线:一条记忆 = 一张索引卡,竖线是它的「卡脊」 */
+  border-left: 3px solid color-mix(in srgb, var(--primary) 45%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 13px 15px 11px;
+  transition: border-left-color 0.15s;
+}
+.mcard:hover {
+  border-left-color: var(--primary);
+}
+.mcard__text {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+  max-width: 76ch;
+}
+.mcard__edit {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.7;
+  resize: vertical;
+}
+.mcard__edit:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+  border-color: var(--primary);
+}
+.mcard__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.mcard__acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 9px;
+}
+.mcard__warn {
+  color: var(--seal);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* ---------- 分页 ---------- */
+.mem__pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+.mem__pagerTxt {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* ---------- 空 / 错误 / 加载 ---------- */
+.mem__state {
+  padding: 30px 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.7;
+  text-align: center;
+}
+.mem__state p {
+  margin: 0 0 12px;
+}
+.mem__state--err {
+  border-color: color-mix(in srgb, var(--seal) 35%, var(--line));
+  background: var(--seal-tint);
+  color: var(--seal);
+}
+
+/* ---------- 彻底清除 ---------- */
+.mem__danger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 26px;
+  padding: 14px 16px;
+  border: 1px dashed color-mix(in srgb, var(--seal) 40%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.mem__dangerT {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+.mem__dangerB {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+  max-width: 62ch;
+}
+
+/* ---------- 确认对话框 ---------- */
+.mem__dialog {
+  max-width: 520px;
+  width: calc(100% - 32px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.mem__dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
+}
+.mem__dialogBody {
+  padding: 18px 20px;
+}
+.mem__dialogT {
+  margin: 0 0 10px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.mem__dialogList {
+  margin: 0 0 14px;
+  padding-left: 1.15em;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+.mem__dialogList li {
+  margin: 4px 0;
+}
+.mem__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.mem__check input {
+  margin-top: 2px;
+  accent-color: var(--seal);
+}
+.mem__dialogActs {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}

@@ -733,6 +733,9 @@ export async function deleteTodo(id: string): Promise<void> {
 
 // ── 调用与费用(管理员;对齐后端 /api/v1/admin/metering)──
 //
+// 计量的四类外部调用:embedding、ocr,以及长期记忆引入的 llm(提取 / 维护决策)与
+// rerank(记忆检索重排序)。**聊天主链路的模型调用不在此列** —— 它不写调用日志。
+//
 // 三条口径(与后端 Schema、docs/调用日志与费用统计技术方案.md 一致,界面文案不得偏离):
 // - 金额一律是「按配置单价 × 用量」的**估算费用**,不是官方账单(本期不接官方账单);
 // - 缺用量或缺价格时 cost_amount 为 null:calls 显示「无法估算」,绝不显示 ¥0;
@@ -978,4 +981,166 @@ export async function createMeteringPrice(input: MeteringPriceInput): Promise<Me
 // 删除一条误录的价目(历史事件的价目快照与金额不受影响)。不存在 → ApiError(404)。
 export async function deleteMeteringPrice(id: number): Promise<void> {
   return kfetchVoid(`/api/v1/admin/metering/prices/${id}`, { method: "DELETE" });
+}
+
+// ── 长期记忆(「我的记忆」页;对齐后端 /api/v1/memory,§12)──
+//
+// 几条口径(与后端 Schema、docs/长期记忆系统技术方案.md 一致,界面文案不得偏离):
+// - **归属只来自后端 Principal**:请求体里没有 user_id,前端也无从指定 —— 别人访问不到的
+//   记忆同样返回 404,不因为「你是管理员」就展开;
+// - `index_state=pending` 只是「向量待补」:记忆本身已经保存,后台会自愈,别让用户以为没存上;
+// - `enabled` / `write_enabled` / `search_enabled` / `maintenance_enabled` 任何一个为 false,
+//   都只是**暂停**某一路行为,不是删除已有数据 —— 文案必须写成「暂停」;
+// - 「删除一条」与「彻底删除全部」是两种语义:前者只让这条不再被使用(消息仍在会话里),
+//   后者清空记忆与待执行任务,但**不动账号与聊天记录**。
+
+export interface MemoryItem {
+  id: string;
+  text: string; // 一句事实
+  status: string; // active / deleted(列表默认只给 active)
+  origin: string; // llm=会话提取,user=用户手添
+  revision: number; // 每改写一次 +1(编辑时的并发保护依据)
+  thread_id: string | null; // 来源会话;用户手添的为 null
+  created_at: string; // ISO 8601(UTC)
+  updated_at: string;
+  index_state: string; // synced=向量已同步到当前 Embedding 版本;pending=待补索引
+  indexed_at: string | null;
+}
+
+export interface MemoryList {
+  enabled: boolean;
+  items: MemoryItem[];
+  total: number; // 普通列表 = 总数;检索模式 = 本次返回条数
+  index_pending: number;
+  query: string;
+  degraded: string[]; // 本次没做到最好的地方(如实展示,不静默)
+  error: string; // 检索整体不可用时的原因;空 = 正常
+}
+
+export interface MemoryJobCounts {
+  pending: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface MemoryStatus {
+  enabled: boolean;
+  write_enabled: boolean; // 自动写入(会话提取)开关
+  search_enabled: boolean; // 回答时注入记忆的开关
+  maintenance_enabled: boolean; // 维护决策(改写 / 合并)开关
+  configured: boolean; // 是否配了 MySQL
+  items: number;
+  deleted_items: number;
+  index_pending: number;
+  // 清理台账(删除 / 彻底清除留下的向量收尾):pending=后台还会重试,failed=重试用尽。
+  // 它们只影响**索引残留**,事实层早就删干净了 —— 文案不能说成「记忆没删掉」。
+  cleanup_pending: number;
+  cleanup_failed: number;
+  sparse_search: boolean; // 集合里是否真有稀疏通道;false=关键词召回走降级通道
+  jobs: MemoryJobCounts;
+  worker_running: boolean; // 后台提取线程是否在跑
+  last_error: string; // 后台最近一次失败原因(脱敏摘要)
+  last_run_at: string; // 后台最近一轮完成时间(ISO8601;从未跑过为空)
+}
+
+export interface MemoryHistoryItem {
+  id: number;
+  memory_id: string;
+  event: string; // ADD / UPDATE / DELETE
+  old_text: string | null; // 彻底清除后已脱敏为 null
+  new_text: string | null;
+  actor: string; // llm=会话提取/维护,user=用户操作,system=系统
+  reason: string;
+  created_at: string;
+}
+
+export interface MemoryHistory {
+  enabled: boolean;
+  items: MemoryHistoryItem[];
+}
+
+export interface MemoryReindexResult {
+  requested: number;
+  indexed: number;
+  payload_only: number; // 正文没变、只刷新了元数据（这几条**没有**重新向量化）
+  deferred: number; // 仍未能写入,留待下一轮
+  error: string;
+}
+
+// 删除一条的结果:事实层已删之外,索引侧是**清干净了还是待清理**。
+// cleanup=pending 表示清理台账已登记、后台会重试 —— 界面照实说「正在清理」,不谎报已完成。
+export interface MemoryDeleteResult {
+  id: string;
+  cleanup: string; // done / pending
+  degraded: string[];
+}
+
+export interface MemoryClearResult {
+  items: number; // 删掉的记忆条数
+  jobs: number; // 删掉的(含暂存对话正文的)任务数
+  history: number; // 正文被脱敏的审计行数
+  generation: number; // 新代次:之前入队的任务据此作废
+  points: number; // 清掉的向量点数（vectors=true 时才有意义）
+  cleanup: string; // done / pending（残留已登记台账，后台按退避重试）
+  vectors: boolean; // 索引是否清干净;false = 有残留(事实已删,可稍后重建)
+  degraded: string[];
+}
+
+// 列出 / 检索自己的记忆。带 q 走混合检索(相关性排序),不带 q 按更新时间倒序分页。
+// 未配库 / 功能关闭 → ApiError(503),文案由后端给(「已存记忆不受影响」)。
+export async function listMemory(q = "", limit = 20, offset = 0): Promise<MemoryList> {
+  const p = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (q) p.set("q", q);
+  return kfetchJson<MemoryList>(`/api/v1/memory?${p.toString()}`);
+}
+
+// 功能状态(开关 / 规模 / 待补索引 / 后台任务)。功能整体关闭时也照常返回。
+export async function getMemoryStatus(): Promise<MemoryStatus> {
+  return kfetchJson<MemoryStatus>(`/api/v1/memory/status`);
+}
+
+// 手添一条记忆(来源记为 user)。与已有记忆正文重复 → ApiError(409)。
+export async function addMemory(text: string): Promise<MemoryItem> {
+  return kfetchJson<MemoryItem>(`/api/v1/memory`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+// 改写一条记忆的正文。读取与写入之间版本变过 → ApiError(409),不覆盖别人的改动。
+export async function editMemory(id: string, text: string): Promise<MemoryItem> {
+  return kfetchJson<MemoryItem>(`/api/v1/memory/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+// 删除一条记忆。立即不再参与检索,同时清掉它的向量;**不影响聊天记录**。
+// 返回 cleanup:done=索引已清干净,pending=已登记清理台账、后台按退避重试(界面显示「正在清理」)。
+export async function deleteMemory(id: string): Promise<MemoryDeleteResult> {
+  return kfetchJson<MemoryDeleteResult>(`/api/v1/memory/${encodeURIComponent(id)}`,
+                                        { method: "DELETE" });
+}
+
+// 变更审计(新的在前)。memory_id 留空 = 全部。
+export async function listMemoryHistory(memoryId = "", limit = 50, offset = 0): Promise<MemoryHistory> {
+  const p = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (memoryId) p.set("memory_id", memoryId);
+  return kfetchJson<MemoryHistory>(`/api/v1/memory/history?${p.toString()}`);
+}
+
+// 把「待索引」的记忆补写进 Qdrant(换 Embedding 模型或索引写失败后用)。只动派生索引。
+export async function reindexMemory(limit = 200): Promise<MemoryReindexResult> {
+  return kfetchJson<MemoryReindexResult>(
+    `/api/v1/memory/reindex?limit=${encodeURIComponent(String(limit))}`,
+    { method: "POST" },
+  );
+}
+
+// 彻底删除自己的长期记忆(必须显式确认)。不动账号与聊天记录。
+export async function clearMemory(): Promise<MemoryClearResult> {
+  return kfetchJson<MemoryClearResult>(`/api/v1/memory?confirm=true`, { method: "DELETE" });
 }

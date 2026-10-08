@@ -25,6 +25,10 @@ SCHEMA_VERSION = 1
 # service
 SERVICE_EMBEDDING = "embedding"
 SERVICE_OCR = "ocr"
+# 长期记忆引入的两类新调用(聊天主链路的 LLM 仍然不计量,见 .env.example 的说明):
+# 记忆提取 / 维护决策的聊天模型,以及记忆检索的 reranker(qwen3.7-text-rerank)。
+SERVICE_LLM = "llm"
+SERVICE_RERANK = "rerank"
 
 # status
 STATUS_SUCCESS = "success"
@@ -55,6 +59,11 @@ SHARED_NOTE_WAIT = "shared_result"   # 等他方算完复用:同样没有外部�
 # 价格缺失 / 未载入时的原因文案(界面显示「无法估算」的依据)
 NOTE_PRICE_NOT_CONFIGURED = "未配置价格"
 NOTE_PRICE_NOT_LOADED = "价格表未载入"
+
+# 用量 / 计费缺口的口径文案(embedding 与长期记忆的聊天模型共用,直接进事件、前端展示)
+NOTE_NO_USAGE = "供应商响应未返回 usage,无法取得 token 数(不按字数折算)"
+NOTE_SDK_RETRY = "含供应商 SDK 内部重试,http_attempts 为观测到的真实请求次数"
+NOTE_FAILED_BILLING = "调用失败:供应商是否计费未知,不按 0 计"
 
 
 def utcnow() -> datetime:

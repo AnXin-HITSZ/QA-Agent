@@ -1,0 +1,30 @@
+{
+  "name": "冒烟样本(合成数据,非真实会话,不是基准)",
+  "note": "只用来验证评测流程能从头跑到尾:2 段会话 8 轮 + 4 条问题。真实评测请换成 LoCoMo 一类适配后的数据(见 docs/长期记忆系统部署与评测指南.md)。全部内容为虚构,不含真实用户信息与凭证。",
+  "conversations": [
+    {
+      "id": "c-reimburse",
+      "turns": [
+        {"user": "我出差报销喜欢把发票按项目分摊开,不要合成一张。", "assistant": "好的,报销时按项目分别整理发票。"},
+        {"user": "我们组的差旅标准是高铁二等座,住宿一晚不超过 400。", "assistant": "记下了:高铁二等座、住宿每晚 400 元以内。"},
+        {"user": "发票我一般周五下午统一提交,你提醒我的时候按这个节奏来。", "assistant": "明白,周五下午是提交发票的时间窗口。"},
+        {"user": "我不太确定最新的报销细则有没有改过,这个要先查 SOP 再回答我。", "assistant": "涉及细则变化的问题都会先查 SOP 再回答。"}
+      ]
+    },
+    {
+      "id": "c-record",
+      "turns": [
+        {"user": "实验记录我用中文写,术语保留英文原词,不要翻译。", "assistant": "记下了:中文撰写,术语保留英文。"},
+        {"user": "我把每天的实验数据放在 labdata/<项目>/<日期>/ 下面,按这个结构找。", "assistant": "好的,数据按项目与日期分目录存放。"},
+        {"user": "写周报的时候我喜欢先列结论再列过程,不要倒过来。", "assistant": "明白,周报先结论后过程。"},
+        {"user": "样品编号我自己那批是 XS- 开头,和隔壁组不一样。", "assistant": "记下了:你那批样品编号以 XS- 开头。"}
+      ]
+    }
+  ],
+  "questions": [
+    {"id": "q1", "conversation_id": "c-reimburse", "question": "我报销的时候发票要怎么整理?", "answer": "按项目分摊,不要合成一张", "category": "preference"},
+    {"id": "q2", "conversation_id": "c-reimburse", "question": "我们的差旅标准是什么?", "answer": "高铁二等座,住宿每晚不超过 400", "category": "profile"},
+    {"id": "q3", "conversation_id": "c-record", "question": "我写实验记录用什么语言?", "answer": "中文,术语保留英文原词", "category": "preference"},
+    {"id": "q4", "conversation_id": "c-reimburse", "question": "最新的报销细则具体是怎么规定的?", "answer": "会话里没有,应当先查 SOP 再回答(用来观察三种模式在「记忆里没有」时的差别)", "category": "no-memory-hit"}
+  ]
+}

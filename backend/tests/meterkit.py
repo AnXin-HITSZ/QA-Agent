@@ -155,3 +155,59 @@ def metered(inner: Embeddings, probe: UsageProbe, **over):
                   endpoint="https://dashscope.aliyuncs.com/compatible-mode/v1")
     kwargs.update(over)
     return MeteredEmbeddings(inner, probe, **kwargs)
+
+
+class FakeInnerChat:
+    """假聊天模型:每次 invoke 打一次探针(等价于收到一次 HTTP 响应),返回 AIMessage。
+
+    - usage=(输入, 输出, 合计):响应体里的 usage 与消息上的 usage_metadata 一致;
+      usage=None 模拟「响应里根本没有 usage」;
+    - message_usage=False:响应体有 usage 但 langchain 没归一到 usage_metadata
+      (验证 MeteredChat 从原始响应兜底取用量);
+    - responses=2 模拟 SDK 内部重试;responses=0 + error 模拟超时(一个响应都没有)。
+    """
+
+    def __init__(self, probe: UsageProbe, *, content="{}", usage=(100, 20, 120),
+                 message_usage: bool = True, responses: int = 1, status: int = 200,
+                 error: BaseException | None = None) -> None:
+        self.probe = probe
+        self.content = content
+        self.usage = usage
+        self.message_usage = message_usage
+        self.responses = max(0, responses)
+        self.status = status
+        self.error = error
+        self.calls: list[list] = []            # 每次提交的消息(断言提示词 / 重试次数)
+
+    def _respond(self) -> None:
+        for _ in range(self.responses):
+            body: dict = {}
+            if self.usage is not None:
+                inp, out, total = self.usage
+                body = {"usage": {"prompt_tokens": inp, "completion_tokens": out,
+                                  "total_tokens": total}}
+            self.probe.hook(FakeResponse(body, self.status))
+
+    def invoke(self, messages, **kwargs):
+        from langchain_core.messages import AIMessage
+
+        self.calls.append(list(messages))
+        self._respond()
+        if self.error is not None:
+            raise self.error
+        meta = None
+        if self.usage is not None and self.message_usage:
+            inp, out, total = self.usage
+            meta = {"input_tokens": inp, "output_tokens": out, "total_tokens": total}
+        return AIMessage(content=self.content, usage_metadata=meta) if meta else AIMessage(
+            content=self.content)
+
+
+def metered_chat(inner, probe: UsageProbe, **over):
+    """按生产同一参数装配 MeteredChat(默认值对齐 memory/llm.py)。"""
+    from app.metering.metered_llm import MeteredChat
+
+    kwargs = dict(provider="api.deepseek.com", target="deepseek-chat",
+                  endpoint="https://api.deepseek.com/v1")
+    kwargs.update(over)
+    return MeteredChat(inner, probe, **kwargs)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 调用与费用:实际外部调用(embedding / OCR)的日志与**估算**费用统计。
+// 调用与费用:实际外部调用(embedding / OCR / 长期记忆的 llm 与 rerank)的日志与**估算**费用统计。
 //
 // 界面口径(与后端接口、docs/调用日志与费用统计技术方案.md 一致,改文案前先改文档):
 // - 金额一律标「估算」:按配置单价 × 用量算出来的,不是官方账单,也不扣免费额度 / 折扣;
@@ -87,11 +87,16 @@ const serviceOptions: { value: ServiceKey; label: string }[] = [
   { value: "", label: "全部服务" },
   { value: "embedding", label: "embedding(向量化)" },
   { value: "ocr", label: "ocr(文字 / 票据识别)" },
+  { value: "llm", label: "llm(长期记忆的大模型调用)" },
+  { value: "rerank", label: "rerank(记忆检索重排序)" },
 ];
 const purposeOptions: { value: PurposeKey; label: string }[] = [
   { value: "", label: "全部用途" },
   { value: "document_index", label: "索引(写库)" },
   { value: "query", label: "检索(问答)" },
+  { value: "memory_extract", label: "记忆提取(对话后)" },
+  { value: "memory_maintenance", label: "记忆维护(去重 / 改写)" },
+  { value: "memory_search", label: "记忆召回(回答前)" },
 ];
 const statusOptions: { value: StatusKey; label: string }[] = [
   { value: "", label: "全部状态" },
@@ -166,8 +171,21 @@ const LAYER_TEXT: Record<string, string> = {
   ocr_text: "OCR 文本转换(本地):命中不重跑转换,也不涉及外部调用",
   embedding: "embedding 向量(按文本条数):只有未命中才会真的去调供应商",
 };
-const SERVICE_TEXT: Record<string, string> = { embedding: "向量化", ocr: "OCR 识别" };
-const PURPOSE_TEXT: Record<string, string> = { document_index: "索引", query: "检索" };
+// 服务 / 用途的中文名:后端新增一类调用时同步补在这里(缺失时各图表退化为显示原始 key,
+// 不会空白 —— 但别指望它,新增就在这边加一行)。
+const SERVICE_TEXT: Record<string, string> = {
+  embedding: "向量化",
+  ocr: "OCR 识别",
+  llm: "大模型(记忆)",
+  rerank: "重排序",
+};
+const PURPOSE_TEXT: Record<string, string> = {
+  document_index: "索引",
+  query: "检索",
+  memory_extract: "记忆提取",
+  memory_maintenance: "记忆维护",
+  memory_search: "记忆召回",
+};
 
 const filtersActive = computed(
   () => Boolean(service.value || purpose.value || status.value || range.value === "custom"),
@@ -191,6 +209,8 @@ function onRowKey(e: KeyboardEvent, eventId: string): void {
 const SERVICE_OPTS: { key: string; label: string }[] = [
   { key: "embedding", label: "embedding(向量化)" },
   { key: "ocr", label: "ocr(文字 / 票据)" },
+  { key: "llm", label: "llm(长期记忆的大模型,按 token 计)" },
+  { key: "rerank", label: "rerank(记忆检索重排序,按 token 计)" },
 ];
 const UNIT_OPTS: { key: string; label: string; title: string }[] = [
   { key: "1k_tokens", label: "1k_tokens", title: "每千 token" },
@@ -313,7 +333,10 @@ async function onRemovePrice(id: number | null): Promise<void> {
       <header class="pghead">
         <div>
           <h1 class="pghead__title">调用与费用</h1>
-          <p class="pghead__sub">追踪 Embedding 与 OCR 调用，了解用量与估算费用。</p>
+          <p class="pghead__sub">
+            追踪 Embedding、OCR 与长期记忆的大模型 / 重排序调用，了解用量与估算费用。
+            聊天主链路的模型调用不在计量范围内。
+          </p>
         </div>
         <button class="mt__btn" type="button" :disabled="loading" @click="refresh">
           {{ loading ? "刷新中…" : "刷新" }}

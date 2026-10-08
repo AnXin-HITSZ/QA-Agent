@@ -18,6 +18,7 @@ from app.conversations import inflight
 from app.conversations.store import MAX_TITLE_LENGTH
 from app.graph import get_graph
 from app.graph.trace import used_sop_id, used_sources, used_images
+from app.memory import db as memory_db
 from app.rag import oss
 from app.schemas.chat import ChatRequest, ChatResponse, SourceCitation
 from app.skills import loader
@@ -43,6 +44,49 @@ async def _todos_prompt(request: Request) -> str:
         return format_for_prompt(await store.list_open())
     except Exception:  # noqa: BLE001 —— 读待办失败就当没有,照常回答
         return ""
+
+
+async def _memory_prompt(principal: Principal, question: str) -> str:
+    """回答前召回该用户自己的长期记忆(§9),渲染成注入 system prompt 的参考块。
+
+    - 只读、只在本次生成用:经 config 传给 agent 节点,不写进 state、不入 checkpoint ——
+      否则检索结果会在 Redis 里一轮轮累积,旧记忆越滚越长;
+    - 记忆是**软依赖**:关闭 / 未配库 / 向量或库故障、乃至任何意外异常,一律返回空串,
+      聊天照常(故障细节在 memory.recall_for_answer 里记日志,不打扰用户);
+    - 检索里的 Embedding / Qdrant / 重排序都是同步阻塞调用,必须丢线程池,不占事件循环。
+    """
+    try:
+        from app.memory import service as memory_service
+
+        recall = await memory_db.run(memory_service.recall_for_answer,
+                              user_id=principal.user_id, query=question)
+    except Exception as exc:  # noqa: BLE001 —— 记忆挂了不能拖垮聊天
+        logger.warning("长期记忆召回失败(%s),本轮按无记忆回答", type(exc).__name__)
+        return ""
+    return recall.text
+
+
+async def _remember_exchange(principal: Principal, thread_id: str, question: str,
+                             answer: str, *, source: str) -> None:
+    """回答**完整**结束后登记一次提取任务(§9):只登记,提取由后台 worker 跑。
+
+    调用点就是「成功标准」:非流式在 ainvoke 正常返回之后、流式在整个事件流跑完之后
+    (客户端中途断开 / 生成抛错时根本走不到这里)—— 残缺回答不会被当成一次完整交流。
+
+    登记失败只记日志:答案已经交给用户了,这里再抛只会让一次成功的回答变成 500;
+    代价是这一轮没记下来,用户可在「我的记忆」里手动补一条。
+    """
+    if not (answer or "").strip():
+        return                                   # 空回答没有可提取的内容
+    try:
+        from app.memory import service as memory_service
+
+        await memory_db.run(memory_service.enqueue_extraction, user_id=principal.user_id,
+                     messages=[{"role": "user", "content": question},
+                               {"role": "assistant", "content": answer}],
+                     thread_id=thread_id, source=source)
+    except Exception as exc:  # noqa: BLE001 —— 登记失败不影响这轮回答
+        logger.warning("长期记忆登记失败(%s),本轮未登记提取任务", type(exc).__name__)
 
 
 def _sign_sources(hits: list[dict]) -> list[SourceCitation]:
@@ -99,7 +143,9 @@ async def chat(req: ChatRequest, request: Request,
                principal: Principal = Depends(require_user)) -> ChatResponse:
     """一次性返回完整回复;从 ReAct 轨迹回填本次引用的 SOP。thread_id 续接跨轮记忆。"""
     thread_id = await _resolve_thread(req, principal)
-    config = {"configurable": {"thread_id": thread_id, "todos_prompt": await _todos_prompt(request)}}
+    config = {"configurable": {"thread_id": thread_id,
+                               "todos_prompt": await _todos_prompt(request),
+                               "memory_prompt": await _memory_prompt(principal, req.message)}}
     # 登记在途生成:用户这时点「删除会话」,删除流程会先等这一次跑完再抹 Redis。
     async with inflight.track(thread_id):
         result = await _graph(request).ainvoke({"messages": [HumanMessage(content=req.message)]},
@@ -107,6 +153,8 @@ async def chat(req: ChatRequest, request: Request,
     messages = result["messages"]
     ai = messages[-1]
     content = ai.content if isinstance(ai.content, str) else str(ai.content)
+    # 完整回答已经拿到:登记提取任务(失败不影响这轮回答,见 _remember_exchange)。
+    await _remember_exchange(principal, thread_id, req.message, content, source="chat")
     return ChatResponse(
         skill=used_sop_id(messages),
         content=content,
@@ -141,7 +189,9 @@ async def chat_stream(req: ChatRequest, request: Request,
     一段即为最终答案。后端不再判定「思考 vs 答案」,分类交给前端(见 useChat.ts)。
     """
     thread_id = await _resolve_thread(req, principal)
-    config = {"configurable": {"thread_id": thread_id, "todos_prompt": await _todos_prompt(request)}}
+    config = {"configurable": {"thread_id": thread_id,
+                               "todos_prompt": await _todos_prompt(request),
+                               "memory_prompt": await _memory_prompt(principal, req.message)}}
     inputs = {"messages": [HumanMessage(content=req.message)]}
     graph = _graph(request)
 
@@ -149,6 +199,7 @@ async def chat_stream(req: ChatRequest, request: Request,
         # 先把本通对话的 thread_id 交给前端存下,后续提问回传即可续接记忆。
         yield {"event": "meta", "data": json.dumps({"thread_id": thread_id}, ensure_ascii=False)}
         seen: list = []  # 累积 agent + tools 产出的消息,done 时回读本次引用的 SOP 与知识库来源
+        final = ""  # 最后一段**没有工具调用**的 agent 输出 = 本次的完整回答(登记提取用)
         step = 0  # agent 轮次号:token / tool_call / 该轮 tool_result 共享它
         # 登记在途生成(整个生成期间,含客户端中途断开):删除会话要先等它收尾。
         async with inflight.track(thread_id):
@@ -170,14 +221,22 @@ async def chat_stream(req: ChatRequest, request: Request,
                     if node == "agent":
                         seen.extend(messages)
                         for msg in messages:
-                            for call in getattr(msg, "tool_calls", None) or []:
+                            calls = getattr(msg, "tool_calls", None) or []
+                            for call in calls:
                                 yield {"event": "tool_call", "data": json.dumps({"name": call.get("name"), "args": call.get("args") or dict(), "step": step}, ensure_ascii=False)}
+                            if not calls:            # 没有工具调用 = 这段就是最终回答
+                                text = msg.content if isinstance(msg.content, str) else str(msg.content)
+                                if text.strip():
+                                    final = text
                     elif node == "tools":
                         seen.extend(messages)  # ToolMessage 带 artifact → done 时供 used_sources 读知识库来源
                         for msg in messages:
                             yield {"event": "tool_result", "data": json.dumps({"name": getattr(msg, "name", None), "tool_call_id": getattr(msg, "tool_call_id", None), "step": step}, ensure_ascii=False)}
                         # 工具跑完 → 下一轮 agent 属于新的 step。
                         step += 1
+        # 事件流跑到这里 = 生成完整结束(中途断开 / 抛错都不会执行到这里):
+        # 登记提取任务(**在 done 之前** —— 前端收到 done 就可能关连接,留到后面可能登记不上)。
+        await _remember_exchange(principal, thread_id, req.message, final, source="chat_stream")
         sources = [s.model_dump() for s in _sign_sources(used_sources(seen))]
         yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen), "sources": sources, "images": used_images(seen)}, ensure_ascii=False)}
 

@@ -14,11 +14,19 @@ export type RouteName =
   | "chat"
   | "knowledge"
   | "sops"
-  | "metering";
+  | "metering"
+  | "memory";
 
 // 登录后的应用内视图(页头标签 + 我的账号 + 用户管理)。
 // 与 RouteName 分开取名:AppHeader 的标签高亮只认这几个,认证页传不进去。
-export type AppRouteName = "chat" | "knowledge" | "sops" | "metering" | "account" | "users";
+export type AppRouteName =
+  | "chat"
+  | "knowledge"
+  | "sops"
+  | "metering"
+  | "memory"
+  | "account"
+  | "users";
 
 export interface Route {
   name: RouteName;
@@ -27,7 +35,7 @@ export interface Route {
 
 const NAMES: readonly RouteName[] = [
   "login", "register", "verify", "reset", "forgot",
-  "account", "users", "chat", "knowledge", "sops", "metering",
+  "account", "users", "chat", "knowledge", "sops", "metering", "memory",
 ];
 
 // 未登录时可以停在这几个视图上;其余(应用内视图)一律回登录页。

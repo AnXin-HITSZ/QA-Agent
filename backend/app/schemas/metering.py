@@ -13,11 +13,12 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.metering.model import SERVICE_EMBEDDING, SERVICE_OCR
+from app.metering.model import SERVICE_EMBEDDING, SERVICE_LLM, SERVICE_OCR, SERVICE_RERANK
 from app.metering.pricing import UNITS
 
-# 价目 / 日志共用的服务清单(与 model 里的常量同源)
-SERVICES = (SERVICE_EMBEDDING, SERVICE_OCR)
+# 价目 / 日志共用的服务清单(与 model 里的常量同源)。
+# llm / rerank 是长期记忆引入的:记忆提取与维护决策的聊天模型、记忆检索的重排序。
+SERVICES = (SERVICE_EMBEDDING, SERVICE_OCR, SERVICE_LLM, SERVICE_RERANK)
 
 
 class CallItemView(BaseModel):
@@ -36,8 +37,10 @@ class CallLogItem(BaseModel):
 
     event_id: str = Field(..., description="事件 id(唯一,补写重放幂等靠它)")
     occurred_at: str = Field(..., description="请求开始时间(UTC,ISO8601;前端按本地时区显示)")
-    service: str = Field(..., description="embedding / ocr")
-    purpose: str = Field(..., description="document_index(索引)/ query(检索)")
+    service: str = Field(..., description="embedding / ocr / llm / rerank")
+    purpose: str = Field(..., description=("document_index(索引)/ query(检索)/"
+                                           " memory_extract / memory_maintenance / memory_search"
+                                           "(长期记忆的提取 / 维护 / 检索)"))
     provider: str = Field(..., description="供应商(端点主机名 / aliyun)")
     target: str = Field(default="", description="模型名 / 供应商 OCR Type")
     endpoint: str = Field(default="", description="脱敏后的端点(只有主机名,不含密钥与签名参数)")
@@ -95,7 +98,7 @@ class MeteringTotals(BaseModel):
 
 
 class ServiceStat(BaseModel):
-    service: str = Field(..., description="embedding / ocr")
+    service: str = Field(..., description="embedding / ocr / llm / rerank")
     calls: int = Field(default=0, description="记录条数")
     success: int = Field(default=0, description="成功条数")
     failure: int = Field(default=0, description="失败条数")
@@ -185,7 +188,7 @@ class PriceRuleView(BaseModel):
     """一条价目(供前端解释「估算」的依据;在界面「估算依据」里维护,也只增 / 删)。"""
 
     id: int | None = Field(default=None, description="价目 id")
-    service: str = Field(..., description="embedding / ocr")
+    service: str = Field(..., description="embedding / ocr / llm / rerank")
     provider: str = Field(..., description="供应商")
     target: str = Field(default="", description="模型 / OCR Type;空 = 该服务通用价")
     unit: str = Field(..., description="计费单位:1k_tokens / request / page")
@@ -199,7 +202,7 @@ class PriceRuleView(BaseModel):
 class PriceRuleInput(BaseModel):
     """新增价目的请求体(只增语义;约束对齐 price_config 列定义与「必须引用官方来源」的口径)。"""
 
-    service: str = Field(..., description="embedding / ocr")
+    service: str = Field(..., description="embedding / ocr / llm / rerank")
     provider: str = Field(..., max_length=32, description="供应商(与调用日志里的 provider 一致)")
     target: str = Field(default="", max_length=64, description="模型名 / OCR Type;空 = 该服务通用价")
     unit: str = Field(..., description="计费单位:1k_tokens / request / page")

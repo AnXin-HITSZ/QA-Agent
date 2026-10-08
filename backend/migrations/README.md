@@ -1,9 +1,10 @@
 # 数据库迁移
 
-本目录现在管两组表，都在这一个库里：
+本目录现在管三组表，都在这一个库里：
 
 - **调用日志与费用统计**（0001 / 0002，`docs/调用日志与费用统计技术方案.md`）；
-- **认证、鉴权与用户管理**（0003，`docs/认证鉴权与用户管理技术方案.md`）。
+- **认证、鉴权与用户管理**（0003，`docs/认证鉴权与用户管理技术方案.md`）；
+- **长期记忆**（0004 + 0005，`docs/长期记忆系统技术方案.md`；0005 是同一组表的增量迁移，见文末）。
 
 ## 约定
 
@@ -18,9 +19,9 @@
 
 表结构与代码的对应关系：
 
-- 模型（代码认为库长什么样）：`backend/app/metering/tables.py`（计量）、`backend/app/auth/tables.py`（认证）；
+- 模型（代码认为库长什么样）：`backend/app/metering/tables.py`（计量）、`backend/app/auth/tables.py`（认证）、`backend/app/memory/tables.py`（长期记忆）；
 - 建表 SQL（库实际长什么样）：本目录的 `*.up.sql`；
-- 两边分别由 `tests/test_metering_migration.py` / `tests/test_auth_migration.py` 离线逐项比对（列 / 类型 / 可空 / 自增 / 排序规则 / 主键 / 唯一键 / 索引）。
+- 两边分别由 `tests/test_metering_migration.py` / `tests/test_auth_migration.py` / `tests/test_memory_migration.py` 离线逐项比对（列 / 类型 / 可空 / 自增 / 排序规则 / 主键 / 唯一键 / 索引）。
   改表结构：先改模型，再新增一版迁移，然后跑对应用例。
 
 ## 运行账号授权
@@ -58,6 +59,8 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0001 | `0001_create_metering_tables` | 已应用 | 已应用 |
 | 0002 | `0002_widen_metering_identifiers` | 已应用 | 已应用 |
 | 0003 | `0003_auth_and_conversations` | 已应用 | 已应用 |
+| 0004 | `0004_memory_tables` | 未应用 | 未应用 |
+| 0005 | `0005_memory_scope_fencing_index_ops` | 未应用 | 未应用 |
 
 ## 0001：调用日志与费用统计四张表
 
@@ -96,3 +99,70 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_pro
 - **首个管理员不随迁移种下。** 迁移里不硬编码任何账号、密码或哈希（也不种价格行那种「示例数据」）；第一个管理员由运维在服务器上用 `python -m scripts.create_admin` 建立（交互式输入密码，记审计），见技术方案 §8。
 - **本版之前的旧会话只有 Redis 线程、没有目录行。** 升级后它们不出现在「历史对话」列表里（列表按 `conversations` 分页，不扫 Redis）；是否要补目录行由运维按技术方案 §7 决定，迁移不猜数据。
 - **回滚会连账号与审计一起删。** `0003_auth_and_conversations.down.sql` 删掉六张表（顺序与建表相反，无外键所以顺序不强制）；Redis 里的对话 checkpoint 不随之清理——那是会话删除流程的职责。执行前先让新版代码下线。
+
+## 0004：长期记忆四张表
+
+```sh
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev  < 0004_memory_tables.up.sql
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_prod < 0004_memory_tables.up.sql
+```
+
+建四张表：`memory_items`（记忆事实，按用户隔离、跨会话共享）、`memory_history`（变更审计，只追加）、`memory_jobs`（后台提取任务：幂等入队 + 租约认领 + 退避重试）、`memory_user_state`（每用户的记忆代次，见下）。字段口径见 `docs/长期记忆系统技术方案.md`「数据模型」，列语义写在建表语句的 `COMMENT` 里。
+
+> 本节讲的是 0004 建出来的形态；`scope` / 认领凭证 / 阶段结果 / 版本化索引标记 / `memory_sources` / `memory_ops` 这些列与表由 **0005** 追加。**当前应用按三版升级，顺序 0004 → 0005 → 0006**（回滚逆序）。
+
+几点说明：
+
+- **MySQL 是事实源，Qdrant 只是可重建索引。** 记忆的向量集合（`MEMORY_COLLECTION`，默认 `user_memory`）任何时候都能从 `memory_items` 重建；库里不存向量，也不存「只在 Qdrant 有」的状态。删表重来只丢索引，不丢记忆。
+- **`memory_items.content_hash` 上刻意没有唯一键。** 删除是软删（行留表里供审计）；如果 `(user_id, content_hash)` 唯一，用户删掉一条记忆后再遇到同样事实就永远写不回来。去重在「有效记忆」集合上做（`app/memory/repo.get_active_by_hash`）。
+- **`memory_jobs.payload` 在任务进终态时清成 `{}`。** 对话正文只为「提取」这一件事在任务行上短暂停留，不在库里长留；`last_error` 只存脱敏摘要。
+- **同一用户同一时刻只允许一个 `running` 任务**（认领查询显式避开租约未过期的用户）：自动维护要在「读到的现有记忆」上做 ADD/UPDATE/DELETE 决策，按用户串行才不会并发写出重复记忆。
+- **`memory_user_state.generation` 是「彻底清除」的作废开关。** 用户点「清除全部记忆」时先给该用户的代次 +1、再删正文；`memory_jobs.generation` 记的是**入队时**的代次。任务执行前比一次、写入事务里（`repo.assert_generation`）再比一次，对不上就整批作废 —— 清除之前入队 / 已经开跑的任务，不会把刚被删掉的事实重新写回来。代次只增不减，也不随「软删一条」变化。
+- **审计行在彻底清除时保留但正文脱敏**（`old_text` / `new_text` 置空、`reason` 改成「用户数据彻底删除」）：留一条「什么时候发生过一次删除」的线索，恢复 / 对账都不依赖已删正文。
+- **顺序：先应用迁移，再让带长期记忆的代码上线。** 缺表期间记忆接口会明确报错（不会静默变成「没有记忆」）；聊天本身不受影响（记忆是软依赖）。
+- **回滚会连记忆与审计一起删。** `0004_memory_tables.down.sql` 先删 `memory_user_state` 再删另外三张表（无外键，顺序只是习惯）；Qdrant 里的用户记忆集合不随之清理——那是本模块重建 / 清理流程的职责，执行前先让新版代码下线。**有 0005 时必须先回滚 0005 再回滚 0004**（0005 的列还在表上时 0004 的 down 也能删表，但按约定逆序执行，别留半截状态）。
+
+## 0005：长期记忆的作用域、认领凭证、阶段结果与清理台账
+
+```sh
+# 先在开发库，再在生产库；两版一起上，顺序不能反
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev  < 0004_memory_tables.up.sql
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev  < 0005_memory_scope_fencing_index_ops.up.sql
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_prod < 0004_memory_tables.up.sql
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_prod < 0005_memory_scope_fencing_index_ops.up.sql
+```
+
+**只加不改**：给 `memory_items` / `memory_jobs` 各加几列（都是 `ADD COLUMN ... NULL` → `UPDATE` 回填 → `MODIFY ... NOT NULL`，本目录「NOT NULL 的默认值在 Python 侧给」的定式），另建两张新表。不改名、不删列、不删键，所以**已经跑过 0004 的库直接执行 0005 即可**。
+
+| 落点 | 列 / 表 | 解决什么 |
+| --- | --- | --- |
+| 隔离 | `memory_items.scope`、`memory_jobs.scope`、`memory_ops.scope`、`memory_sources.scope` | 评测（`eval:<run-id>`）与正式（`''`）在同一套表、同一个 Qdrant 集合里严格分开：认领 / 补索引 / 清理 / 清除 / 检索全部按它过滤 |
+| fencing | `memory_jobs.claim_token`、`memory_ops.claim_token` | 收尾 / 续租 / 阶段结果全部是「同时匹配 owner + 凭证」的条件更新；失去租约的执行者一行都改不动 |
+| 阶段结果 | `memory_jobs.stages`、`outcome`、`committed_at` | 重试复用已付费的提取结果；`committed_at` 非空时重试只做索引收尾，不重复改事实 |
+| 版本化索引标记 | `memory_items.meta_version`、`indexed_revision`、`indexed_meta_version`、`generation` | 正文变了才重新向量化；只改元数据走「刷新 payload」，零次 Embedding 调用；`generation` 让清除按代次上界删点 |
+| 来源与时序 | `memory_items.kind`、`event_time`；新表 `memory_sources` | 事实类型 / 事件时间与记录时间分开；记忆 ↔ 来源会话与轮次（`turn_id` 是入队幂等的稳定标识，替代正文哈希） |
+| 清理台账 | 新表 `memory_ops` | 删除 / 彻底清除时**先在事实事务里登记**，再在事务外清 Qdrant；失败按退避重试，不是「写一行日志」 |
+
+几点说明：
+
+- **为什么不直接改 0004：** 本目录的约定是「已应用的迁移文件不再修改」。把上面这些塞回 0004，已经跑过 0004 的库就没有升级路径了（重跑会撞 `1050 table already exists`）；增量迁移让「跑过 0004 的库」和「全新库」走同一条路：先 0004，再 0005。
+- **两张新表的主键形态不同是有意的：** `memory_sources` 用 `AUTO_INCREMENT BIGINT`（同一条记忆有多个来源是常态，键只用来去重与定位）；`memory_ops` 用 `CHAR(32)`（与 `memory_jobs` 一致，`uuid4().hex`，操作 id 会被外部引用）。
+- **`memory_sources` 的唯一键 `(memory_id, turn_id)`** 是入队幂等的落点：同一轮对话重复入队只记一条来源；同一句话在不同会话里说过会记成两条来源（正文哈希做不到这一点）。
+- **`memory_ops` 上不放外键**（本目录一律不建外键）：彻底清除时先删记忆行、再由台账去清向量点，「删除操作行的引用」不该反过来拦住记忆行的删除。
+- **回滚顺序：先 0005 再 0004。** `0005_..._ops.down.sql` 只删表与列——它**丢掉这些列里的值**（评测数据的 `scope`、认领凭证、阶段结果、索引版本标记都随之消失），而且不做事前校验。所以回滚前先确认：代码已回到读不到这些列的那一版，且没有正在跑的 Worker。
+- **未在任何真 MySQL 上执行过**（开发库与生产库都还没动，见部署记录）。先在可弃的开发库按序 up、再逆序 down 演练一遍，见 `docs/长期记忆系统部署与评测指南.md` §7 与 `tests/test_memory_mysql.py`（设 `MEMORY_TEST_MYSQL_URL` 后会自动按 0004 → 0005 → 0006 应用、逆序回滚）。
+
+
+## 0006：记忆审计与清除代次按作用域隔离
+
+文件：`0006_memory_scope_state_history.up.sql` / `.down.sql`。
+
+依赖 0004、0005；已执行 0005 的库只需新增执行 0006。迁移新增 `memory_history.scope`，把 `memory_user_state` 主键改为 `(user_id, scope)`，任务幂等唯一键加入 scope。停止旧 Worker 并备份后手工执行；尚未在真实 MySQL 上运行。
+
+```sh
+mysql --default-character-set=utf8mb4 -h <host> -u qa_migrate -p <database> < backend/migrations/0006_memory_scope_state_history.up.sql
+```
+
+全新库按 0004 → 0005 → 0006；回滚按 0006 → 0005 → 0004。回滚前清理评测数据，避免恢复旧任务唯一键冲突。回滚会丢失独立评测代次与审计作用域，不是无损操作。历史已清除事实的审计无法可靠回填评测作用域，升级前应清理旧评测资料并核对备份。
+
+`tests/test_memory_mysql.py` 按三个迁移顺序执行；需配置可弃测试库 `MEMORY_TEST_MYSQL_URL` 才能验证真实迁移与行锁。

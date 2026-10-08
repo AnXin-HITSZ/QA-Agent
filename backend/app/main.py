@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
-    admin_users, auth, chat, conversations, health, knowledge, metering, sops, todos,
+    admin_users, auth, chat, conversations, health, knowledge, memory, metering, sops, todos,
 )
 from app.config import get_settings
 from app.graph import build_graph
@@ -118,6 +118,20 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("调用日志初始化失败(不影响启动与业务):%s", exc)
 
+    # 长期记忆:起后台提取线程(认领 MySQL 里的记忆任务 → 提取 → 维护落库)。
+    # 未配 MYSQL_URL / 显式关闭 / 起线程失败都不影响启动与聊天 —— 记忆是软依赖。
+    try:
+        from app.memory import worker as memory_worker
+
+        memory_worker.start()
+        st = memory_worker.status()
+        if st.get("enabled") and st.get("configured"):
+            logger.info("长期记忆:后台提取线程已启动;任务队列 %s", st.get("jobs") or "空")
+        else:
+            logger.info("长期记忆:未启用(见配置 MEMORY_ENABLED / MYSQL_URL)")
+    except Exception as exc:
+        logger.warning("长期记忆初始化失败(不影响启动与聊天):%s", exc)
+
     try:
         yield
     finally:
@@ -127,6 +141,12 @@ async def lifespan(app: FastAPI):
             await ratelimit.close()          # 限流 Redis 连接:不关会拖着 aiohttp 任务不放
         except Exception as exc:
             logger.warning("限流连接收尾失败:%s", exc)
+        try:
+            from app.memory import worker as memory_worker
+
+            memory_worker.stop()
+        except Exception as exc:
+            logger.warning("长期记忆线程收尾失败:%s", exc)
         try:
             from app.metering import stop as metering_stop
 
@@ -163,6 +183,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(knowledge.router)
     app.include_router(knowledge.admin_router)
+    app.include_router(memory.router)            # 我的记忆(普通用户自管理,user_id 只来自 Principal)
     app.include_router(metering.router)          # 调用日志与费用统计(admin,见 §9 权限说明)
     app.include_router(sops.router)
     app.include_router(todos.router)

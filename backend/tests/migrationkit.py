@@ -143,7 +143,16 @@ _NULL = re.compile(r"\bNULL\b", re.I)
 _ENGINE = re.compile(r"ENGINE\s*=\s*(\w+)", re.I)
 _CHARSET = re.compile(r"(?:DEFAULT\s+)?CHARSET\s*=\s*(\w+)", re.I)
 _DROP_TABLE = re.compile(r"^DROP\s+TABLE\s+(IF\s+EXISTS\s+)?(\w+)$", re.I)
-_ALTER_MODIFY = re.compile(r"^ALTER\s+TABLE\s+(\w+)\s+MODIFY\s+(?:COLUMN\s+)?(.+)$", re.I | re.S)
+# 0005 起出现「加列 / 加键」的增量迁移（既有库必须能靠新版升级），解析随之扩展：
+_ALTER_TABLE = re.compile(r"^ALTER\s+TABLE\s+(\w+)\s+(.+)$", re.I | re.S)
+_ALTER_MODIFY_ACTION = re.compile(r"^MODIFY\s+(?:COLUMN\s+)?(.+)$", re.I | re.S)
+_ADD_COLUMN = re.compile(r"^ADD\s+(?:COLUMN\s+)?(.+)$", re.I | re.S)
+_ADD_UNIQUE = re.compile(r"^ADD\s+UNIQUE\s+KEY\s+(\w+)\s*\(([^)]*)\)$", re.I)
+_ADD_INDEX = re.compile(r"^ADD\s+(?:KEY|INDEX)\s+(\w+)\s*\(([^)]*)\)$", re.I)
+_DROP_COLUMN = re.compile(r"^DROP\s+(?:COLUMN\s+)?(\w+)$", re.I)
+_DROP_INDEX = re.compile(r"^DROP\s+(?:KEY|INDEX)\s+(\w+)$", re.I)
+# 回填用的 DML（ALTER 之后给存量行一个值）：不改结构，解析时跳过。
+_DATA_ONLY = re.compile(r"^(?:UPDATE|DELETE|INSERT)\s+\w+\b", re.I)
 
 
 def canon_type(sql: str) -> str:
@@ -274,39 +283,101 @@ def migration_tables() -> dict[str, Table]:
 
 
 def apply_up(schema: dict[str, Table], sql: str, *, where: str) -> None:
-    """把一份 up 的语句作用到结构上:CREATE TABLE 建表、ALTER ... MODIFY 改列。"""
+    """把一份 up 的语句作用到结构上:CREATE TABLE 建表、ALTER TABLE 改结构、回填 DML 跳过。"""
     for stmt in statements(sql):
-        if alter_modify(schema, stmt, where=where):
+        if _DATA_ONLY.match(stmt):
+            continue                       # 给存量行回填值的 UPDATE / 清理用的 DELETE:不改结构
+        if alter_table(schema, stmt, where=where):
             continue
         table = parse_table(stmt)          # 其余写法在这里显式报错(宁可炸,不要漏检)
         assert table.name not in schema, f"{where}: 重复建表:{table.name}"
         schema[table.name] = table
 
 
-def alter_modify(schema: dict[str, Table], stmt: str, *, where: str) -> bool:
-    """识别并应用 `ALTER TABLE t MODIFY [COLUMN] 列名 类型 NULL|NOT NULL`;不是 ALTER 返回 False。"""
-    m = _ALTER_MODIFY.match(stmt)
+def alter_table(schema: dict[str, Table], stmt: str, *, where: str) -> bool:
+    """识别并应用 `ALTER TABLE t <动作列表>`;不是 ALTER 返回 False。
+
+    支持的动作（只覆盖本仓库用到的写法，其余一律报错）：
+      MODIFY [COLUMN] 列 类型 NULL|NOT NULL      —— 改列（唯一的「就地改」）
+      ADD [COLUMN] 列 类型 NULL|NOT NULL         —— 加列（必须是显式 NULL / NOT NULL）
+      ADD [UNIQUE] KEY 名 (列…)                  —— 加键
+      DROP [COLUMN] 列 / DROP [KEY|INDEX] 名     —— 删列 / 删键（回滚用）
+
+    动作列表按**顶层逗号**切分：列注释里的逗号、类型括号里的逗号都不算（_split_items 负责）。
+    0001~0004 的单列 MODIFY 与 0005 起的多动作 ALTER 走同一条路径 —— 两条路各写一份解析，
+    「迁移与模型一致」这句话在两种写法上就会有不同的含义。
+    """
+    m = _ALTER_TABLE.match(stmt)
     if not m:
         return False
-    name, spec = m.group(1), m.group(2).strip()
+    name, body = m.group(1), m.group(2).strip()
     table = schema.get(name)
     assert table is not None, f"{where}: ALTER 的表不在结构里:{name}"
-    col = _column(spec, name)
-    names = [c.name for c in table.columns]
-    assert col.name in names, f"{where}: {name}.{col.name} 不在表里(改列不能改名)"
-    schema[name] = replace(table, columns=tuple(col if c.name == col.name else c
-                                               for c in table.columns))
+    for action in _split_items(body):
+        if re.fullmatch(r"DROP\s+PRIMARY\s+KEY", action, re.I):
+            table = replace(table, primary_key=())
+            continue
+        if mm := re.fullmatch(r"ADD\s+PRIMARY\s+KEY\s*\(([^)]+)\)", action, re.I):
+            table = replace(table, primary_key=_cols(mm.group(1)))
+            continue
+        if mm := _ALTER_MODIFY_ACTION.match(action):
+            col = _column(mm.group(1).strip(), name)
+            names = [c.name for c in table.columns]
+            assert col.name in names, f"{where}: {name}.{col.name} 不在表里(改列不能改名)"
+            table = replace(table, columns=tuple(col if c.name == col.name else c
+                                                 for c in table.columns))
+            continue
+        if mm := _ADD_UNIQUE.match(action):
+            assert mm.group(1) not in table.uniques, f"{where}: {name} 重复的唯一键:{mm.group(1)}"
+            table = replace(table, uniques={**table.uniques, mm.group(1): _cols(mm.group(2))})
+            continue
+        if mm := _ADD_INDEX.match(action):
+            assert mm.group(1) not in table.indexes, f"{where}: {name} 重复的索引:{mm.group(1)}"
+            table = replace(table, indexes={**table.indexes, mm.group(1): _cols(mm.group(2))})
+            continue
+        if mm := _ADD_COLUMN.match(action):
+            col = _column(mm.group(1).strip(), name)
+            assert col.name not in [c.name for c in table.columns], \
+                f"{where}: {name}.{col.name} 已经存在(加列不能撞名)"
+            table = replace(table, columns=(*table.columns, col))
+            continue
+        if mm := _DROP_COLUMN.match(action):
+            col = mm.group(1)
+            assert col in [c.name for c in table.columns], f"{where}: {name}.{col} 不在表里"
+            assert col not in table.primary_key, f"{where}: 不能删主键列 {name}.{col}"
+            table = replace(table, columns=tuple(c for c in table.columns if c.name != col))
+            continue
+        if mm := _DROP_INDEX.match(action):
+            key = mm.group(1)
+            assert key in table.indexes or key in table.uniques, f"{where}: {name} 没有键:{key}"
+            table = replace(table, indexes={k: v for k, v in table.indexes.items() if k != key},
+                            uniques={k: v for k, v in table.uniques.items() if k != key})
+            continue
+        raise AssertionError(f"{where}: 认不出的 ALTER 动作:{action!r}")
+    schema[name] = table
     return True
 
 
+def alter_modify(schema: dict[str, Table], stmt: str, *, where: str) -> bool:
+    """单列 `ALTER TABLE t MODIFY [COLUMN] 列名 类型 NULL|NOT NULL`;不是这种返回 False。
+
+    保留这个名字是因为它是「迁移读法」的一部分（apply_up / apply_down 走 alter_table，
+    行为完全一致：MODIFY 只是动作列表里只有一项的特例）。
+    """
+    return alter_table(schema, stmt, where=where)
+
+
 def apply_down(schema: dict[str, Table], sql: str, *, where: str) -> None:
-    """把一份 down 的语句作用到结构上:DROP TABLE IF EXISTS 删表、ALTER ... MODIFY 改回去。"""
+    """把一份 down 的语句作用到结构上:DROP TABLE IF EXISTS 删表、ALTER TABLE 改回去。"""
     for stmt in statements(sql):
-        if alter_modify(schema, stmt, where=where):
+        if _DATA_ONLY.match(stmt):
+            continue
+        if alter_table(schema, stmt, where=where):
             continue
         m = _DROP_TABLE.match(stmt)
         assert m and m.group(1), (
-            f"{where}: down 只允许 DROP TABLE IF EXISTS / ALTER ... MODIFY:{stmt[:60]!r}")
+            f"{where}: down 只允许 DROP TABLE IF EXISTS / ALTER TABLE(删列、删键、改列):"
+            f"{stmt[:60]!r}")
         dropped = schema.pop(m.group(2), None)
         assert dropped is not None, f"{where}: 删了结构里没有的表:{m.group(2)}"
 

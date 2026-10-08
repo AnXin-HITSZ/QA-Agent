@@ -21,8 +21,9 @@ from langchain_core.embeddings import Embeddings
 
 from app.metering import build_call, current_context, new_id, record_call
 from app.metering.model import (
-    BILLING_BILLABLE, BILLING_UNKNOWN, SERVICE_EMBEDDING, STATUS_FAILURE, STATUS_SUCCESS,
-    USAGE_SOURCE_UNKNOWN, USAGE_SOURCE_VENDOR, CallItem,
+    BILLING_BILLABLE, BILLING_UNKNOWN, NOTE_FAILED_BILLING, NOTE_NO_USAGE, NOTE_SDK_RETRY,
+    SERVICE_EMBEDDING, STATUS_FAILURE, STATUS_SUCCESS, USAGE_SOURCE_UNKNOWN, USAGE_SOURCE_VENDOR,
+    CallItem,
 )
 from app.metering.probe import UsageProbe, attempts, prompt_tokens
 from app.metering.redact import safe_error, safe_endpoint
@@ -32,10 +33,6 @@ logger = logging.getLogger(__name__)
 # 单请求输入条数上限:qwen3.7-text-embedding-flash 为 20,这里与 embeddings.py 的 chunk_size
 # 对齐保守取 10(要放宽到 20 就两边一起改)。
 EMBED_BATCH = 10
-
-NOTE_NO_USAGE = "供应商响应未返回 usage,无法取得 token 数(不按字数折算)"
-NOTE_SDK_RETRY = "含供应商 SDK 内部重试,http_attempts 为观测到的真实请求次数"
-NOTE_FAILED_BILLING = "调用失败:供应商是否计费未知,不按 0 计"
 
 
 class MeteredEmbeddings(Embeddings):

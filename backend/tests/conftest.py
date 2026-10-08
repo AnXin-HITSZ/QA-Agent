@@ -407,6 +407,33 @@ def auth_db(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def memory_db(monkeypatch, tmp_path):
+    """长期记忆的真库（临时 SQLite + 与迁移等价的真表），身份用 autouse 的「已登录管理员」桩。
+
+    与 auth_db 同一套：这里是 create_all 建表（仅测试），迁移脚本本身由
+    tests/test_memory_migration.py 与手写 SQL 逐项比对看护。
+
+    注意 MySQL 专有行为不在 SQLite 上假装通过：并发认领的行锁 / 真列宽另见
+    tests/test_memory_mysql.py（需 MEMORY_TEST_MYSQL_URL，否则整体跳过）。
+    """
+    from types import SimpleNamespace
+
+    from app.config import get_settings
+    from app.memory import db
+    from app.memory.tables import Base
+
+    s = get_settings()
+    monkeypatch.setattr(s, "mysql_url",
+                        f"sqlite+pysqlite:///{(tmp_path / 'memory.db').as_posix()}")
+    monkeypatch.setattr(s, "memory_enabled", True)
+    db.dispose()                                   # 别让别的用例的引擎跨到这里
+    engine = db.get_engine()
+    Base.metadata.create_all(engine)
+    yield SimpleNamespace(db=db, settings=s)
+    db.dispose()
+
+
+@pytest.fixture
 def auth_env(auth_db, monkeypatch):
     """真认证环境:真 AuthService + SQLite 真表(auth_db)+ 假发信 + 内存限流。
 
