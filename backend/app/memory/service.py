@@ -757,9 +757,16 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
                           .encode("utf-8")).hexdigest()
     turn = (turn_id or "").strip() or f"{(thread_id or '-')}:{body}"[:160]
     key = (dedupe_key or "").strip() or turn
+    # 幂等键列是 CHAR(64),超长键**不能做前缀截断**:turn 的前缀是会话线程 id
+    # (qa:{环境}:chat:v1:u:{user_id}:c:{conv_id},本身就有 90 字符量级),截前 64 位会把
+    # 「用户这句话的正文哈希」整段切掉 —— 同一会话每一轮都算成同一个键,第 2 轮起全被
+    # 唯一约束当重复入队静默丢弃(2026-10-08 生产实测:5 轮对话只登记了第 1 轮)。
+    # 超长时改取整体哈希,收敛到 64 位十六进制;调用方显式传入的短键保持原样(库里可读)。
+    if len(key) > 64:
+        key = hashlib.sha256(key.encode("utf-8")).hexdigest()
     with db.session_scope() as session:
         return repo.enqueue_job(
-            session, user_id=user_id, kind=JOB_KIND_EXTRACT, dedupe_key=key[:64],
+            session, user_id=user_id, kind=JOB_KIND_EXTRACT, dedupe_key=key,
             thread_id=thread_id, payload={"messages": cleaned, "source": (source or "")[:32]},
             max_attempts=max(1, int(get_settings().memory_job_max_attempts)), now=now,
             scope=scope, turn_id=turn,

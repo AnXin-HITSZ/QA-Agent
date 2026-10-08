@@ -293,8 +293,31 @@ def test_the_derived_turn_id_is_stable_and_thread_scoped(env, monkeypatch):
     jobs = _jobs(env)
     assert len(jobs) == 2
     assert jobs[0]["turn_id"].startswith(thread_id)                # 会话 id 参与其中
-    assert jobs[0]["dedupe_key"] == jobs[0]["turn_id"][:64]        # 幂等键就是这个标识的前 64 字符
+    # 幂等键从轮次标识**整体**导出(超长收成 64 位摘要),不是前缀截断 —— 前缀 64 位里
+    # 只有线程 id(本身 ~90 字符),「用户那句话的哈希」会被整段切掉,同一会话每一轮都
+    # 撞成同一个键(2026-10-08 生产回归,逐轮入队见下面 one_conversation 那条)。
+    assert jobs[0]["dedupe_key"] != jobs[0]["turn_id"][:64]
+    assert len(jobs[0]["dedupe_key"]) == 64                        # 列宽 CHAR(64) 内的定长摘要
     assert jobs[1]["turn_id"] != jobs[0]["turn_id"]                # 换个会话就是另一轮
+
+
+def test_every_turn_of_one_conversation_registers_its_own_job(env, monkeypatch):
+    """同一会话接着聊几轮:每轮各登记一个任务。
+
+    2026-10-08 生产回归:幂等键被前缀截断后,同一会话第 2 轮起全部被当成重复入队
+    **静默丢弃** —— 聊了一整场,只有第一句进了提取。
+    """
+    graph = FakeGraph()
+
+    first = _post(env, monkeypatch, graph)
+    thread_id = first.json()["thread_id"]
+    _post(env, monkeypatch, graph, thread_id=thread_id, message="我是安心,你是谁?")
+    _post(env, monkeypatch, graph, thread_id=thread_id, message="请你记住我是安心。")
+
+    jobs = _jobs(env)
+    assert len(jobs) == 3
+    assert [j["thread_id"] for j in jobs] == [thread_id] * 3
+    assert len({j["dedupe_key"] for j in jobs}) == 3               # 三轮三个键,互不误伤
 
 
 def test_a_failed_generation_registers_nothing(env, monkeypatch):

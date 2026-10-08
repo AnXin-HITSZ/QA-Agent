@@ -366,3 +366,70 @@ def test_settings_snapshot_matches_module_defaults():
     s = get_settings()
     assert s.embeddings_dim > 0 and s.memory_collection
     assert vector.collection_name() == s.memory_collection
+
+
+# ---- 入队:派生幂等键(会话 × 每轮) ----
+
+
+def _thread(conv: str = "0f6c3d2e-9b1a-4c8d-8f0e-2b7a5c1d9e3f") -> str:
+    """真实形态的会话线程 id:qa:{环境}:chat:v1:u:{用户}:c:{会话},90 字符量级。"""
+    return f"qa:prod:chat:v1:u:{U1}:c:{conv}"
+
+
+def _enqueue_turn(text: str, *, thread: str) -> str | None:
+    return service.enqueue_extraction(
+        user_id=U1, thread_id=thread,
+        messages=[{"role": "user", "content": text},
+                  {"role": "assistant", "content": "好的"}],
+    )
+
+
+def test_every_turn_of_a_conversation_enqueues_its_own_job(mem_env):
+    """同一会话连续几轮,每轮各登记一个任务 —— 幂等键不能退化成「一会话一键」。
+
+    2026-10-08 生产回归:幂等键是线程 id + 用户那句话的哈希,但入库前被前缀截断到 64 位
+    (线程 id 本身就 ~90 字符),哈希被整段切掉 —— 第 2 轮起全部被当成重复入队静默丢弃。
+    """
+    thread = _thread()
+
+    ids = [_enqueue_turn(t, thread=thread)
+           for t in ("你好", "我是安心,你是谁?", "请你记住我是安心。")]
+
+    assert all(ids)                    # 三轮都真的登了记
+    assert len(set(ids)) == 3
+
+
+def test_retrying_the_same_turn_does_not_enqueue_twice(mem_env):
+    """同一轮重复登记(重试 / 重放)仍被幂等挡住 —— 一进一挡,是同一处修复的两面。"""
+    thread = _thread()
+
+    first = _enqueue_turn("请你记住我是安心。", thread=thread)
+
+    assert first
+    assert _enqueue_turn("请你记住我是安心。", thread=thread) is None
+
+
+def test_retrying_the_same_turn_with_another_answer_is_still_one_job(mem_env):
+    """同一轮里重新生成了一遍回答(助手的话换了)还是同一轮,不重复登记。"""
+    thread = _thread()
+    first = service.enqueue_extraction(
+        user_id=U1, thread_id=thread,
+        messages=[{"role": "user", "content": "请你记住我是安心。"},
+                  {"role": "assistant", "content": "好的,记下了。"}])
+
+    second = service.enqueue_extraction(
+        user_id=U1, thread_id=thread,
+        messages=[{"role": "user", "content": "请你记住我是安心。"},
+                  {"role": "assistant", "content": "明白。"}])
+
+    assert first and second is None
+
+
+def test_the_same_words_in_another_conversation_enqueue_again(mem_env):
+    """同样的话在两个会话里是两个来源:幂等键带着会话 id,不被合并。"""
+    other = _thread("11111111-1111-4111-8111-111111111111")
+
+    a = _enqueue_turn("我住在深圳", thread=_thread())
+    b = _enqueue_turn("我住在深圳", thread=other)
+
+    assert a and b and a != b
