@@ -59,8 +59,9 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0001 | `0001_create_metering_tables` | 已应用 | 已应用 |
 | 0002 | `0002_widen_metering_identifiers` | 已应用 | 已应用 |
 | 0003 | `0003_auth_and_conversations` | 已应用 | 已应用 |
-| 0004 | `0004_memory_tables` | 未应用 | 未应用 |
-| 0005 | `0005_memory_scope_fencing_index_ops` | 未应用 | 未应用 |
+| 0004 | `0004_memory_tables` | 已应用 | 已应用 |
+| 0005 | `0005_memory_scope_fencing_index_ops` | 已应用 | 已应用 |
+| 0006 | `0006_memory_scope_state_history` | 已应用 | 已应用 |
 
 ## 0001：调用日志与费用统计四张表
 
@@ -150,14 +151,14 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_pro
 - **`memory_sources` 的唯一键 `(memory_id, turn_id)`** 是入队幂等的落点：同一轮对话重复入队只记一条来源；同一句话在不同会话里说过会记成两条来源（正文哈希做不到这一点）。
 - **`memory_ops` 上不放外键**（本目录一律不建外键）：彻底清除时先删记忆行、再由台账去清向量点，「删除操作行的引用」不该反过来拦住记忆行的删除。
 - **回滚顺序：先 0005 再 0004。** `0005_..._ops.down.sql` 只删表与列——它**丢掉这些列里的值**（评测数据的 `scope`、认领凭证、阶段结果、索引版本标记都随之消失），而且不做事前校验。所以回滚前先确认：代码已回到读不到这些列的那一版，且没有正在跑的 Worker。
-- **未在任何真 MySQL 上执行过**（开发库与生产库都还没动，见部署记录）。先在可弃的开发库按序 up、再逆序 down 演练一遍，见 `docs/长期记忆系统部署与评测指南.md` §7 与 `tests/test_memory_mysql.py`（设 `MEMORY_TEST_MYSQL_URL` 后会自动按 0004 → 0005 → 0006 应用、逆序回滚）。
+- **up 已于 2026-10-08 在开发库与生产库按 0004 → 0005 → 0006 执行**（见部署记录）；**逆序回滚仍未在任何真库上演练过**。回滚演练去可弃的库上做，见 `docs/长期记忆系统部署与评测指南.md` §7 与 `tests/test_memory_mysql.py`（设 `MEMORY_TEST_MYSQL_URL` 后会自动按 0004 → 0005 → 0006 应用、逆序回滚）。
 
 
 ## 0006：记忆审计与清除代次按作用域隔离
 
 文件：`0006_memory_scope_state_history.up.sql` / `.down.sql`。
 
-依赖 0004、0005；已执行 0005 的库只需新增执行 0006。迁移新增 `memory_history.scope`，把 `memory_user_state` 主键改为 `(user_id, scope)`，任务幂等唯一键加入 scope。停止旧 Worker 并备份后手工执行；尚未在真实 MySQL 上运行。
+依赖 0004、0005；已执行 0005 的库只需新增执行 0006。迁移新增 `memory_history.scope`，把 `memory_user_state` 主键改为 `(user_id, scope)`，任务幂等唯一键加入 scope。停止旧 Worker 并备份后手工执行；up 已于 2026-10-08 在开发库与生产库执行（见部署记录），逆序回滚未在真库演练过。
 
 ```sh
 mysql --default-character-set=utf8mb4 -h <host> -u qa_migrate -p <database> < backend/migrations/0006_memory_scope_state_history.up.sql
