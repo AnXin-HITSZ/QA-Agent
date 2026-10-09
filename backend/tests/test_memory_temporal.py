@@ -5,7 +5,15 @@ from datetime import datetime
 import pytest
 
 from app.memory import extract, maintain, service, search, repo
-from app.memory.temporal import resolve_time, enrich_facts
+from app.memory.temporal import resolve_time, enrich_facts, context_label
+
+
+def test_unresolved_relative_time_keeps_anchor_and_precision_limit():
+    label = context_label({"time": resolve_time("last week", "2023-06-09T19:55:00")})
+    assert "last week" in label and "2023-06-09T19:55:00" in label
+    assert "不等于没有时间证据" in label
+    assert "不得补造具体某一天" in label
+    assert resolve_time("last week", "2023-06-09T19:55:00")["start"] is None
 from app.memory.errors import MemoryExtractionError
 from app.memory.errors import MemoryConflict
 from app.memory.models import ACTOR_USER

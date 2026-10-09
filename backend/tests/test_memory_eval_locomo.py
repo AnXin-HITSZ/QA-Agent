@@ -559,6 +559,10 @@ def test_report_lists_failures_and_marks_invalid_runs(env, tmp_path, capsys):
 
     dense_before, chat_before = len(env.dense.calls), len(env.chat_llm.calls)
     assert me.cmd_score(Namespace(run_id="report-me", metrics="f1,bleu1", judge_retries=1)) == 0
+    score_before = run.path("scores.json").read_bytes()
+    run.write("annotations.json", {"run_id": "report-me", "entries": [{
+        "question_id": out["questions"][0]["id"], "kind": "reference_conflict",
+        "note": "原文与参考时间冲突，保留原始评分"}]})
     assert me.cmd_report(Namespace(run_id="report-me")) == 0
     capsys.readouterr()
 
@@ -570,6 +574,11 @@ def test_report_lists_failures_and_marks_invalid_runs(env, tmp_path, capsys):
     assert summary["no_memory"]["counts"]["failed"] == 1
     assert summary["no_memory"]["mean_f1"] is None          # 失败不记 0:没有可平均的样本
     markdown = run.path("report.md").read_text(encoding="utf-8")
+    assert "人工复核标注" in markdown and "原文与参考时间冲突" in markdown
+    assert run.path("scores.json").read_bytes() == score_before
+    run.write("annotations.json", {"run_id": "another-run", "entries": []})
+    with pytest.raises(SystemExit, match="run_id"):
+        me.cmd_report(Namespace(run_id="report-me"))
     assert "三模式对照" in markdown and "失败样本" in markdown and "口径与局限" in markdown
 
 

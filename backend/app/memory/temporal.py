@@ -114,6 +114,10 @@ def context_label(context: dict) -> str:
     labels = [f"事件状态:{context.get('state', 'unknown')}"]
     if time.get("raw"):
         labels.append(f"时间原文:{time['raw']}")
+    if time.get("raw") and time.get("anchor"):
+        labels.append(f"时间表达参照的记录时间:{time['anchor']}")
+        if time.get("status") == "ambiguous":
+            labels.append("未解析成精确日期不等于没有时间证据；可保留相对表达并说明参照时间，不得补造具体某一天")
     if time.get("start"):
         labels.append(f"事件时间:{time['start']}" + (f"至{time['end']}" if time.get("end") else ""))
     labels.append(f"时间精度:{time.get('precision', 'unknown')};解析:{time.get('status', 'unknown')}")

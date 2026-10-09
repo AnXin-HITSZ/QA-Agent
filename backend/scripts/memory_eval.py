@@ -121,12 +121,13 @@ DEFAULT_CONTEXT_CHARS = 24000
 
 # 评测回答指令:**三种模式共用**,只有上下文来源不同(公平性要求,见模块 docstring)。
 # 与聊天页的实验室助手提示词不同:不引导任何工具 / SOP 行为,只要求依据证据简短作答。
-INSTRUCTION_VERSION = "eval-answer/2"
+INSTRUCTION_VERSION = "eval-answer/3"
 EVAL_ANSWER_INSTRUCTION = (
     "你是评测中的问答助手。请只依据下面提供的参考信息回答用户的问题(参考信息可能为空)。\n"
     "要求:\n"
     "- Always answer in English, including when reference information is in another language.\n"
     "- 回答保持简短:一个短语或一句话,不要展开解释;\n"
+    "- 时间答案保留已有精度；相对时间有记录时间作参照时，可回答相对表达及其参照日期。未解析为精确日期不代表没有依据，不能补造具体日期。\n"
     "- 只依据参考信息作答;参考信息里没有依据时,直接用英文回答「Cannot be determined from the provided information」;\n"
     "- 不要编造,不要使用外部知识,不要调用任何工具或技能。"
 )
@@ -616,7 +617,8 @@ def _recall(user_id: str, query: str, *, scope: str) -> dict:
     if not db.enabled() or not get_settings().memory_search_enabled:
         return {"text": "", "hits": [], "degraded": ["记忆检索已关闭(配置如此)"],
                 "error": "", "counts": {}}
-    result = memory_search(user_id=user_id, query=query, task=TASK_ANSWER, scope=scope)
+    result = memory_search(user_id=user_id, query=query, task=TASK_ANSWER, scope=scope,
+                           capture_trace=True)
     if result.error:
         return {"text": "", "hits": [], "degraded": list(result.degraded), "error": result.error,
                 "counts": {}}
@@ -629,6 +631,7 @@ def _recall(user_id: str, query: str, *, scope: str) -> dict:
                   "updated_at": h.updated_at.isoformat() if h.updated_at else ""}
                  for h in result.hits],
         "degraded": list(result.degraded), "error": "", "counts": dict(result.counts),
+        "trace": dict(result.trace),
     }
 
 
@@ -651,7 +654,7 @@ def _mode_memory(env: EvalEnv, ask_user: str, question: dict, answer: bool) -> d
              "error": recall["error"], "counts": recall["counts"],
              "context_chars": len(recall["text"]),
              "context": recall["text"],
-             "evidence": recall["hits"]}                 # 检索证据:排序依据、两路名次、版本都在
+             "evidence": recall["hits"], "retrieval_trace": recall.get("trace", {})}
     if answer:
         text, usage, ms = _answer(question["question"], recall["text"])
         entry.update(answer=text, answer_usage=usage, answer_latency_ms=ms,

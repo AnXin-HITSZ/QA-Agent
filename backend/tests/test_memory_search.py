@@ -360,6 +360,21 @@ def test_rerank_order_wins_and_unreturned_candidates_follow_in_fusion_order(sear
     assert result.degraded == []
 
 
+def test_opt_in_trace_connects_fusion_rerank_and_final_without_body(search_env):
+    a, b, c = _three(search_env)
+    search_env.dense.ids = [b, a]
+    search_env.rerank.enabled = True
+    search_env.rerank.order = [1, 0]
+    search_env.rerank.scores = {1: 0.93, 0: 0.11}
+    result = search.search(U1, QUERY, capture_trace=True)
+    assert {r["memory_id"] for r in result.trace["validated"]} == {a, b, c}
+    assert result.trace["rerank_input"] == [r["memory_id"] for r in result.trace["fused"]]
+    assert result.trace["rerank_returned"][0]["score"] == 0.93
+    assert result.trace["final"] == _ids(result)
+    assert search.search(U1, QUERY).trace == {}
+    assert "text" not in str(result.trace)
+
+
 def test_rerank_receives_the_fused_head_in_order(search_env):
     a, b, c = _three(search_env)
     search_env.dense.ids = [b, a]

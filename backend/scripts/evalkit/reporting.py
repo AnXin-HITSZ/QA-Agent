@@ -163,6 +163,20 @@ def build_report(run_dir: Path) -> dict:
                   if purge else None),
         "limits": list(LIMITS) + ([] if scores else ["尚未运行 score:本报告不含评分汇总。"]),
     }
+    # 人工复核单独展示；不修改参考答案、评分、分母或实验输入。
+    review_path = run_dir / "annotations.json"
+    if review_path.exists():
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+        known = {q["id"] for q in results.get("questions", [])}
+        if not isinstance(review, dict) or review.get("run_id") != report["run_id"]:
+            raise ValueError("annotations.json 的 run_id 不匹配")
+        entries = review.get("entries")
+        if not isinstance(entries, list) or any(
+                not isinstance(e, dict) or e.get("question_id") not in known
+                or e.get("kind") not in ("reference_conflict", "metric_mismatch", "manual_review")
+                or not isinstance(e.get("note"), str) for e in entries):
+            raise ValueError("annotations.json 的题号、类型或说明不合法")
+        report["annotations"] = entries
     return report
 
 
@@ -248,6 +262,12 @@ def render_markdown(report: dict) -> str:
         lines.append("- 对账状态:" + ", ".join(f"{k}={v}" for k, v in sorted(ev["status_counts"].items())))
     lines.append(f"- {ev['note']}")
     lines.append("")
+
+    if report.get("annotations"):
+        lines += ["## 人工复核标注", "", "以下标注不改动原始评分或统计分母。", ""]
+        for entry in report["annotations"]:
+            lines.append(f"- {entry['question_id']} · {entry['kind']}: {entry['note']}")
+        lines.append("")
 
     lines.append("## 耗时与 Token 口径")
     for mode, stats in report["latency"].items():

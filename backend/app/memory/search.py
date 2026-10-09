@@ -104,6 +104,7 @@ class SearchResult:
     hits: list[Evidence] = field(default_factory=list)
     degraded: list[str] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
+    trace: dict = field(default_factory=dict)  # 显式诊断时保存排名，不进入回答上下文
     error: str = ""                 # 整体不可用(两路都失败)时的原因;非空即没有可用证据
 
     @property
@@ -135,7 +136,8 @@ def profile_for(task: str) -> SearchProfile:
 
 
 def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | None = None,
-           scope: str = SCOPE_FORMAL, purpose: str = PURPOSE_MEMORY_SEARCH) -> SearchResult:
+           scope: str = SCOPE_FORMAL, purpose: str = PURPOSE_MEMORY_SEARCH,
+           capture_trace: bool = False) -> SearchResult:
     """检索该用户**在本作用域内**的记忆;环境故障降级而不抛(聊天侧只做最便宜的一次调用)。
 
     `scope` 默认正式数据:只用正式记忆回答用户问题,评测数据不许混进来(index replay /
@@ -189,8 +191,15 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
         return result
 
     fused = _rrf(rows, k=int(get_settings().memory_rrf_k))
+    trace = result.trace if capture_trace else None
+    if trace is not None:
+        # 只导出通过权威库归属与版本校验的候选，不泄露被过滤的外部 ID。
+        trace["validated"] = [{"memory_id": mid, "vector_rank": dr, "keyword_rank": br}
+                              for mid, dr, br in rows]
+        trace["fused"] = [{"memory_id": mid, "rank": i, "rrf": score}
+                          for i, (mid, score, _, _) in enumerate(fused, 1)]
     ranked, rerank_note = _rerank(user_id, q, fused, profile, limit=limit, purpose=purpose,
-                                 snapshots=snapshots)
+                                 snapshots=snapshots, trace=trace)
     if rerank_note:
         result.degraded.append(rerank_note)
 
@@ -199,6 +208,10 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
     if budget_note:
         result.degraded.append(budget_note)
     result.hits = hits
+    if trace is not None:
+        trace["ranked"] = [{"memory_id": row[0], "rank": i, "score": row[1], "origin": row[5]}
+                           for i, row in enumerate(ranked, 1)]
+        trace["final"] = [h.memory_id for h in hits]
     result.counts.update(rerank_in=min(len(fused), profile.rerank_k), final=len(hits),
                          rerank_out=sum(1 for h in hits if h.origin == "rerank"))
     return result
@@ -452,7 +465,7 @@ def _rrf(ordered, *, k: int) -> list[tuple[str, float, int | None, int | None]]:
 
 
 def _rerank(user_id: str, query: str, fused, profile: SearchProfile, *, limit: int,
-            purpose: str, snapshots: dict | None = None) -> tuple[list[tuple[str, float, float, int | None, int | None, str]],
+            purpose: str, snapshots: dict | None = None, trace: dict | None = None) -> tuple[list[tuple[str, float, float, int | None, int | None, str]],
                                    str]:
     """重排头部候选;未配置 / 失败 / 输入超限都回退到融合顺序并给出说明。
 
@@ -498,6 +511,8 @@ def _rerank(user_id: str, query: str, fused, profile: SearchProfile, *, limit: i
         kept.append(row)
         docs.append(item.text)
     tail = [*[row for row in head if row not in kept], *tail]
+    if trace is not None:
+        trace["rerank_input"] = [row[0] for row in kept]
     if not docs:
         return fallback(fused), note
 
@@ -511,6 +526,10 @@ def _rerank(user_id: str, query: str, fused, profile: SearchProfile, *, limit: i
 
     if not outcome.ok:
         return fallback(fused), f"重排序失败,已回退到 RRF 融合结果:{outcome.error}"
+
+    if trace is not None:
+        trace["rerank_returned"] = [{"memory_id": kept[i][0], "rank": rank, "score": outcome.scores[i]}
+                                    for rank, i in enumerate(outcome.order, 1)]
 
     ranked: list[tuple[str, float, float, int | None, int | None, str]] = []
     kept_ids: set[str] = set()
