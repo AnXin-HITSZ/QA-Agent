@@ -2,7 +2,7 @@
 
 本目录现在管三组表，都在这一个库里：
 
-- **调用日志与费用统计**（0001 / 0002，`docs/调用日志与费用统计技术方案.md`）；
+- **调用日志与费用统计**（0001 / 0002 / 0007，`docs/调用日志与费用统计技术方案.md`）；
 - **认证、鉴权与用户管理**（0003，`docs/认证鉴权与用户管理技术方案.md`）；
 - **长期记忆**（0004 + 0005，`docs/长期记忆系统技术方案.md`；0005 是同一组表的增量迁移，见文末）。
 
@@ -62,6 +62,7 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0004 | `0004_memory_tables` | 已应用 | 已应用 |
 | 0005 | `0005_memory_scope_fencing_index_ops` | 已应用 | 已应用 |
 | 0006 | `0006_memory_scope_state_history` | 已应用 | 已应用 |
+| 0007 | `0007_widen_provider_columns` | 未应用 | 未应用 |
 
 ## 0001：调用日志与费用统计四张表
 
@@ -167,3 +168,23 @@ mysql --default-character-set=utf8mb4 -h <host> -u qa_migrate -p <database> < ba
 全新库按 0004 → 0005 → 0006；回滚按 0006 → 0005 → 0004。回滚前清理评测数据，避免恢复旧任务唯一键冲突。回滚会丢失独立评测代次与审计作用域，不是无损操作。历史已清除事实的审计无法可靠回填评测作用域，升级前应清理旧评测资料并核对备份。
 
 `tests/test_memory_mysql.py` 按三个迁移顺序执行；需配置可弃测试库 `MEMORY_TEST_MYSQL_URL` 才能验证真实迁移与行锁。
+
+
+## 0007：放宽 provider 列（call_events / price_config）
+
+`0007_widen_provider_columns.up.sql` 做两条 `ALTER TABLE ... MODIFY`：两张表的 `provider` 由 `VARCHAR(32)` 放宽到 `VARCHAR(255)`，与同表 `endpoint` 同宽（provider 取值就是端点主机名，DNS 上限 253 字符）。
+
+背景（2026-10-08 生产实测）：rerank 接到新网关 `llm-hh23ndoe58qsq2rn.cn-beijing.maas.aliyuncs.com`（49 字符），超 `VARCHAR(32)` → MySQL 严格模式整批 INSERT 报 `1406 Data too long for column 'provider'`；凡是与 rerank 事件同批的记录（含正常的 embedding / llm）都进不了库，60 条全部落入补写目录、反复重试 20+ 小时进不去（库本身健康）。`price_config.provider` 与 `call_events.provider` 同一取值来源，不一起放宽则长主机名的价目同样撞 1406、永远配置不进去。
+
+```sh
+# 先在开发库，再在生产库（两库跑的是同一条命令，只换库名）
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev  < 0007_widen_provider_columns.up.sql
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_prod < 0007_widen_provider_columns.up.sql
+```
+
+几点说明：
+
+- **只改列宽，不改名 / 不删列 / 不删键**：已经建过表的库直接执行 0007 即可，不需要重跑 0001。
+- **应用后补写自动收干，不用手工处理补写目录**：积压文件按 `event_id` 主键幂等重放，下一轮补写就会入库并删除文件；DDL 立即对新 INSERT 生效，**不需要为此重启应用**（运行时不校验列宽）。
+- **回滚**：`0007_widen_provider_columns.down.sql` 把两列改回 `VARCHAR(32)`；只在确认表里没有超宽 provider 的库上执行，否则严格模式直接 1406（与 0002 的 down 同理），生产库应用过 0007 后不要回滚。
+- **真实宽度回归**：`tests/test_metering_mysql.py::test_long_provider_round_trip` 用 49 字符的生产主机名在真库上验证进出（SQLite 不校验长度，只有真库挡得住——0002 的教训）。

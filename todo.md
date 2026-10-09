@@ -51,6 +51,12 @@
   内存队列 → 后台线程批量 INSERT → 失败落 `METERING_PENDING_DIR` → 原子领取 + `event_id` 主键幂等补写 + 指数退避,
   提交成功才删补写文件;**写库失败不会把已成功的 OCR / Embedding 变成业务失败,补写绝不重做付费调用**;
   连补写文件都写不下才计 `lost` 并告警(接口 / 前端都会暴露 pending / lost / db_ok)。崩溃窗口如实写进方案 §11。
+- 🔁 **(2026-10-09) provider 列加宽(迁移 0007,未应用)** —— 生产实测:provider 是端点主机名,
+  rerank 新网关 `llm-hh23ndoe58qsq2rn.cn-beijing.maas.aliyuncs.com`(49 字符)超 `VARCHAR(32)`,
+  2026-10-08 21:21 起带 rerank 事件的批次整批撞 1406、60 条反复卡在补写目录重试 20 余小时
+  (库本身健康)。`call_events.provider` / `price_config.provider` 放宽到 `VARCHAR(255)`(对齐 `endpoint`):
+  模型 + `0007_widen_provider_columns.{up,down}.sql` 已改好,**迁移尚未在任何库执行**;应用后补写按
+  `event_id` 幂等自动收干。一批里一条坏行毒死整批的放大问题(单行降级 / 坏行隔离)未动,留待后续。
 - **接口(`/api/v1/admin/metering`)** —— [metering.py](backend/app/api/routes/metering.py):`GET /calls`(分页 + 过滤,
   缺省最近 7 天、上限 366 天 / 200 条一页)、`GET /calls/{event_id}`(含分摊与价格快照)、`GET /summary`(聚合在 SQL 里做)、
   `GET /prices`。**价目写接口(只增 + 删)**:`POST /prices`(重复唯一键 409,写入后价格表缓存立即失效)、
@@ -76,7 +82,9 @@
 - ⏭ **待你执行 / 未验证**:① ECS 上建 `qa_agent_dev` / `qa_agent_prod` 两库并执行
   `mysql <db> < migrations/0001_create_metering_tables.up.sql`(语句见方案 §9.2/§9.3 与 migrations/README.md);
   ② 按官方价格页核实后在前端「调用与费用 → 估算依据」里填入单价(不内置、不硬编码;为空时界面显示「无法估算」);
-  ③ 配置 `MYSQL_URL` 后做一次真实 OCR / 索引小样本验收(真实计费仍未验证)。
+  ③ 配置 `MYSQL_URL` 后做一次真实 OCR / 索引小样本验收(真实计费仍未验证);
+  ④ 在开发库与生产库执行迁移 0007(`provider` 列加宽,2026-10-08 长主机名撞 1406 的修复,
+  见 migrations/README.md 部署记录;应用后 60 条积压补写会自动收干)。
 
 ---
 

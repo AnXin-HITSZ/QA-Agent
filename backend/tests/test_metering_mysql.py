@@ -324,6 +324,29 @@ def test_long_identifiers_round_trip(store, mysql):
     assert got["items"][0]["oss_key"] == oss_key                # 没有被截断
 
 
+def test_long_provider_round_trip(store):
+    """端点主机名形态的 provider(长于 32 字符)必须进得去、原样读得回。
+
+    2026-10-08 生产上栽过:rerank 网关主机名 llm-hh23ndoe58qsq2rn.cn-beijing.maas.aliyuncs.com
+    (49 字符)装不进 VARCHAR(32),严格模式下整批 INSERT 报 1406,60 条记录全落补写目录
+    反复重试进不去(0007 迁移把 call_events / price_config 的 provider 放宽到 VARCHAR(255));
+    价目表 provider 与调用日志同一取值来源,一并验证。与 document_id 那条同理:
+    SQLite 不校验长度,只有真库挡得住。
+    """
+    host = "llm-hh23ndoe58qsq2rn.cn-beijing.maas.aliyuncs.com"
+    assert len(host) == 49
+
+    event = mk.embedding_call(provider=host, endpoint=host)
+    assert store.insert([event], []) == 1
+    assert store.get_call(event.event_id)["provider"] == host        # 没有被截断
+
+    created = store.insert_price(dict(
+        service="rerank", provider=host, target="qwen3.7-text-rerank", unit="request",
+        currency="CNY", unit_price=Decimal("0.00050000"),
+        effective_from=datetime(2026, 10, 1, 0, 0, tzinfo=UTC), source="官方价格页(测试)", note=""))
+    assert created["provider"] == host
+
+
 def test_microseconds_and_utc_window_survive(store, mysql):
     """DATETIME(6) 的微秒必须留在库里(写成 DATETIME 会把同一秒内的多次尝试压平),
     并且 since 含 / until 不含的窗口语义在真库上同样成立。"""

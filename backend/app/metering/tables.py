@@ -54,7 +54,9 @@ class CallEventRow(Base):
     created_at: Mapped[datetime] = mapped_column(_DT6, nullable=False, default=_utcnow)
     service: Mapped[str] = mapped_column(String(16), nullable=False)          # embedding / ocr
     purpose: Mapped[str] = mapped_column(String(24), nullable=False)          # document_index / query
-    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 端点主机名(provider_of 取 URL 的 host),最长按 DNS 上限 253 字符,列宽对齐 endpoint
+    # (0007 从 32 放宽:rerank 网关主机名 49 字符曾撞 1406,整批补写卡死)。
+    provider: Mapped[str] = mapped_column(String(255), nullable=False)
     target: Mapped[str] = mapped_column(String(64), nullable=False, default="")   # 模型名 / OCR Type
     endpoint: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     call_group: Mapped[str | None] = mapped_column(CHAR(32))
@@ -161,7 +163,8 @@ class PriceConfigRow(Base):
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"),
                                     primary_key=True, autoincrement=True)
     service: Mapped[str] = mapped_column(String(16), nullable=False)        # embedding / ocr
-    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 与 call_events.provider 同一取值来源、同宽(0007 一并放宽,长主机名的价目才配置得进)。
+    provider: Mapped[str] = mapped_column(String(255), nullable=False)
     target: Mapped[str] = mapped_column(String(64), nullable=False, default="")  # 模型 / OCR Type;空 = 通用
     unit: Mapped[str] = mapped_column(String(16), nullable=False)           # 1k_tokens / request / page
     currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)

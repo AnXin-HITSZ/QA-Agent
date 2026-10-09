@@ -203,7 +203,8 @@ class PriceRuleInput(BaseModel):
     """新增价目的请求体(只增语义;约束对齐 price_config 列定义与「必须引用官方来源」的口径)。"""
 
     service: str = Field(..., description="embedding / ocr / llm / rerank")
-    provider: str = Field(..., max_length=32, description="供应商(与调用日志里的 provider 一致)")
+    provider: str = Field(..., max_length=255,
+                          description="供应商(端点主机名,与调用日志里的 provider 一致)")
     target: str = Field(default="", max_length=64, description="模型名 / OCR Type;空 = 该服务通用价")
     unit: str = Field(..., description="计费单位:1k_tokens / request / page")
     currency: str = Field(default="CNY", description="币种(3 位大写字母,如 CNY / USD)")
