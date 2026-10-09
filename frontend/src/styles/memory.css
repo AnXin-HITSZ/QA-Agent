@@ -1,16 +1,16 @@
 /* 「我的记忆」视图样式:由 MemoryView 一次性引入。
    沿用全局设计令牌(tokens.css)与调用与费用页的控件口径(34px 按钮 / radius-sm 卡片 /
    左侧 3px 竖条的提示条),不重定义字体与配色。
-   这里唯一的偏差:正文栏比全局 --maxw 窄 —— 记忆是一条条散文,行宽压到 76ch 左右更好读。 */
+   页面宽度、留白、独立统计卡与列表面板对齐调用与费用页。 */
 
 /* ---------- 外壳 ---------- */
 .mem {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 20px 48px;
+  padding: 32px clamp(16px, 3vw, 48px) 48px;
 }
 .mem__wrap {
-  max-width: 940px;
+  max-width: var(--maxw);
   margin: 0 auto;
 }
 .mem__acts {
@@ -86,8 +86,8 @@
 .mem__input {
   flex: 1;
   min-width: 0;
-  height: 34px;
-  padding: 0 11px;
+  height: 38px;
+  padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -108,48 +108,43 @@
 /* ---------- 状态条(开关 / 规模 / 后台) ---------- */
 .mstat {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  margin-bottom: 14px;
-  overflow: hidden;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
 }
 .mstat__cell {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 14px;
-  border-left: 1px solid var(--line);
+  padding: 22px;
+  min-height: 136px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
 }
-.mstat__cell:first-child {
-  border-left: 0;
-}
-@media (max-width: 700px) {
+
+@media (max-width: 900px) {
   .mstat {
     grid-template-columns: 1fr 1fr;
   }
-  .mstat__cell:nth-child(odd) {
-    border-left: 0;
-  }
-  .mstat__cell:nth-child(n + 3) {
-    border-top: 1px solid var(--line);
-  }
+
 }
 .mstat__k {
   color: var(--muted);
-  font-size: 11.5px;
+  margin-bottom: 8px;
+  font-size: 13px;
 }
 .mstat__v {
   color: var(--ink);
-  font-size: 15px;
+  font-size: 32px;
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
   line-height: 1.4;
 }
 .mstat__v small {
   margin-left: 2px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 400;
 }
 .mstat__v.is-warn {
@@ -157,7 +152,7 @@
 }
 .mstat__x {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -195,11 +190,11 @@
 .mem__tools {
   display: grid;
   gap: 10px;
-  padding: 14px;
+  padding: 20px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: 12px;
   background: var(--surface);
-  margin-bottom: 14px;
+  margin-bottom: 22px;
 }
 .mem__field {
   display: flex;
@@ -218,20 +213,16 @@
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 10px;
+  gap: 0;
 }
 .mcard {
-  border: 1px solid var(--line);
-  /* 左侧一道竖线:一条记忆 = 一张索引卡,竖线是它的「卡脊」 */
-  border-left: 3px solid color-mix(in srgb, var(--primary) 45%, var(--line));
-  border-radius: var(--radius-sm);
+  border-bottom: 1px solid var(--line);
+  padding: 20px;
   background: var(--surface);
-  padding: 13px 15px 11px;
-  transition: border-left-color 0.15s;
+  transition: background 0.15s;
 }
-.mcard:hover {
-  border-left-color: var(--primary);
-}
+.mcard:last-child { border-bottom: 0; }
+.mcard:hover { background: var(--surface-2); }
 .mcard__text {
   margin: 0;
   color: var(--ink);
@@ -318,7 +309,7 @@
   flex-wrap: wrap;
   margin-top: 26px;
   padding: 14px 16px;
-  border: 1px dashed color-mix(in srgb, var(--seal) 40%, var(--line));
+  border: 1px solid color-mix(in srgb, var(--seal) 40%, var(--line));
   border-radius: var(--radius-sm);
   background: var(--surface);
 }
@@ -390,4 +381,31 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+/* 对齐费用页的面板层级，正文仍保留易读行宽。 */
+.mem .pghead > div:first-child { flex: 1; min-width: min(100%, 320px); }
+.mem__acts { flex-shrink: 0; }
+.mstat__v--compact { font-size: 20px; }
+.mem__panel { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.mem__panelHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.mem__panelHead h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.mem__panelHead span { color: var(--muted); font-size: 13px; }
+.mem__label { flex: 0 0 64px; font-size: 13px; color: var(--muted); }
+.mem__pager { justify-content: flex-end; }
+.mem__pagerTxt, .mem__dangerB, .mstat__x { font-size: 13px; line-height: 1.7; }
+.mem__danger { border-radius: 12px; padding: 20px; margin-top: 22px; }
+.mem__btn--link.mem__btn--danger { color: var(--seal); }
+@media (max-width: 540px) {
+  .mem { padding: 20px 12px 32px; }
+  .mstat { gap: 10px; }
+  .mstat__cell { padding: 16px; }
+  .mstat__v { font-size: 26px; }
+  .mstat__v--compact { font-size: 16px; }
+  .mem__tools { padding: 14px; }
+  .mem__field { flex-wrap: wrap; }
+  .mem__label { flex-basis: 100%; }
+  .mem__input { flex-basis: 60%; }
+  .mcard, .mem__panelHead { padding: 16px; }
+  .mem__pager { flex-wrap: wrap; justify-content: center; }
 }

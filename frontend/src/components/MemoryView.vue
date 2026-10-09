@@ -64,8 +64,7 @@ function threadHint(item: MemoryItem): string {
         <div>
           <h1 class="pghead__title">我的记忆</h1>
           <p class="pghead__sub">
-            回答时会被记住的事实都在这儿，之后提问会作为参考带上一份。你可以随时改写、删掉它们。
-            提取在回答结束后由后台完成（最终一致）：刚聊过的内容稍等片刻才会出现。
+            管理对话中保存的事实与偏好，支持检索、添加和编辑。新记忆会在回答结束后由后台提取，稍后可见。
           </p>
         </div>
         <div class="mem__acts">
@@ -98,11 +97,11 @@ function threadHint(item: MemoryItem): string {
         </div>
         <div class="mstat__cell">
           <span class="mstat__k">后台任务</span>
-          <span class="mstat__v">
+          <span class="mstat__v mstat__v--compact">
             <template v-if="!status">—</template>
-            <template v-else>待 {{ status.jobs.pending }} · 跑 {{ status.jobs.running }}</template>
+            <template v-else>待处理 {{ status.jobs.pending }} · 运行中 {{ status.jobs.running }}</template>
           </span>
-          <span class="mstat__x">{{ status?.worker_running ? "提取线程在跑" : "提取线程未启动" }}</span>
+          <span class="mstat__x">{{ status?.worker_running ? "后台正在运行" : "后台未启动" }}</span>
         </div>
         <!-- 清理台账:只在确有残留时出现(常态是 0/0,摆一排 0 只会占地方)。
              pending=后台还会重试;failed=重试用尽 —— 但两者都**只影响索引残留**:事实层早已删掉。 -->
@@ -159,7 +158,9 @@ function threadHint(item: MemoryItem): string {
       <!-- 检索 + 手添 -->
       <div class="mem__tools">
         <form class="mem__field mem__field--search" @submit.prevent="search">
+          <label class="mem__label" for="memory-search">检索记忆</label>
           <input
+            id="memory-search"
             v-model="draft"
             class="mem__input"
             type="search"
@@ -172,7 +173,9 @@ function threadHint(item: MemoryItem): string {
         </form>
 
         <form class="mem__field" @submit.prevent="add">
+          <label class="mem__label" for="memory-add">添加记忆</label>
           <input
+            id="memory-add"
             v-model="addText"
             class="mem__input"
             type="text"
@@ -214,6 +217,11 @@ function threadHint(item: MemoryItem): string {
           本次检索有降级：{{ degraded.join("；") }}
         </p>
 
+        <section class="mem__panel" aria-labelledby="memory-list-title">
+          <header class="mem__panelHead">
+            <h2 id="memory-list-title">{{ searching ? "检索结果" : "已保存的记忆" }}</h2>
+            <span>{{ searching ? items.length : total }} 条</span>
+          </header>
         <ul class="mem__list">
           <li v-for="item in items" :key="item.id" class="mcard">
             <div class="mcard__main">
@@ -300,6 +308,7 @@ function threadHint(item: MemoryItem): string {
             </div>
           </li>
         </ul>
+        </section>
 
         <nav v-if="!searching && total > items.length" class="mem__pager" aria-label="分页">
           <button class="mem__btn" type="button" :disabled="!hasPrev || loading" @click="goPage(-1)">上一页</button>
