@@ -234,8 +234,8 @@ def test_ask_exports_three_modes_without_any_model_call(env, tmp_path):
     row = out["questions"][0]
     assert set(row["modes"]) == {"no_memory", "memory", "full_context"}
     assert row["modes"]["no_memory"]["context_chars"] == 0
-    # 导出的是证据(可复核),不是拼好的参考块 —— 参考块属于提示词,不进结果文件
-    assert me.service.CONTEXT_HEADER not in json.dumps(row, ensure_ascii=False)
+    # 实际参考块与逐条证据一起留档，便于复核模型究竟收到了什么。
+    assert me.service.CONTEXT_HEADER in row["modes"]["memory"]["context"]
     evidence = row["modes"]["memory"]["evidence"]
     assert evidence and {"memory_id", "text", "score", "origin", "vector_rank", "bm25_rank"} <= set(
         evidence[0])

@@ -1,0 +1,60 @@
+[
+  {
+    "_synthetic": "合成样例:结构与官方 locomo10.json 同形,内容全部虚构,不是基准数据,不得用于成绩对比。",
+    "sample_id": "synth-001",
+    "conversation": {
+      "speaker_a": "Alex",
+      "speaker_b": "Beth",
+      "session_2": [
+        {"speaker": "Alex", "dia_id": "D2:1", "text": "我上周搬到了广州,在一家做电商的公司上班。"},
+        {"speaker": "Beth", "dia_id": "D2:2", "text": "恭喜!我养了一只叫团子的橙猫,它特别爱吃冻干。",
+         "img_url": "https://example.invalid/cat.jpg", "blip_caption": "一只橙色猫咪趴在窗台上"}
+      ],
+      "session_2_date_time": "9:15 am on 3 March, 2024",
+      "session_10": [
+        {"speaker": "Beth", "dia_id": "D10:1", "text": "我下个月要去成都出差两周。"},
+        {"speaker": "Alex", "dia_id": "D10:2", "text": "我报了周末的陶艺班,想做一个杯子送给你。"}
+      ],
+      "session_10_date_time": "7:40 pm on 21 April, 2024",
+      "session_7_date_time": "8:00 pm on 1 April, 2024"
+    },
+    "qa": [
+      {"question": "Beth 的猫叫什么名字?", "answer": "团子", "category": 4, "evidence": ["D2:2"]},
+      {"question": "Alex 搬到广州之后,最近开始学什么?", "answer": "陶艺,陶艺班",
+       "category": 1, "evidence": ["D2:1", "D10:2"]},
+      {"question": "Beth 计划什么时候去成都出差?", "answer": "2024年5月",
+       "category": 2, "evidence": ["D10:1"]},
+      {"question": "Alex 的新工作是什么方向?", "answer": "电商;电商行业相关的工作",
+       "category": 3, "evidence": ["D2:1"]},
+      {"question": "Beth 的狗叫什么名字?", "category": 5,
+       "adversarial_answer": "Beth 没有养狗,她养的是一只猫,叫团子。", "evidence": []},
+      {"question": "Alex 搬到了哪里,后来又做了什么打算送人?", "answer": "广州,陶艺杯",
+       "category": 1, "evidence": ["D02:01; D10:2"]},
+      {"question": "Beth 的猫最喜欢吃什么?", "answer": "冻干",
+       "category": 4, "evidence": ["D2:2", "D9:9"]},
+      {"question": "Beth 下个月要去哪里出差?", "answer": "成都",
+       "category": 4, "evidence": ["D"]}
+    ]
+  },
+  {
+    "_synthetic": "合成样例:结构与官方 locomo10.json 同形,内容全部虚构,不是基准数据,不得用于成绩对比。",
+    "sample_id": "synth-002",
+    "conversation": {
+      "speaker_a": "Carol",
+      "speaker_b": "Dave",
+      "session_1": [
+        {"speaker": "Dave", "dia_id": "D1:1", "text": "我决定今年开始学吉他,已经买好琴了。"},
+        {"speaker": "Carol", "dia_id": "D1:2", "text": "我最近在读《三体》,已经看到第二部了。"}
+      ],
+      "session_1_date_time": "10:00 am on 1 January, 2024",
+      "session_3": [
+        {"speaker": "Dave", "dia_id": "D3:1", "text": "我的吉他课换到了周六下午。"}
+      ],
+      "session_3_date_time": "unknown time"
+    },
+    "qa": [
+      {"question": "Dave 在学什么乐器?", "answer": "吉他", "category": 4, "evidence": ["D1:1"]},
+      {"question": "Carol 在读什么书?", "answer": "《三体》", "category": 4, "evidence": ["D1:2"]}
+    ]
+  }
+]

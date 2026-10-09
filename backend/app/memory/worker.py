@@ -72,9 +72,16 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _messages_digest(messages: list[dict]) -> str:
-    """这次输入的摘要(提取阶段的复用判据:同一份对话才认上一轮的结果)。"""
-    return fingerprint(*[f"{m.get('role')}:{m.get('content')}" for m in messages])
+def _messages_digest(messages: list[dict], note: str = "") -> str:
+    """这次输入的摘要(提取阶段的复用判据:同一份对话才认上一轮的结果)。
+
+    `note`(评测适配说明,见 service.enqueue_extraction)非空时参与摘要:换了说明就不是
+    同一份输入,不复用旧结果。空串不加入摘要 —— 正式路径的既有阶段结果照旧可复用。
+    """
+    parts = [f"{m.get('role')}:{m.get('content')}" for m in messages]
+    if note:
+        parts.append(f"note:{note}")
+    return fingerprint(*parts)
 
 
 def _done_indices(stages: dict | None) -> list[int]:
@@ -299,9 +306,11 @@ class MemoryWorker:
         fence = service.Fence(job_id=job.id, owner=self.owner, claim_token=job.claim_token,
                               generation=int(job.generation or 0),
                               scope=job.scope or self._scope)
-        messages = (job.payload or {}).get("messages") or []
+        payload = job.payload or {}
+        messages = payload.get("messages") or []
+        note = str(payload.get("extract_note") or "")
         # 上一轮存下来的提取结果还能不能用(输入摘要 + 协议 + 模型口径三项都要对上)
-        report = self._reuse_extraction(stages, messages) if messages else None
+        report = self._reuse_extraction(stages, messages, note) if messages else None
         reused = report is not None
         if job.committed_at is not None:
             total = stages.get(STAGE_TOTAL)
@@ -337,7 +346,7 @@ class MemoryWorker:
             if report is None:
                 # 真正调一次模型;拿到结果立刻把阶段写回任务行 —— 之后无论在哪一步挂掉,
                 # 重试都不会再为这一步付费(见 _extract)
-                report = self._extract(messages, stages=stages, job=job, fence=fence)
+                report = self._extract(messages, note=note, stages=stages, job=job, fence=fence)
             if lease.lost.is_set():
                 # 续租已判定「这份认领不成立」:后面的落库注定被 fencing 拦下,不如现在就停,
                 # 不白花后面的调用
@@ -393,7 +402,8 @@ class MemoryWorker:
 
     # ---- 提取(阶段结果复用) ----
 
-    def _reuse_extraction(self, stages: dict | None, messages: list) -> object | None:
+    def _reuse_extraction(self, stages: dict | None, messages: list,
+                          note: str = "") -> object | None:
         """上一轮存的提取结果还能不能直接用(能就不再调用模型)。
 
         复用的三个条件缺一不可:同一份输入(摘要相同)、同一个协议版本、同一个模型口径。
@@ -404,7 +414,7 @@ class MemoryWorker:
         record = (stages or {}).get(STAGE_EXTRACT)
         if not isinstance(record, dict):
             return None
-        if (record.get("digest") != _messages_digest(messages)
+        if (record.get("digest") != _messages_digest(messages, note)
                 or record.get("protocol") != extract.PROTOCOL_VERSION
                 or record.get("model") != service.llm_model_identity()):
             return None
@@ -416,14 +426,14 @@ class MemoryWorker:
         logger.info("复用上一轮已付费的提取结果(不再调用模型)")
         return report
 
-    def _extract(self, messages, *, stages: dict, job, fence):
+    def _extract(self, messages, *, stages: dict, job, fence, note: str = ""):
         """调模型提取,并把阶段结果写回任务行(失败重试据此不再重复付费)。"""
         from app.memory import extract
 
-        report = extract.extract_facts(messages)
+        report = extract.extract_facts(messages, note=note)
         stages[STAGE_TOTAL] = len(report.facts)
         stages[STAGE_EXTRACT] = {
-            "digest": _messages_digest(messages),
+            "digest": _messages_digest(messages, note),
             "protocol": extract.PROTOCOL_VERSION,
             "model": service.llm_model_identity(),
             "status": "ok",

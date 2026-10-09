@@ -145,8 +145,12 @@ def looks_secret(text: str) -> bool:
     return any(p.search(text or "") for p in _SECRET_PATTERNS)
 
 
-def build_messages(messages: Sequence[dict]) -> list:
-    """把本次交流拼成提示词(只保留 user / assistant,单条按 MEMORY_MAX_MESSAGE_CHARS 截断)。"""
+def build_messages(messages: Sequence[dict], note: str = "") -> list:
+    """把本次交流拼成提示词(只保留 user / assistant,单条按 MEMORY_MAX_MESSAGE_CHARS 截断)。
+
+    `note` 是可选的**调用方作用域说明**(评测适配用):非空时作为第二条系统消息附在
+    固定系统提示之后。默认空串 —— 正式聊天/构建路径行为与不带该参数时完全一致。
+    """
     from langchain_core.messages import HumanMessage, SystemMessage
 
     limit = int(get_settings().memory_max_message_chars)
@@ -160,12 +164,19 @@ def build_messages(messages: Sequence[dict]) -> list:
             continue
         lines.append(f"{ROLE_LABELS[role]}:{content}")
     conversation = "\n".join(lines) if lines else "(本次没有可提取的用户表述)"
-    return [SystemMessage(SYSTEM_PROMPT), HumanMessage(USER_TEMPLATE.format(conversation=conversation))]
+    prompt = [SystemMessage(SYSTEM_PROMPT)]
+    note = (note or "").strip()
+    if note:
+        prompt.append(SystemMessage(note))
+    prompt.append(HumanMessage(USER_TEMPLATE.format(conversation=conversation)))
+    return prompt
 
 
 def extract_facts(messages: Sequence[dict], *, llm=None,
-                  retries: int | None = None) -> ExtractionReport:
+                  retries: int | None = None, note: str = "") -> ExtractionReport:
     """调用模型提取候选事实;仅对「输出格式错误」做有限重试。
+
+    `note` 见 build_messages:默认空串时与本函数此前行为一致。
 
     - 业务异常(网络 / 超时 / 4xx)原样上抛:不在这里重试付费调用,由任务的重试与退避负责;
     - 结构错误(不是 JSON / 结构不符)重试 retries 次(默认取配置),仍不行抛
@@ -179,7 +190,7 @@ def extract_facts(messages: Sequence[dict], *, llm=None,
         retries = max(0, int(get_settings().memory_extract_retries))
     limit = int(get_settings().memory_max_text_chars)
 
-    prompt = build_messages(messages)
+    prompt = build_messages(messages, note=note)
     attempts = 0
     reason = ""
     while True:

@@ -720,6 +720,7 @@ def recall_for_answer(*, user_id: str, query: str) -> Recall:
 def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | None = None,
                        dedupe_key: str = "", now: datetime | None = None,
                        source: str = "", turn_id: str | None = None,
+                       extract_note: str = "",
                        scope: str = SCOPE_FORMAL) -> str | None:
     """把「这轮对话可能值得记」登记成一个后台任务,返回任务 id(重复入队返回 None)。
 
@@ -733,6 +734,9 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
     - payload 里放对话消息 —— 任务进终态时会清空(正文不在库里长留);
     - `scope` 区分正式与评测(评测任务不会被正式 Worker 领走,见 repo.claim_job);
     - `source` 记「谁登记的」(chat / chat_stream),排查「这轮怎么没记住」时用;
+    - `extract_note` 是**调用方作用域说明**(评测适配用,随 payload 存进任务、执行时附在
+      系统提示之后;默认空串 —— 正式路径不传,行为不变)。它参与提取阶段的复用摘要
+      (见 worker._messages_digest),不同说明不会被当成同一份输入复用旧结果;
     - 「暂停自动写入」(MEMORY_WRITE_ENABLED=false)时同样返回 None:聊天照常,
       不产生新记忆,也不删已有记忆。
     """
@@ -764,10 +768,14 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
     # 超长时改取整体哈希,收敛到 64 位十六进制;调用方显式传入的短键保持原样(库里可读)。
     if len(key) > 64:
         key = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    note = (extract_note or "").strip()[:1000]
+    payload: dict = {"messages": cleaned, "source": (source or "")[:32]}
+    if note:
+        payload["extract_note"] = note
     with db.session_scope() as session:
         return repo.enqueue_job(
             session, user_id=user_id, kind=JOB_KIND_EXTRACT, dedupe_key=key,
-            thread_id=thread_id, payload={"messages": cleaned, "source": (source or "")[:32]},
+            thread_id=thread_id, payload=payload,
             max_attempts=max(1, int(get_settings().memory_job_max_attempts)), now=now,
             scope=scope, turn_id=turn,
         )
