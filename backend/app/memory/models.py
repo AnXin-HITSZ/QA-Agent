@@ -81,7 +81,8 @@ OP_KINDS = (OP_DELETE_VECTOR, OP_PURGE_USER, OP_DELETE_OLD_VERSIONS)
 KIND_PREFERENCE = "preference"
 KIND_PROFILE = "profile"
 KIND_TASK = "task"
-FACT_KINDS = (KIND_PREFERENCE, KIND_PROFILE, KIND_TASK)
+KIND_EVENT = "event"
+FACT_KINDS = (KIND_PREFERENCE, KIND_PROFILE, KIND_TASK, KIND_EVENT)
 
 
 @dataclass(frozen=True)
@@ -103,12 +104,13 @@ class MemoryItem:
     deleted_at: datetime | None
     # ---- 0005 增量字段（带默认值：既有调用方 / 测试按位置构造时不受影响）----
     scope: str = SCOPE_FORMAL
-    kind: str = ""                    # preference / profile / task；空 = 未标注
+    kind: str = ""                    # preference / profile / task / event；空 = 未标注
     event_time: datetime | None = None  # 事件发生时间；未知为 NULL（不由系统推断）
     generation: int = 0               # 写入时的记忆代次
     meta_version: int = 0             # 元数据版本（仅非正文变更 +1）
     indexed_revision: int = 0         # 已写入索引的正文版本（0 = 从未索引）
     indexed_meta_version: int = 0     # 已写入索引的元数据版本
+    fact_context: dict = field(default_factory=dict)  # 时间、状态与消息来源（0008）
 
     @property
     def active(self) -> bool:
@@ -147,6 +149,8 @@ class MemoryHistory:
     reason: str
     thread_id: str | None
     created_at: datetime
+    old_context: dict | None = None
+    new_context: dict | None = None
 
 
 @dataclass(frozen=True)

@@ -153,6 +153,13 @@ def test_build_imports_conversations_in_order_and_drains(env, tmp_path):
     assert "发票按项目分摊" in prompts[2] and "发票按项目分摊" not in prompts[0]
     # build.json 落盘(人工复核时要能对上)
     assert json.loads(run.path("build.json").read_text(encoding="utf-8"))["memories"] == 3
+    diagnostics = list(run.path("diagnostics").glob("*.json"))
+    assert len(diagnostics) == 3
+    assert all(json.loads(p.read_text(encoding="utf-8"))["scope"] == run.scope for p in diagnostics)
+    blob = "".join(p.read_text(encoding="utf-8") for p in diagnostics)
+    assert QUESTIONS[0]["question"] not in blob  # scoring question never enters build diagnostics
+    assert len(json.loads(run.path("memory_snapshot.json").read_text(encoding="utf-8"))) == 3
+    assert len(json.loads(run.path("history_snapshot.json").read_text(encoding="utf-8"))) == 3
 
 
 def test_build_stops_when_worker_never_drains(env, tmp_path, monkeypatch):
@@ -540,7 +547,7 @@ def test_run_manifest_fixes_models_params_and_never_writes_credentials(env, tmp_
     assert manifest["dataset"]["digest"]                     # 数据集可核对(哈希)
     assert manifest["code_commit"]                            # 代码版本(仓库里必然拿得到)
 
-    blob = "".join(p.read_text(encoding="utf-8") for p in run.dir.iterdir())
+    blob = "".join(p.read_text(encoding="utf-8") for p in run.dir.rglob("*.json") if p.is_file())
     assert "api_key" not in blob and "secret" not in blob.lower()
     key = env.settings.llm_api_key
     if key:

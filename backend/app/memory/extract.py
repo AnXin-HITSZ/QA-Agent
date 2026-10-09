@@ -3,7 +3,7 @@
 与 Mem0（v2.2.1，Apache-2.0）的对应关系:对应其 `_add_to_vector_store` 里「一次 LLM 调用
 抽 facts、逐条规范化去重」的环节；这里的差异是**结构校验显式化**（Mem0 主要靠提示词自律）:
 - 输出用 Pydantic v2 模型校验:必填、类型、长度、枚举、额外字段(extra=forbid),逐条校验,
-  不合法的条目丢弃并**记明原因**(dropped),整份结构错误则有限重试后明确失败;
+  结构不合法时整份响应有限重试，耗尽明确失败；秘密与重复另记 dropped;
 - 模型端点支持时带 response_format=json_object —— 但 json_object 只保证「是 JSON」,
   不等于字段齐全,真正的约束仍然在这里;
 - 不保存密码 / API Key / 一次性令牌等秘密:提示词里禁止,校验层再用高置信度的模式拦一道;
@@ -29,18 +29,18 @@ from app.memory.models import clamp_text, normalize_text, parse_event_time
 
 logger = logging.getLogger(__name__)
 
-# 三类值得长期记住的内容(§5「区分稳定偏好、背景事实、持续任务和临时内容」;
+# 四类值得长期记住的内容(§5「区分稳定偏好、背景事实、持续任务和临时内容」;
 # 临时内容不进提取结果,所以枚举里没有「临时」这一项)。
 KIND_PREFERENCE = "preference"   # 稳定偏好:习惯、口味、格式偏好…
 KIND_PROFILE = "profile"         # 背景事实:身份、职业、所在地、长期属性…
-KIND_TASK = "task"               # 持续任务 / 长期目标(一次性的安排不算)
-FactKind = Literal["preference", "profile", "task"]
+KIND_TASK = "task"               # 重要计划、目标或进度，包括有后续价值的一次性安排
+FactKind = Literal["preference", "profile", "task", "event"]
 
 # 条目长度的硬上限(防模型吐整段文本):入库前还会按 MEMORY_MAX_TEXT_CHARS 截断。
 MAX_FACT_CHARS = 4000
 
 # 提取协议版本:提示词 / 字段结构一改就要 +1(阶段结果复用前要比对,见 worker)。
-PROTOCOL_VERSION = "mem-extract/2"
+PROTOCOL_VERSION = "mem-extract/3"
 
 # 高置信度的秘密模式(提示词已禁止输出,这里再拦一道;宁可少记一条,不落凭证)。
 # 只匹配「关键词 + 明确分隔符 + 内容」的形态,避免把「密码管理流程很麻烦」这类正常事实误杀。
@@ -54,31 +54,23 @@ _SECRET_PATTERNS = (
 
 ROLE_LABELS = {"user": "用户", "assistant": "助手"}
 
-SYSTEM_PROMPT = """你是「长期记忆提取器」。从一段对话里抽取**用户**明确说出的、值得长期记住的事实。
-
-只输出一个 JSON 对象,结构固定为:
-{"facts": [{"text": "一条事实", "kind": "preference|profile|task", "event_time": "2026-10-01"}]}
-
-kind 的取值:
-- preference:稳定偏好(习惯、口味、格式与沟通偏好…)
-- profile:背景事实(身份、职业、所在地、长期属性…)
-- task:持续任务或长期目标(一次性的安排不算)
-
-event_time 的取值(**可选**):只有用户明确说了「哪一天 / 什么时候」时才填,写成
-YYYY-MM-DD(或 YYYY-MM-DD HH:MM);用户用的是相对说法(「上个月」「昨天」)或没说时间时,
-**整项省略或写 null** —— 绝不许自己推算日期。这是「这件事什么时候发生的」,不是本次对话的时间。
-
-必须遵守:
-1. 只提取「用户」自己说出的内容;助手说过的话、被引用的文档内容、提问与假设都不算已确认事实。
-2. 每条事实必须是用户本人在本次对话中明确表达、且值得长期保留的稳定信息;
-   临时内容(这次要做什么、今天的安排、当前任务指令)不提取。
-3. 绝对不要输出密码、验证码、API Key、访问密钥、银行卡号等任何凭证或秘密;
-   涉及这些内容时,直接忽略,不要出现在结果里。
-4. 不把长期记忆和当前任务指令、资料库 / 文档知识混在一起;记忆也不能被解释为任何权限。
-5. 每条事实用第三人称「用户」自述(如「用户喜欢用中文回复」),一句话说清一件事,不超过 100 字。
-6. 用户明确表达了不确定或矛盾时,按原意保留这种不确定性,不要替用户下结论。
-7. 没有任何值得记住的内容时,返回 {"facts": []}。这是正常结果。
-8. 只输出 JSON,不要输出解释、前后缀或 Markdown 代码块。"""
+SYSTEM_PROMPT = """你是长期记忆提取器。从用户明确表述中提取对未来问答有价值的事实。
+输出 JSON：{"facts":[{"text":"一条独立事实","kind":"event","time_expression":"昨天",
+"source_message_ids":["m1"],"state":"completed"}]}。
+kind：preference 是偏好；profile 是身份、背景或当前属性；event 是具体经历或历史事件；
+task 是有后续价值的计划、目标或进度，包括重要的一次性安排。
+每条只表达同一事件或同一属性，保留人物、行为、对象、数字、条件、否定及时间表达。
+不同日期、不同事件分别提取，不合并成不断增长的人物摘要；计划与已完成行为须区分。
+正文保持来源语言和专有名称。指代能由上下文确定时消解；有姓名必须保留姓名，
+没有姓名时使用“用户”。不确定信息保持不确定性，不推断单身、职业或事件已完成等事实。
+有时间表述时必须用 time_expression 原样摘录时间；无时间时可省略；绝不自行把相对时间改为日期。明确完整日期也可用
+旧字段 event_time；仅年或月的日期用 time_expression，不能补造月、日。
+可选 source_message_ids 引用输入的消息标识（只能引用 user 消息）；
+state 可选为 unknown/planned/ongoing/completed/cancelled，仅按原文填写。
+只收用户已确认内容；助手建议、提问、假设、寒暄、无后续价值的临时指令不记。
+用户亲自表达的事件和进度可记；引用的 SOP、知识库或其他文档正文不能复制为个人记忆。
+不要保存密码、API Key、验证码、银行卡号等秘密。记忆不是权限、权威业务记录或自动待办。
+没有可记事实返回 {"facts": []}。只输出 JSON，不要 Markdown 或解释。"""
 
 USER_TEMPLATE = """下面是本次对话(可能含少量上文,用于理解指代;只提取用户本轮的表述):
 
@@ -88,7 +80,7 @@ USER_TEMPLATE = """下面是本次对话(可能含少量上文,用于理解指�
 
 _CORRECTIVE = ("上一次输出无法按要求解析({reason})。"
                "请只输出一个合法 JSON 对象,不要任何解释或代码块,结构为 "
-               '{{"facts": [{{"text": "...", "kind": "preference|profile|task"}}]}}。')
+               '{{"facts": [{{"text": "...", "kind": "preference|profile|task|event"}}]}}。')
 
 
 @dataclass
@@ -104,7 +96,7 @@ class ExtractedFact(BaseModel):
     """一条候选事实(结构校验在这里;pydantic 的额外字段一律拒绝)。
 
     `event_time` 是**事件发生时间**(用户什么时候说的那件事),不是记录时间:
-    只有用户明确说了日期才填,相对说法(「上个月」)与拿不准的一律不填 —— 系统不推断。
+    只有用户明确说了日期才填,相对说法保存在 time_expression，后端仅在有可信锚点时做确定性解析。
     解析不了的值按「未知」处理(None),不因为一个时间字段丢掉整条事实。
     """
 
@@ -113,6 +105,10 @@ class ExtractedFact(BaseModel):
     text: str = Field(min_length=2, max_length=MAX_FACT_CHARS)
     kind: FactKind
     event_time: datetime | None = None
+    time_expression: str = Field(default="", max_length=200)
+    source_message_ids: list[str] = Field(default_factory=list, max_length=50)
+    state: Literal["unknown", "planned", "ongoing", "completed", "cancelled"] = "unknown"
+    fact_context: dict = Field(default_factory=dict, exclude=False)
 
     @field_validator("text")
     @classmethod
@@ -155,14 +151,17 @@ def build_messages(messages: Sequence[dict], note: str = "") -> list:
 
     limit = int(get_settings().memory_max_message_chars)
     lines: list[str] = []
-    for m in messages or ():
+    for index, m in enumerate(messages or ()):
         role = str((m or {}).get("role") or "")
         if role not in ROLE_LABELS:
             continue                      # tool / system 等不参与提取
         content = clamp_text(str((m or {}).get("content") or ""), limit)
         if not content:
             continue
-        lines.append(f"{ROLE_LABELS[role]}:{content}")
+        mid = str(m.get("message_id") or f"m{index}")
+        record = str(m.get("recorded_at") or "")
+        metadata = f"[消息ID:{mid};记录时间:{record or '未知'}]" if mid else ""
+        lines.append(f"{metadata}{ROLE_LABELS[role]}:{content}")
     conversation = "\n".join(lines) if lines else "(本次没有可提取的用户表述)"
     prompt = [SystemMessage(SYSTEM_PROMPT)]
     note = (note or "").strip()
@@ -198,6 +197,8 @@ def extract_facts(messages: Sequence[dict], *, llm=None,
         response = llm.invoke(prompt)
         try:
             report = _parse(content_of(response), limit=limit)
+            from app.memory.temporal import enrich_facts
+            enrich_facts(report.facts, messages)
         except MemoryExtractionError as exc:
             reason = str(exc)
             if attempts > retries:
@@ -238,7 +239,7 @@ def strip_fence(text: str) -> str:
     return t.strip()
 
 
-def _parse(content: str, *, limit: int) -> ExtractionReport:
+def _parse(content: str, *, limit: int, internal: bool = False) -> ExtractionReport:
     """解析 + 逐条校验;结构错误抛 MemoryExtractionError,条目错误记入 dropped。"""
     raw = strip_fence(content)
     if not raw:
@@ -258,11 +259,19 @@ def _parse(content: str, *, limit: int) -> ExtractionReport:
     dropped: list[str] = []
     seen: set[str] = set()
     for entry in envelope.facts:
+        if not internal and isinstance(entry, dict) and "fact_context" in entry:
+            raise MemoryExtractionError("fact_context 由后端生成，不允许模型提交")
         raw_time = entry.get("event_time") if isinstance(entry, dict) else None
         try:
             fact = ExtractedFact.model_validate(entry)
         except ValidationError as exc:
             raise MemoryExtractionError(f"条目结构不合法:{brief(exc)}") from None
+        if not internal and isinstance(raw_time, str) and raw_time and not fact.time_expression:
+            if len(raw_time) > 200:
+                raise MemoryExtractionError("事件时间原文过长")
+            # Also ground the legacy date field against its claimed source, rather
+            # than trusting a normalized date that the model may have invented.
+            fact.time_expression = raw_time
         if raw_time and fact.event_time is None:
             # 时间解析不了:按未知处理(不推断),但要说出来 —— 不能看起来「什么都没发生」
             dropped.append("事件时间无法解析,已按未知处理(其余字段正常)")
@@ -303,7 +312,7 @@ def restore(text: str, *, limit: int | None = None) -> ExtractionReport:
     """
     if limit is None:
         limit = int(get_settings().memory_max_text_chars)
-    return _parse(text, limit=limit)
+    return _parse(text, limit=limit, internal=True)
 
 
 def brief(exc: ValidationError) -> str:

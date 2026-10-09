@@ -187,6 +187,9 @@ def write_facts(*, user_id: str, facts: list[ExtractedFact], thread_id: str | No
     from app.memory import db
 
     now = now or db.utc_naive()
+    for fact in facts:
+        if fact.fact_context:
+            fact.fact_context = {**fact.fact_context, "conversation_id": thread_id, "turn_id": turn_id}
     limit = int(get_settings().memory_max_text_chars)
     if stages is not None:
         stages.setdefault(STAGE_TOTAL, len(facts))
@@ -218,7 +221,7 @@ def write_facts(*, user_id: str, facts: list[ExtractedFact], thread_id: str | No
                 item = repo.create_item(session, user_id=user_id, text=fact.text, actor=actor,
                                         origin=ORIGIN_LLM, thread_id=thread_id, now=now,
                                         reason=reason, generation=generation, scope=scope,
-                                        kind=fact.kind, event_time=fact.event_time)
+                                        kind=fact.kind, event_time=fact.event_time, fact_context=fact.fact_context)
                 _record_sources(session, memory_ids=[item.id], user_id=user_id, scope=scope,
                                 conversation_id=thread_id, turn_id=turn_id, now=now)
                 # 「已提交」与阶段进度都与这一条事实同一个事务:
@@ -290,6 +293,9 @@ def apply_facts(*, user_id: str, facts: list[ExtractedFact], thread_id: str | No
         return result
 
     now = now or db.utc_naive()
+    for fact in facts:
+        if fact.fact_context:
+            fact.fact_context = {**fact.fact_context, "conversation_id": thread_id, "turn_id": turn_id}
     limit = int(get_settings().memory_max_text_chars)
     if stages is not None:
         stages.setdefault(STAGE_TOTAL, len(facts))
@@ -338,7 +344,8 @@ def _maintain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
     if recalled.degraded:
         result.degraded.extend(recalled.degraded)
 
-    candidates = [maintain.Candidate(memory_id=h.memory_id, text=h.text, revision=h.revision)
+    candidates = [maintain.Candidate(memory_id=h.memory_id, text=h.text, revision=h.revision,
+                                     kind=h.kind, fact_context=h.fact_context, meta_version=h.meta_version)
                   for h in recalled.hits]
     if not candidates:
         # 候选为空 = 没有可比的旧记忆:不必为此花一次模型调用(去重由 create_item 兜底)
@@ -352,7 +359,9 @@ def _maintain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
         result.degraded.append(STAGE_REUSED_NOTE)
     try:
         if decision is None:
-            decision = maintain.decide(fact.text, candidates, llm=llm)
+            from app.memory.temporal import context_label
+            decision = maintain.decide(fact.text + context_label(fact.fact_context), candidates, llm=llm)
+            decision = _protect_history(decision, candidates, fact)
             _record_decision(stages=stages, index=index, fact=fact, candidates=candidates,
                              decision=decision)
             if fence is not None and stages is not None:
@@ -394,7 +403,7 @@ def _maintain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
         _apply_events(result, user_id=user_id, decision=decision, candidates=candidates,
                       thread_id=thread_id, actor=actor, now=now, reason=reason,
                       generation=generation, scope=scope, turn_id=turn_id, fence=fence,
-                      index=index, stages=stages)
+                      index=index, stages=stages, fact=fact)
     except MemoryDecisionRejected as exc:
         # 执行期冲突(引用的记忆已变版本 / 已不存在):整个决策回滚,**什么都不生效**,
         # 交回重试重新决策 —— 部分生效会让「删旧加新」这类成对动作只剩一半
@@ -406,7 +415,7 @@ def _maintain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
 
 def _candidates_digest(candidates) -> str:
     """候选集合的摘要:id + 版本 + 正文摘要 —— 候选一变(改写 / 删除 / 新召回),旧决策就不作数。"""
-    return fingerprint(*[f"{c.memory_id}:{c.revision}:{content_hash(c.text)}" for c in candidates])
+    return fingerprint(*[f"{c.memory_id}:{c.revision}:{content_hash(c.text)}:{c.kind}:{c.meta_version}:{c.fact_context}" for c in candidates])
 
 
 def _decision_stage(stages: dict | None, index: int) -> dict | None:
@@ -428,7 +437,7 @@ def _reuse_decision(*, stages: dict | None, index: int, fact: ExtractedFact, can
         return None
     from app.memory import maintain
 
-    same_input = (record.get("digest") == fingerprint(normalize_text(fact.text),
+    same_input = (record.get("digest") == fingerprint(fact.model_dump_json(),
                                                       _candidates_digest(candidates))
                   and record.get("protocol") == maintain.PROTOCOL_VERSION
                   and record.get("model") == llm_model_identity())
@@ -451,7 +460,7 @@ def _record_decision(*, stages: dict | None, index: int, fact: ExtractedFact, ca
     from app.memory import maintain
 
     stages.setdefault(STAGE_MAINTENANCE, {})[str(index)] = {
-        "digest": fingerprint(normalize_text(fact.text), _candidates_digest(candidates)),
+        "digest": fingerprint(fact.model_dump_json(), _candidates_digest(candidates)),
         "protocol": maintain.PROTOCOL_VERSION,
         "model": llm_model_identity(),
         "status": "ok",
@@ -483,7 +492,7 @@ def _write_plain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
             item = repo.create_item(session, user_id=user_id, text=fact.text, actor=actor,
                                     origin=ORIGIN_LLM, thread_id=thread_id, now=now,
                                     reason=reason, generation=generation, scope=scope,
-                                    kind=fact.kind, event_time=fact.event_time)
+                                    kind=fact.kind, event_time=fact.event_time, fact_context=fact.fact_context)
             _record_sources(session, memory_ids=[item.id], user_id=user_id, scope=scope,
                             conversation_id=thread_id, turn_id=turn_id, now=now)
             _commit_stage(session, fence, stages=stages, index=index, now=now,
@@ -505,7 +514,53 @@ def _write_plain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
     _merge_index(result, _index_items([item], scope=scope))
 
 
+def _dated_event_text(text, fact):
+    if fact and fact.kind in ("event", "task"):
+        time = fact.fact_context.get("time") or {}
+        date = time.get("start")
+        if date:
+            date += f" to {time['end']}" if time.get("end") else ""
+            if date not in text:
+                return f"{text} [{date}]"
+    return text
+
+
+def _protect_history(decision, candidates, fact):
+    from app.memory import maintain
+    if decision.unchanged and fact.kind in ("event", "task"):
+        time = fact.fact_context.get("time") or {}
+        state = fact.fact_context.get("state", "unknown")
+        comparable = [c for c in candidates if c.kind == fact.kind
+                      and (not time.get("start") or (c.fact_context.get("time") or {}).get("start") == time["start"])
+                      and (state == "unknown" or c.fact_context.get("state") == state)]
+        if not comparable and (time.get("start") or state != "unknown"):
+            return maintain.MaintenanceDecision(events=[maintain.AddEvent(
+                event="ADD", text=fact.text, kind=fact.kind, event_time=fact.event_time)],
+                reason="不同时间或状态的事件不能视为重复")
+    protected = {c.memory_id for c in candidates if c.kind in ("event", "task") or fact.kind in ("event", "task")}
+    if any(getattr(e, "id", "") in protected and
+           (not getattr(e, "correction", False) or not _explicit_correction(fact))
+           for e in decision.changes):
+        return maintain.MaintenanceDecision(events=[maintain.AddEvent(
+            event="ADD", text=fact.text, kind=fact.kind, event_time=fact.event_time)],
+            reason="保留历史事件；后续事实独立新增")
+    return decision
+
+
+def _merge_context(old: dict, new: dict) -> dict:
+    merged = dict(old)
+    merged.update({k: v for k, v in new.items() if k != "sources"})
+    sources = [*(old.get("sources") or []), *(new.get("sources") or [])]
+    merged["sources"] = list({(s.get("message_id"), s.get("recorded_at")): s for s in sources}.values())
+    return merged
+
+
+def _explicit_correction(fact) -> bool:
+    return bool(fact and fact.fact_context.get("correction_evidence"))
+
+
 def _apply_events(result: WriteResult, *, user_id: str, decision, candidates, thread_id,
+                  fact: ExtractedFact | None = None,
                   actor: str, now: datetime, reason: str, generation: int | None = None,
                   scope: str = SCOPE_FORMAL, turn_id: str | None = None,
                   fence: Fence | None = None, index: int = -1,
@@ -530,11 +585,12 @@ def _apply_events(result: WriteResult, *, user_id: str, decision, candidates, th
         for event in decision.changes:
             if isinstance(event, maintain.AddEvent):
                 try:
-                    item = repo.create_item(session, user_id=user_id, text=event.text,
+                    item = repo.create_item(session, user_id=user_id, text=_dated_event_text(event.text, fact),
                                             actor=actor, origin=ORIGIN_LLM, thread_id=thread_id,
                                             now=now, reason=reason, generation=generation,
-                                            scope=scope, kind=event.kind or "",
-                                            event_time=event.event_time)
+                                            scope=scope, kind=event.kind or (fact.kind if fact else ""),
+                                            event_time=fact.event_time if fact else event.event_time,
+                                            fact_context=fact.fact_context if fact else {})
                 except MemoryStaleGeneration:
                     raise                  # 代次过期 = 整批作废(事务回滚,一个事件都不落)
                 except MemoryConflict:
@@ -547,6 +603,10 @@ def _apply_events(result: WriteResult, *, user_id: str, decision, candidates, th
             cand = by_id.get(event.id)
             if cand is None:               # authorize 之后不该出现;出现就是编程错误
                 raise MemoryDecisionRejected("事件引用的记忆不在本次展示给模型的候选中")
+            if cand.kind in ("event", "task") and not getattr(event, "correction", False):
+                raise MemoryDecisionRejected("历史事件或计划不能被后续进展覆盖；应新增事实")
+            if cand.kind in ("event", "task") and not _explicit_correction(fact):
+                raise MemoryDecisionRejected("没有用户明确纠正旧事实的来源证据")
             if isinstance(event, maintain.UpdateEvent):
                 if normalize_text(event.text) == normalize_text(cand.text):
                     # 改写后的正文与模型看到的那条等价(NFKC 归一后相同):没有实质变化。
@@ -558,10 +618,11 @@ def _apply_events(result: WriteResult, *, user_id: str, decision, candidates, th
                     item = repo.update_item(
                         session, user_id=user_id, memory_id=event.id, new_text=event.text,
                         actor=actor, thread_id=thread_id, now=now, reason=reason,
-                        expected_revision=cand.revision, generation=generation,
+                        expected_revision=cand.revision, expected_meta_version=cand.meta_version, generation=generation,
                         # 决策没提 kind / event_time 时保持原值(不推断,也不清空)
                         kind=event.kind,
-                        event_time=(repo.UNSET if event.event_time is None else event.event_time))
+                        event_time=(repo.UNSET if event.event_time is None else event.event_time),
+                        fact_context=_merge_context(cand.fact_context, fact.fact_context) if fact else repo.UNSET)
                 except MemoryStaleGeneration:
                     raise                  # 代次过期 = 整批作废(同上)
                 except MemoryConflict as exc:
@@ -575,7 +636,7 @@ def _apply_events(result: WriteResult, *, user_id: str, decision, candidates, th
                     gone = repo.delete_item(session, user_id=user_id, memory_id=event.id,
                                             actor=actor, thread_id=thread_id, now=now,
                                             reason=reason, expected_revision=cand.revision,
-                                            generation=generation)
+                                            expected_meta_version=cand.meta_version, generation=generation)
                 except MemoryStaleGeneration:
                     raise                  # 代次过期 = 整批作废(同上)
                 except MemoryConflict as exc:
@@ -747,8 +808,11 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
     if not get_settings().memory_write_enabled:
         return None                       # 暂停自动写入:只影响「登记」,已排队的任务不动
     now = now or db.utc_naive()
-    cleaned = [{"role": str(m.get("role") or ""), "content": str(m.get("content") or "")}
-               for m in (messages or []) if isinstance(m, dict)]
+    cleaned = [{"role": str(m.get("role") or ""), "content": str(m.get("content") or ""),
+                "message_id": str(m.get("message_id") or f"m{i}"),
+                "speaker": str(m.get("speaker") or ""),
+                "recorded_at": str(m.get("recorded_at", now.isoformat()))}
+               for i, m in enumerate(messages or []) if isinstance(m, dict)]
     cleaned = [m for m in cleaned if m["role"] in ("user", "assistant") and m["content"]]
     if not cleaned:
         return None

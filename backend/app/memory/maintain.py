@@ -45,6 +45,8 @@ from app.memory.models import (
     EVENT_ADD, EVENT_DELETE, EVENT_UPDATE, clamp_text, normalize_text, parse_event_time,
 )
 
+from app.memory.temporal import context_label
+
 logger = logging.getLogger(__name__)
 
 # 事件名沿用审计事件常量(ADD/UPDATE/DELETE);NONE 不是审计事件,只表示「什么都不做」
@@ -52,7 +54,7 @@ ACTION_NONE = "NONE"
 
 # 决策协议版本:提示词 / 事件结构一改就要 +1。存下来的决策在复用前要比对它 ——
 # 拿着旧协议的输出直接执行,等于绕过了新协议的校验。
-PROTOCOL_VERSION = "mem-maintain/1"
+PROTOCOL_VERSION = "mem-maintain/2"
 
 # 候选清单在提示词里的单条截断上限:候选正文本来就有 MEMORY_MAX_TEXT_CHARS 上限,
 # 这里再收一道,防止候选一多就把上下文撑爆。
@@ -67,7 +69,7 @@ SYSTEM_PROMPT = """你是「长期记忆维护器」。给定一条**新提取�
 {"events": [...], "reason": "一句话说明判断依据"}
 
 events 里每一项必须是下面四种之一:
-- 新增:{"event": "ADD", "text": "要写入的新记忆(第三人称,一句话)", "kind": "preference|profile|task"}
+- 新增:{"event": "ADD", "text": "要写入的新记忆(第三人称,一句话)", "kind": "preference|profile|task|event"}
 - 改写:{"event": "UPDATE", "id": "候选里的 id", "text": "合并后的完整正文"}
 - 删除:{"event": "DELETE", "id": "候选里的 id"}
 - 不变:{"event": "NONE"}
@@ -82,7 +84,12 @@ events 里每一项必须是下面四种之一:
 7. 每个 id 最多出现在一个事件里;事件总数不超过 5 —— **任何一个事件不合法,整份决策都会被拒绝并重来**,
    所以拿不准就只输出 NONE:宁可不动,也不要错改用户的记忆。
 8. 不要输出密码、验证码、API Key、访问密钥、银行卡号等任何凭证;这种内容一律不写入。
-9. 只输出 JSON,不要解释、不要前后缀、不要 Markdown 代码块。"""
+9. 当前属性变更可以更新当前属性；历史事件、过去的计划与后来的完成事实分别保留。
+10. 只合并同一事实的补充；不同日期或不同事件不可并成摘要。进展不是对旧事实的否定。
+11. UPDATE/DELETE 历史事件或计划必须是用户明确纠正旧表述，填写 correction=true；
+    不能因计划完成或更晚的记录而删除/改写过去。缺乏纠正证据时 ADD 新事实。
+12. 保留来源语言、人物姓名、数值、条件、否定、时间和不确定性。
+13. 只输出 JSON,不要解释、不要前后缀、不要 Markdown 代码块。"""
 
 USER_TEMPLATE = """已有记忆候选(每行形如「id | 正文」;没有候选则写「(无)」):
 {candidates}
@@ -124,6 +131,7 @@ class UpdateEvent(_Base):
 
     event: Literal["UPDATE"]
     id: str = Field(min_length=4, max_length=64)
+    correction: bool = Field(default=False, strict=True)
     text: str = Field(min_length=2, max_length=MAX_FACT_CHARS)
     kind: FactKind | None = None
     event_time: datetime | None = None
@@ -139,6 +147,7 @@ class DeleteEvent(_Base):
 
     event: Literal["DELETE"]
     id: str = Field(min_length=4, max_length=64)
+    correction: bool = Field(default=False, strict=True)
 
 
 class NoneEvent(_Base):
@@ -198,6 +207,9 @@ class Candidate:
     memory_id: str
     text: str
     revision: int
+    kind: str = ""
+    fact_context: dict = field(default_factory=dict)
+    meta_version: int = 0
 
 
 # ---- 提示词 ----
@@ -213,7 +225,7 @@ def visible_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
     kept: list[Candidate] = []
     used = 0
     for cand in candidates or ():
-        line = f"{cand.memory_id} | {clamp_text(cand.text, CANDIDATE_CHARS)}"
+        line = f"{cand.memory_id} | {cand.kind} | {clamp_text(cand.text, CANDIDATE_CHARS)}" + context_label(cand.fact_context)
         if used + len(line) > CONTEXT_LIMIT:
             break                           # 预算用完就不再塞:少给候选好过超上下文
         used += len(line)
@@ -223,7 +235,8 @@ def visible_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
 
 def build_messages(fact: str, candidates: Sequence[Candidate]) -> list:
     """拼维护决策的提示词(候选按传入顺序,逐个截断;总量有字符预算)。"""
-    lines = [f"{c.memory_id} | {clamp_text(c.text, CANDIDATE_CHARS)}"
+    lines = [f"{c.memory_id} | {c.kind} | {clamp_text(c.text, CANDIDATE_CHARS)}"
+             + context_label(c.fact_context)
              for c in visible_candidates(candidates)]
     from langchain_core.messages import HumanMessage, SystemMessage
 

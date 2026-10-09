@@ -121,12 +121,13 @@ DEFAULT_CONTEXT_CHARS = 24000
 
 # 评测回答指令:**三种模式共用**,只有上下文来源不同(公平性要求,见模块 docstring)。
 # 与聊天页的实验室助手提示词不同:不引导任何工具 / SOP 行为,只要求依据证据简短作答。
-INSTRUCTION_VERSION = "eval-answer/1"
+INSTRUCTION_VERSION = "eval-answer/2"
 EVAL_ANSWER_INSTRUCTION = (
     "你是评测中的问答助手。请只依据下面提供的参考信息回答用户的问题(参考信息可能为空)。\n"
     "要求:\n"
+    "- Always answer in English, including when reference information is in another language.\n"
     "- 回答保持简短:一个短语或一句话,不要展开解释;\n"
-    "- 只依据参考信息作答;参考信息里没有依据时,直接回答「无法从提供的信息中得知」;\n"
+    "- 只依据参考信息作答;参考信息里没有依据时,直接用英文回答「Cannot be determined from the provided information」;\n"
     "- 不要编造,不要使用外部知识,不要调用任何工具或技能。"
 )
 
@@ -181,6 +182,7 @@ class EvalEnv:
 
     def write(self, name: str, payload: dict) -> Path:
         p = self.path(name)
+        p.parent.mkdir(parents=True, exist_ok=True)
         temporary = p.with_name(f".{p.name}.{uuid.uuid4().hex}.tmp")
         try:
             temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -383,11 +385,13 @@ def build(env: EvalEnv, dataset: dict, *, max_ticks: int = 200, sleep: float = 0
     from app.memory.worker import MemoryWorker
 
     require_ready()
+    from app.memory import extract, maintain
     identity = {"dataset_digest": dataset_digest(dataset), "collection": env.collection,
                 "config": {k: v for k, v in get_settings().model_dump(mode="json").items()
                            if (k.startswith("memory_") or k.startswith("embeddings_") or k.startswith("llm_"))
                            and not any(secret in k for secret in ("key", "url", "password"))},
-                "extract_note_version": locomo.EXTRACT_NOTE_VERSION}
+                "extract_note_version": locomo.EXTRACT_NOTE_VERSION,
+                "extract_protocol": extract.PROTOCOL_VERSION, "maintenance_protocol": maintain.PROTOCOL_VERSION}
     identity_path = env.path("build_identity.json")
     if env.path("purge.json").exists():
         raise SystemExit("此 run 已执行清理，请使用新的 run-id 构建")
@@ -401,6 +405,8 @@ def build(env: EvalEnv, dataset: dict, *, max_ticks: int = 200, sleep: float = 0
     subjects = subjects_of(dataset)
     units = exchanges(dataset)
     worker = MemoryWorker(scope=env.scope)
+    worker.diagnostic_sink = lambda record: env.write(
+        f"diagnostics/{record['job_id']}.json", record)
     ticks, queued, processed = 0, 0, 0
     drained = not units
     for unit in units:
@@ -456,6 +462,30 @@ def build(env: EvalEnv, dataset: dict, *, max_ticks: int = 200, sleep: float = 0
                          "version": locomo.EXTRACT_NOTE_VERSION if note_used else ""},
         "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+    from app.memory import db, repo
+    from dataclasses import asdict
+    snapshot = []
+    history_snapshot = []
+    with db.session_scope() as session:
+        for subject in subjects:
+            offset = 0
+            while True:
+                items = repo.list_items(session, eval_user_id(env.run_id, subject),
+                                        scope=env.scope, status=None, limit=200, offset=offset)
+                snapshot.extend(asdict(item) for item in items)
+                if len(items) < 200:
+                    break
+                offset += 200
+            offset = 0
+            while True:
+                history = repo.list_history(session, eval_user_id(env.run_id, subject),
+                                            scope=env.scope, limit=200, offset=offset)
+                history_snapshot.extend(asdict(row) for row in history)
+                if len(history) < 200:
+                    break
+                offset += 200
+    env.write("history_snapshot.json", json.loads(json.dumps(history_snapshot, default=lambda value: value.isoformat())))
+    env.write("memory_snapshot.json", json.loads(json.dumps(snapshot, default=lambda value: value.isoformat())))
     env.write("build.json", summary)
     return summary
 

@@ -36,6 +36,8 @@ class MemoryItemView(BaseModel):
     updated_at: datetime = Field(..., description="最后变更时间（UTC）")
     index_state: str = Field(..., description="synced=向量已同步到当前 Embedding 版本；pending=待补索引")
     indexed_at: datetime | None = Field(default=None, description="最近一次写入索引的时间；未索引为 null")
+    kind: str = ""
+    fact_context: dict = Field(default_factory=dict)
 
 
 class MemoryListResponse(BaseModel):
@@ -66,6 +68,8 @@ class MemoryHistoryItem(BaseModel):
     id: int = Field(..., description="审计行 id（自增，越大越新）")
     memory_id: str = Field(..., description="被改动的记忆 id")
     event: str = Field(..., description="ADD / UPDATE / DELETE")
+    old_context: dict | None = None
+    new_context: dict | None = None
     old_text: str | None = Field(default=None, description="改动前的正文；ADD 与已脱敏的行为 null")
     new_text: str | None = Field(default=None, description="改动后的正文；DELETE 与已脱敏的行为 null")
     actor: str = Field(..., description="llm=会话提取 / 维护，user=用户操作，system=系统")

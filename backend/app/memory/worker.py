@@ -78,7 +78,8 @@ def _messages_digest(messages: list[dict], note: str = "") -> str:
     `note`(评测适配说明,见 service.enqueue_extraction)非空时参与摘要:换了说明就不是
     同一份输入,不复用旧结果。空串不加入摘要 —— 正式路径的既有阶段结果照旧可复用。
     """
-    parts = [f"{m.get('role')}:{m.get('content')}" for m in messages]
+    import json
+    parts = [json.dumps(m, sort_keys=True, ensure_ascii=False) for m in messages]
     if note:
         parts.append(f"note:{note}")
     return fingerprint(*parts)
@@ -165,6 +166,7 @@ class MemoryWorker:
 
     def __init__(self, *, scope: str = SCOPE_FORMAL) -> None:
         self._scope = scope
+        self.diagnostic_sink = None  # only explicitly attached by eval build; never retains formal data
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._start_lock = threading.Lock()
@@ -382,6 +384,9 @@ class MemoryWorker:
             return "failed"
         finally:
             lease.stop()
+            if self.diagnostic_sink is not None and self.scope.startswith("eval:"):
+                self.diagnostic_sink({"job_id": job.id, "thread_id": job.thread_id,
+                                      "user_id": job.user_id, "scope": self.scope, "stages": stages})
 
         _merge_done(stages, result.done)
         self._save_stages(job, fence, stages)              # 尽力而为:丢了只会多花一次调用

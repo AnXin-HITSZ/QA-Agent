@@ -188,3 +188,12 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_pro
 - **应用后补写自动收干，不用手工处理补写目录**：积压文件按 `event_id` 主键幂等重放，下一轮补写就会入库并删除文件；DDL 立即对新 INSERT 生效，**不需要为此重启应用**（运行时不校验列宽）。
 - **回滚**：`0007_widen_provider_columns.down.sql` 把两列改回 `VARCHAR(32)`；只在确认表里没有超宽 provider 的库上执行，否则严格模式直接 1406（与 0002 的 down 同理），生产库应用过 0007 后不要回滚。
 - **真实宽度回归**：`tests/test_metering_mysql.py::test_long_provider_round_trip` 用 49 字符的生产主机名在真库上验证进出（SQLite 不校验长度，只有真库挡得住——0002 的教训）。
+# 0008：事件时间与消息来源
+
+在 0001–0007 已完成的库上执行 `0008_memory_fact_context.up.sql`。迁移新增 `memory_items.fact_context JSON NOT NULL`，存量行回填空对象；同时新增可空的 `memory_history.old_context/new_context`。不从入库时间回填事件时间。
+
+先停止旧 Worker 并备份，在开发库演练后再升级应用。应用不自动执行迁移。本轮尚未在真实 MySQL 执行 0008。
+
+`0008_memory_fact_context.down.sql` 会丢失时间精度、状态和消息级来源，以及对应审计快照，回滚前备份；代码与表结构必须一起回滚。
+
+详细行为、隔离及复测命令见 [记忆事件与时间改进及复测说明](../../docs/记忆事件与时间改进及复测说明.md)。

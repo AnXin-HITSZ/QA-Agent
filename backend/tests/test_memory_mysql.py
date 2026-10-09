@@ -46,7 +46,7 @@ from tests import migrationkit as mig
 
 TABLES = ("memory_items", "memory_history", "memory_jobs", "memory_user_state",
           "memory_sources", "memory_ops")
-VERSIONS = (4, 5, 6)                 # 按序应用;回滚逆序
+VERSIONS = (4, 5, 6, 8)                 # 按序应用;回滚逆序
 ENV = "MEMORY_TEST_MYSQL_URL"
 
 USER = "00000000-0000-4000-8000-00000000aa01"

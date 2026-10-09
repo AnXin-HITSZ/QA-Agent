@@ -78,6 +78,7 @@ class MemoryItemRow(Base):
     # 只看 embedding_version 是不够的：同一个模型下「正文已改、索引还是旧的」照样是脏的。
     indexed_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     indexed_meta_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fact_context: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     __table_args__ = (
         # 列表 / 检索语料都按 (用户, 状态) 取、按 updated_at 排序，这是最主要的访问路径
@@ -104,6 +105,9 @@ class MemoryHistoryRow(Base):
     thread_id: Mapped[str | None] = mapped_column(String(160))
     created_at: Mapped[datetime] = mapped_column(_DT6, nullable=False)
     scope: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    old_context: Mapped[dict | None] = mapped_column(JSON)
+    new_context: Mapped[dict | None] = mapped_column(JSON)
 
     __table_args__ = (
         Index("ix_memory_history_item", "memory_id", "id"),

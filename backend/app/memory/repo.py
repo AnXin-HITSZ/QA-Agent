@@ -59,7 +59,7 @@ def _item(row: MemoryItemRow) -> MemoryItem:
         status=row.status, origin=row.origin, thread_id=row.thread_id, revision=row.revision,
         embedding_version=row.embedding_version, indexed_at=row.indexed_at,
         created_at=row.created_at, updated_at=row.updated_at, deleted_at=row.deleted_at,
-        scope=row.scope or SCOPE_FORMAL, kind=row.kind or "", event_time=row.event_time,
+        scope=row.scope or SCOPE_FORMAL, kind=row.kind or "", event_time=row.event_time, fact_context=row.fact_context or {},
         generation=int(row.generation or 0), meta_version=int(row.meta_version or 0),
         indexed_revision=int(row.indexed_revision or 0),
         indexed_meta_version=int(row.indexed_meta_version or 0),
@@ -71,6 +71,7 @@ def _history(row: MemoryHistoryRow) -> MemoryHistory:
         id=row.id, memory_id=row.memory_id, user_id=row.user_id, event=row.event,
         old_text=row.old_text, new_text=row.new_text, actor=row.actor, reason=row.reason,
         thread_id=row.thread_id, created_at=row.created_at,
+        old_context=row.old_context, new_context=row.new_context,
     )
 
 
@@ -408,7 +409,8 @@ def bump_generation(session, user_id: str, *, now: datetime, scope: str = SCOPE_
 def create_item(session, *, user_id: str, text: str, actor: str = ACTOR_LLM,
                 origin: str = ORIGIN_LLM, thread_id: str | None = None, now: datetime,
                 reason: str = "", generation: int | None = None, scope: str = SCOPE_FORMAL,
-                kind: str = "", event_time: datetime | None = None) -> MemoryItem:
+                kind: str = "", event_time: datetime | None = None,
+                fact_context: dict | None = None) -> MemoryItem:
     """新增一条有效记忆 + ADD 审计。
 
     去重由调用方先行判断（service 层在维护决策时做）；这里再兜一道：同一用户已有
@@ -429,7 +431,7 @@ def create_item(session, *, user_id: str, text: str, actor: str = ACTOR_LLM,
         id=new_id(), user_id=user_id, text=text, content_hash=content_hash(text),
         status=STATUS_ACTIVE, origin=origin, thread_id=thread_id, revision=1,
         embedding_version="", indexed_at=None, created_at=now, updated_at=now, deleted_at=None,
-        scope=scope, kind=kind or "", event_time=event_time, generation=current,
+        scope=scope, kind=kind or "", event_time=event_time, fact_context=fact_context or {}, generation=current,
         meta_version=0, indexed_revision=0, indexed_meta_version=0,
     )
     session.add(row)
@@ -437,6 +439,7 @@ def create_item(session, *, user_id: str, text: str, actor: str = ACTOR_LLM,
     session.add(MemoryHistoryRow(
         memory_id=row.id, user_id=user_id, scope=scope, event=EVENT_ADD, old_text=None, new_text=text,
         actor=actor, reason=(reason or "")[:REASON_LIMIT], thread_id=thread_id, created_at=now,
+        new_context=row.fact_context,
     ))
     return _item(row)
 
@@ -448,7 +451,8 @@ UNSET = object()
 def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: str,
                 thread_id: str | None = None, now: datetime, reason: str = "",
                 expected_revision: int | None = None, generation: int | None = None,
-                kind: str | None = None, event_time=UNSET) -> MemoryItem:
+                expected_meta_version: int | None = None,
+                kind: str | None = None, event_time=UNSET, fact_context=UNSET) -> MemoryItem:
     """改写一条有效记忆的正文（Revision +1）+ UPDATE 审计；索引标记为脏（等重建补齐）。
 
     带条件的 UPDATE：只对「还是 active」的行生效；别人改掉的 / 已删的会被判成 NotFound。
@@ -472,9 +476,12 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
         raise MemoryNotFound(memory_id)
     if expected_revision is not None and int(row.revision) != int(expected_revision):
         raise MemoryConflict(f"记忆已被改写(revision {expected_revision} → {row.revision})")
+    if expected_meta_version is not None and row.meta_version != expected_meta_version:
+        raise MemoryConflict("记忆元数据已变化")
     content_changed = content_hash(new_text) != row.content_hash
     meta_changed = ((kind is not None and kind != (row.kind or ""))
-                    or (event_time is not UNSET and event_time != row.event_time))
+                    or (event_time is not UNSET and event_time != row.event_time)
+                    or (fact_context is not UNSET and fact_context != row.fact_context))
     if not content_changed and not meta_changed:
         session.refresh(row)
         return _item(row)                # 什么都没变：不写审计、不动版本、不碰索引
@@ -482,6 +489,8 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
     conds = [MemoryItemRow.id == memory_id, MemoryItemRow.status == STATUS_ACTIVE]
     if expected_revision is not None:
         conds.append(MemoryItemRow.revision == int(expected_revision))
+    if expected_meta_version is not None:
+        conds.append(MemoryItemRow.meta_version == int(expected_meta_version))
     values: dict = {"updated_at": now, "meta_version": MemoryItemRow.meta_version + 1}
     if content_changed:
         values.update(text=new_text, content_hash=content_hash(new_text),
@@ -491,19 +500,23 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
         values["kind"] = kind
     if event_time is not UNSET:
         values["event_time"] = event_time
+    if fact_context is not UNSET:
+        values["fact_context"] = fact_context
     res = session.execute(
         update(MemoryItemRow).where(*conds).values(**values)
         .execution_options(synchronize_session=False)
     )
     if not res.rowcount:
-        if expected_revision is not None and row.status == STATUS_ACTIVE:
+        if (expected_revision is not None or expected_meta_version is not None) and row.status == STATUS_ACTIVE:
             # 存在且仍有效 → 是版本对不上，而不是不存在；两种结局调用方要分开处理
             raise MemoryConflict(f"记忆 {memory_id} 的版本已变化，本次改写未生效")
         raise MemoryNotFound(memory_id)          # 已被删除 / 被并发改走
     if content_changed:
         session.add(MemoryHistoryRow(
             memory_id=memory_id, user_id=user_id, scope=row.scope, event=EVENT_UPDATE, old_text=old_text,
-            new_text=new_text, actor=actor, reason=(reason or "")[:REASON_LIMIT],
+            new_text=new_text, old_context=row.fact_context,
+            new_context=(row.fact_context if fact_context is UNSET else fact_context),
+            actor=actor, reason=(reason or "")[:REASON_LIMIT],
             thread_id=thread_id, created_at=now,
         ))
     session.refresh(row)
@@ -513,7 +526,7 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
 def delete_item(session, *, user_id: str, memory_id: str, actor: str,
                 thread_id: str | None = None, now: datetime, reason: str = "",
                 expected_revision: int | None = None,
-                generation: int | None = None) -> MemoryItem:
+                generation: int | None = None, expected_meta_version: int | None = None) -> MemoryItem:
     """软删一条有效记忆（status='deleted' + deleted_at）+ DELETE 审计；行与审计都保留。
 
     `expected_revision` 的语义同 update_item：维护决策要删的是「它当时看到的那一版」，
@@ -532,6 +545,8 @@ def delete_item(session, *, user_id: str, memory_id: str, actor: str,
     conds = [MemoryItemRow.id == memory_id, MemoryItemRow.status == STATUS_ACTIVE]
     if expected_revision is not None:
         conds.append(MemoryItemRow.revision == int(expected_revision))
+    if expected_meta_version is not None:
+        conds.append(MemoryItemRow.meta_version == int(expected_meta_version))
     res = session.execute(
         update(MemoryItemRow)
         .where(*conds)
@@ -540,12 +555,12 @@ def delete_item(session, *, user_id: str, memory_id: str, actor: str,
         .execution_options(synchronize_session=False)
     )
     if not res.rowcount:
-        if expected_revision is not None and row.status == STATUS_ACTIVE:
+        if (expected_revision is not None or expected_meta_version is not None) and row.status == STATUS_ACTIVE:
             raise MemoryConflict(f"记忆 {memory_id} 的版本已变化，本次删除未生效")
         raise MemoryNotFound(memory_id)
     session.add(MemoryHistoryRow(
         memory_id=memory_id, user_id=user_id, scope=row.scope, event=EVENT_DELETE, old_text=old_text,
-        new_text=None, actor=actor, reason=(reason or "")[:REASON_LIMIT],
+        new_text=None, old_context=row.fact_context, actor=actor, reason=(reason or "")[:REASON_LIMIT],
         thread_id=thread_id, created_at=now,
     ))
     session.refresh(row)
@@ -1263,7 +1278,7 @@ def purge_user(session, user_id: str, *, now: datetime,
     history = int(session.execute(
         update(MemoryHistoryRow)
         .where(MemoryHistoryRow.user_id == user_id, MemoryHistoryRow.scope == scope)
-        .values(old_text=None, new_text=None, reason="用户数据彻底删除")
+        .values(old_text=None, new_text=None, old_context=None, new_context=None, reason="用户数据彻底删除")
         .execution_options(synchronize_session=False)
     ).rowcount)
     return PurgeResult(item_ids=item_ids, items=items, jobs=jobs, history=history,

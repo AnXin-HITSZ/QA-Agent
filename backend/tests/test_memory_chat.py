@@ -256,8 +256,9 @@ def test_a_complete_answer_is_registered_exactly_once(env, monkeypatch):
     assert job["kind"] == JOB_KIND_EXTRACT and job["status"] == JOB_PENDING
     assert job["attempts"] == 0 and job["generation"] == 0        # 只登记,还没被认领
     assert job["thread_id"] == thread_id                          # 来源线程对得上
-    assert job["payload"]["messages"] == [{"role": "user", "content": QUESTION},
+    assert [{"role": m["role"], "content": m["content"]} for m in job["payload"]["messages"]] == [{"role": "user", "content": QUESTION},
                                           {"role": "assistant", "content": ANSWER}]
+    assert all(m["message_id"] and m["recorded_at"] for m in job["payload"]["messages"])
     assert job["payload"]["source"] == "chat"
 
 
@@ -357,7 +358,7 @@ def test_a_streamed_answer_registers_only_the_final_text(env, monkeypatch):
     assert ABOUT_ME in graph.config["configurable"]["memory_prompt"]
     jobs = _jobs(env)
     assert len(jobs) == 1
-    assert jobs[0]["payload"]["messages"] == [{"role": "user", "content": QUESTION},
+    assert [{"role": m["role"], "content": m["content"]} for m in jobs[0]["payload"]["messages"]] == [{"role": "user", "content": QUESTION},
                                               {"role": "assistant",
                                                "content": "第一步:填报销单"}]
     assert jobs[0]["payload"]["source"] == "chat_stream"

@@ -103,15 +103,14 @@ _MONTHS = {name: i for i, name in enumerate(
 # 映射方式:两位说话者的每条消息都映射为 user 角色、正文以「姓名:」开头(见
 # render_turn)—— 不能把其中一人映射成 assistant,那等于把那个人的表述整段丢掉。
 # 本条说明要求模型保留人物姓名、不许用「用户」笼统指代,避免两位人物的事实混成一人。
-EXTRACT_NOTE_VERSION = "locomo-extract-note/1"
+EXTRACT_NOTE_VERSION = "locomo-extract-note/2"
 EXTRACT_NOTE = (
-    "本段是评测适配说明;与前面「只提取用户内容、以『用户』指代」的约定不同之处,以本条为准:"
-    "下面是一段两个人的对话记录(消息前缀是说话人的姓名;以 [会话记录时间:…] 开头的行是"
-    "这段对话的记录时间(元数据),不是任何人说的话)。请提取这两位人物明确说出的、值得长期"
-    "记住的事实;每条事实都要写出人物姓名(例如「Caroline 养了一只猫」),不要用「用户」笼统"
-    "指代,也不要凭称呼或语境猜测身份。其余规则(只收明确说出的内容、第三人称转述、不编造、"
-    "不记录敏感信息)保持不变。"
+    "输入格式说明：这是两个人的对话记录，user 角色并不代表同一个人；"
+    "每条正文前的姓名是说话者，请保留具体姓名，不用『用户』替代姓名。"
+    "[会话记录时间:…] 和消息 ID 是来源元数据，不是人物说出的事实或事件时间。"
+    "其余提取标准全部遵循共享提取器，不增加或放宽任何记忆选择规则。"
 )
+
 
 
 class LocomoDataError(ValueError):
@@ -181,7 +180,10 @@ def session_messages(session: dict) -> list[dict]:
     """
     messages = [{"role": "user", "content": _session_time_note(session)}]
     for turn in session["turns"]:
-        messages.append({"role": "user", "content": render_turn(turn)})
+        messages.append({"role": "user", "content": render_turn(turn),
+                         "message_id": turn.get("dia_id") or turn.get("id") or "",
+                         "speaker": turn.get("speaker") or "",
+                         "recorded_at": session.get("date_time") or session.get("date_time_raw") or ""})
     return messages
 
 

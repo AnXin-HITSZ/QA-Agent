@@ -98,9 +98,9 @@ def _view(item) -> MemoryItemView:
         id=item.id, text=item.text, status=item.status, origin=item.origin,
         revision=item.revision, thread_id=item.thread_id, created_at=item.created_at,
         updated_at=item.updated_at,
-        index_state=("synced" if item.embedding_version == service.embedding_version()
+        index_state=("synced" if item.index_synced(service.embedding_version())
                      else "pending"),
-        indexed_at=item.indexed_at,
+        indexed_at=item.indexed_at, kind=item.kind, fact_context=item.fact_context,
     )
 
 
@@ -181,7 +181,8 @@ def memory_history(
                                limit=limit, offset=offset)
     return MemoryHistoryResponse(enabled=True, items=[
         MemoryHistoryItem(id=r.id, memory_id=r.memory_id, event=r.event, old_text=r.old_text,
-                          new_text=r.new_text, actor=r.actor, reason=r.reason,
+                          new_text=r.new_text, old_context=r.old_context, new_context=r.new_context,
+                          actor=r.actor, reason=r.reason,
                           created_at=r.created_at)
         for r in rows
     ])

@@ -93,6 +93,9 @@ class Evidence:
     trimmed: bool = False           # 正文是否被预算截断(截断时不伪称完整)
     kind: str = ""                  # 事实类型(提取 / 维护协议里校验过的那个值)
     event_time: datetime | None = None   # 事件发生时间(未知为 None,不推断)
+    fact_context: dict = field(default_factory=dict)
+    context_text: str = ""
+    meta_version: int = 0
 
 
 @dataclass
@@ -561,16 +564,24 @@ def _finalize(ranked, *, limit: int, budget: int, snapshots: dict) -> tuple[list
             text = text[:room]
             cut = True
             trimmed = True
-        used += len(text)
+        metadata = context_label(item.fact_context)
+        metadata_room = max(0, room - len(text))
+        if len(metadata) > metadata_room:
+            metadata = metadata[:metadata_room]
+            cut = trimmed = True
+        used += len(text) + len(metadata)
         hits.append(Evidence(memory_id=mid, text=text, score=float(score), origin=origin,
                              rrf=float(rrf), vector_rank=dense_rank, bm25_rank=keyword_rank,
                              updated_at=item.updated_at, thread_id=item.thread_id,
                              revision=item.revision, trimmed=cut, kind=item.kind,
-                             event_time=item.event_time))
+                             event_time=item.event_time, fact_context=item.fact_context, context_text=metadata, meta_version=item.meta_version))
     notes = [DEGRADE_BUDGET] if trimmed else []
     if changed:
         notes.append("检索期间记忆已变化，已丢弃版本不一致的候选")
     return hits, ";".join(notes)
+
+
+from app.memory.temporal import context_label
 
 
 def format_evidence(result: SearchResult) -> str:
@@ -582,5 +593,6 @@ def format_evidence(result: SearchResult) -> str:
         suffix = "(截断)" if hit.trimmed else ""
         stamp = hit.updated_at.strftime("%Y-%m-%d") if hit.updated_at else "时间未知"
         event = f";发生时间 {hit.event_time.strftime('%Y-%m-%d')}" if hit.event_time else ""
-        blocks.append(f"[记忆 {i}｜{stamp}{event}{suffix}] {hit.text}")
+        blocks.append(f"[记忆 {i}｜记录更新 {stamp}{event}{suffix}] {hit.text}"
+                      + hit.context_text)
     return "\n".join(blocks)
