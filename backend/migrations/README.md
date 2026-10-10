@@ -62,14 +62,16 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0004 | `0004_memory_tables` | 已应用 | 已应用 |
 | 0005 | `0005_memory_scope_fencing_index_ops` | 已应用 | 已应用 |
 | 0006 | `0006_memory_scope_state_history` | 已应用 | 已应用 |
-| 0007 | `0007_widen_provider_columns` | 未应用 | 未应用 |
-| 0008 | `0008_memory_fact_context` | 待核实 | 待核实 |
+| 0007 | `0007_widen_provider_columns` | 已应用 | 已应用 |
+| 0008 | `0008_memory_fact_context` | 已应用 | 已应用 |
 | 0009 | `0009_memory_graph_tables` | 未应用 | 未应用 |
 
-> 0008 的「待核实」:本记录表此前没有 0008 行,而 §0008 写的是「尚未在真实 MySQL 执行」;
-> 但 2026-10-10 的评测基线在开发库完成了构建（`memory_eval.py` 预检要求 0008 字段存在），
-> 说明开发库**很可能**已经手工执行过 0008。以实际库为准核对后再改这张表（`SHOW COLUMNS
-> FROM memory_items LIKE 'fact_context'`）。生产库同理需要核对 0008 与 0007。
+> 0007 / 0008 两行原为「未应用 / 待核实」（§0008 正文曾写「本轮尚未在真实 MySQL 执行」，
+> 与 2026-10-10 评测基线要求开发库有 0008 字段对不上）。2026-10-10 对两个库做了一次只读
+> `information_schema` 核对：两库 `call_events.provider` / `price_config.provider` 均为
+> `VARCHAR(255)`（0007 已生效），`memory_items.fact_context` 均为 `JSON NOT NULL`、
+> `memory_history.old_context/new_context` 均存在（0008 已生效），故改为「已应用」。
+> 确切执行日期未记录。
 
 ## 0001：调用日志与费用统计四张表
 
@@ -195,11 +197,11 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_pro
 - **应用后补写自动收干，不用手工处理补写目录**：积压文件按 `event_id` 主键幂等重放，下一轮补写就会入库并删除文件；DDL 立即对新 INSERT 生效，**不需要为此重启应用**（运行时不校验列宽）。
 - **回滚**：`0007_widen_provider_columns.down.sql` 把两列改回 `VARCHAR(32)`；只在确认表里没有超宽 provider 的库上执行，否则严格模式直接 1406（与 0002 的 down 同理），生产库应用过 0007 后不要回滚。
 - **真实宽度回归**：`tests/test_metering_mysql.py::test_long_provider_round_trip` 用 49 字符的生产主机名在真库上验证进出（SQLite 不校验长度，只有真库挡得住——0002 的教训）。
-# 0008：事件时间与消息来源
+## 0008：事件时间与消息来源
 
 在 0001–0007 已完成的库上执行 `0008_memory_fact_context.up.sql`。迁移新增 `memory_items.fact_context JSON NOT NULL`，存量行回填空对象；同时新增可空的 `memory_history.old_context/new_context`。不从入库时间回填事件时间。
 
-先停止旧 Worker 并备份，在开发库演练后再升级应用。应用不自动执行迁移。本轮尚未在真实 MySQL 执行 0008。
+先停止旧 Worker 并备份，在开发库演练后再升级应用。应用不自动执行迁移。up 已在开发库与生产库执行（2026-10-10 只读探查核实：两库 `memory_items.fact_context` 均为 `JSON NOT NULL`，`memory_history.old_context/new_context` 均存在；确切执行日期未记录）。
 
 `0008_memory_fact_context.down.sql` 会丢失时间精度、状态和消息级来源，以及对应审计快照，回滚前备份；代码与表结构必须一起回滚。
 
