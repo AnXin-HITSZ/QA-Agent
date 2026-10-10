@@ -10,6 +10,8 @@
 #   bash run.sh --deps   顺带重装后端依赖(改了 requirements.txt 时)
 #   bash run.sh --web    顺带重建前端静态产物(改了 frontend/ 代码时)
 #   bash run.sh --all    依赖 + 前端都重来
+# 图记忆启用时，先读取 backend/.env 密码启动/复用本机 Neo4j Compose 并验证认证。
+# 图关闭跳过；远程 NEO4J_URI 只检查连接；不自动执行 MySQL 迁移。
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -41,6 +43,10 @@ if [ "$DO_WEB" = 1 ]; then
   sudo rm -rf /var/www/qa-agent && sudo mkdir -p /var/www/qa-agent
   sudo cp -r frontend/dist/. /var/www/qa-agent/
 fi
+
+# 密码由 Settings 从 backend/.env 读取，再传给 Compose；不 source / 打印 .env。
+# 图关闭时不调用 Docker；图启用但服务/认证失败时停止，不重启后端。
+"$ENV_PY" backend/scripts/neo4j_setup.py deploy
 
 echo ">> 关闭上次 & 启用本次(systemd 原子重启)"
 sudo systemctl restart "$SERVICE"

@@ -18,6 +18,8 @@
 # 脚本按 backend/.env 里 MYSQL_URL 的本地端口自动架 SSH 隧道
 # (要求 `ssh aliyun-ecs` 免密可用),退出时只关本次起的隧道;端口已有监听(隧道/本机库)则复用,不动它。
 # SSH 别名默认 aliyun-ecs,换机器时用 QA_AGENT_SSH_ALIAS 覆盖,不要改脚本。
+# 图记忆启用时，同样按 NEO4J_URI 的本地端口建立 ECS Neo4j 隧道，并检查认证连接。
+# 密码由 Python Settings 读取 backend/.env；本脚本不在开发机启动 Docker。
 
 set -euo pipefail
 
@@ -62,6 +64,7 @@ export QA_AGENT_API_TARGET="http://127.0.0.1:${BACK_PORT}"
 
 # ---- 如换机器/环境,只改这一行:qa-agent 环境里的 python.exe 绝对路径 ----
 PY="/d/Downloads/Anaconda/anaconda/envs/qa-agent/python.exe"
+export PYTHONIOENCODING=utf-8
 
 if [ ! -x "$PY" ]; then
   echo "✗ 找不到 qa-agent 的 python:$PY"
@@ -84,7 +87,7 @@ echo "NO_PROXY=$NO_PROXY"
 cleanup() {
   echo
   echo ">> 正在停止隧道 / 前后端 ..."
-  kill "${BACK:-}" "${FRONT:-}" "${TUNNEL:-}" 2>/dev/null || true
+  kill "${BACK:-}" "${FRONT:-}" "${TUNNEL:-}" "${NEO4J_TUNNEL:-}" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
 
@@ -126,6 +129,36 @@ else
     kill "$TUNNEL" 2>/dev/null || true
     exit 1
   fi
+fi
+
+# Neo4j 在 ECS 本机监听；使用 Settings 解析 .env，不 source 含密码的文件。
+NEO4J_CONFIG="$("$PY" backend/scripts/neo4j_setup.py inspect)"
+IFS=$'\t' read -r NEO4J_STATE NEO4J_HOST NEO4J_PORT <<< "$NEO4J_CONFIG"
+if [ "$NEO4J_STATE" = disabled ]; then
+  echo ">> 图记忆关闭，跳过 Neo4j 隧道。"
+elif [ "$NEO4J_HOST" != "127.0.0.1" ] && [ "$NEO4J_HOST" != localhost ]; then
+  echo ">> Neo4j 使用远程地址，直接连接，不架隧道。"
+elif port_in_use "$NEO4J_PORT"; then
+  echo ">> 本机 ${NEO4J_PORT} 已在监听：复用 Neo4j 连接，退出不关闭它。"
+else
+  echo ">> Neo4j 隧道 127.0.0.1:${NEO4J_PORT} → ${SSH_ALIAS}:127.0.0.1:7687"
+  ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -L "127.0.0.1:${NEO4J_PORT}:127.0.0.1:7687" "$SSH_ALIAS" &
+  NEO4J_TUNNEL=$!
+  NEO4J_UP=0
+  for _ in $(seq 1 50); do
+    if ! kill -0 "$NEO4J_TUNNEL" 2>/dev/null; then break; fi
+    if port_open "$NEO4J_PORT"; then NEO4J_UP=1; break; fi
+    sleep 0.2
+  done
+  if [ "$NEO4J_UP" != 1 ]; then
+    echo "✗ Neo4j 隧道未就绪，请检查 SSH 连接和 ECS Neo4j 服务。"
+    exit 1
+  fi
+fi
+
+if [ "$NEO4J_STATE" = enabled ]; then
+  "$PY" backend/scripts/neo4j_setup.py check
 fi
 
 echo ">> 启动后端  http://127.0.0.1:${BACK_PORT}  (--reload 热重载,读 backend/.env)"
