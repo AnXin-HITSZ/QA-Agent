@@ -40,6 +40,10 @@ pymysql>=1.1,<2
 # 两者都需装到生产环境,少一个认证接口就起不来(会在启动自检里明确报错,不静默降级)。
 argon2-cffi>=23.1
 PyJWT>=2.8
+# 图记忆(Neo4j 只是可重建投影,事实源在 MySQL;见 docs/记忆图索引技术方案.md)。
+# 官方驱动(Apache-2.0)。懒加载:总开关 MEMORY_GRAPH_ENABLED 关闭时不 import、不连接,
+# 漏装也只是图通道显式降级,不影响启动与聊天(见 app/memory/graph 的开关矩阵)。
+neo4j>=5.24,<6
 # 发信走 SMTP(标准库 smtplib,不引第三方 SDK;见 app/auth/mailer.py)
 pytest>=8.2
 pytest-asyncio>=0.23

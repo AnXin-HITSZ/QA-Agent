@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -132,6 +133,26 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("长期记忆初始化失败(不影响启动与聊天):%s", exc)
 
+    # 长期记忆图(Neo4j 投影):总开关关闭时什么都不做(连驱动都不加载,见 app/memory/graph)。
+    # 打开时在 worker 线程里连接 + 探活(不阻塞事件循环),失败只告警:图是软依赖,
+    # 启动与聊天不受影响,图通道显式降级并在 /health 与诊断里看得到(§6/§18)。
+    graph_client = None
+    try:
+        from app.memory import graph as memory_graph
+
+        graph_client = memory_graph.get_graph_client()
+        await anyio.to_thread.run_sync(graph_client.connect)
+        st = graph_client.health()
+        if st.get("enabled"):
+            if st.get("available"):
+                logger.info("长期记忆图:Neo4j 已连接(%s)", st.get("uri"))
+            else:
+                logger.warning("长期记忆图:Neo4j 不可用(%s);图通道将显式降级。", st.get("reason"))
+        else:
+            logger.info("长期记忆图:未启用(%s)", st.get("reason"))
+    except Exception as exc:
+        logger.warning("长期记忆图初始化失败(不影响启动与聊天):%s", exc)
+
     try:
         yield
     finally:
@@ -147,6 +168,11 @@ async def lifespan(app: FastAPI):
             memory_worker.stop()
         except Exception as exc:
             logger.warning("长期记忆线程收尾失败:%s", exc)
+        if graph_client is not None:
+            try:
+                await anyio.to_thread.run_sync(graph_client.close)
+            except Exception as exc:
+                logger.warning("长期记忆图收尾失败:%s", exc)
         try:
             from app.metering import stop as metering_stop
 

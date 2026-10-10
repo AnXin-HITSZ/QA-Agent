@@ -63,6 +63,13 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0005 | `0005_memory_scope_fencing_index_ops` | 已应用 | 已应用 |
 | 0006 | `0006_memory_scope_state_history` | 已应用 | 已应用 |
 | 0007 | `0007_widen_provider_columns` | 未应用 | 未应用 |
+| 0008 | `0008_memory_fact_context` | 待核实 | 待核实 |
+| 0009 | `0009_memory_graph_tables` | 未应用 | 未应用 |
+
+> 0008 的「待核实」:本记录表此前没有 0008 行,而 §0008 写的是「尚未在真实 MySQL 执行」;
+> 但 2026-10-10 的评测基线在开发库完成了构建（`memory_eval.py` 预检要求 0008 字段存在），
+> 说明开发库**很可能**已经手工执行过 0008。以实际库为准核对后再改这张表（`SHOW COLUMNS
+> FROM memory_items LIKE 'fact_context'`）。生产库同理需要核对 0008 与 0007。
 
 ## 0001：调用日志与费用统计四张表
 
@@ -197,3 +204,20 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_pro
 `0008_memory_fact_context.down.sql` 会丢失时间精度、状态和消息级来源，以及对应审计快照，回滚前备份；代码与表结构必须一起回滚。
 
 详细行为、隔离及复测命令见 [记忆事件与时间改进及复测说明](../../docs/记忆事件与时间改进及复测说明.md)。
+
+## 0009：记忆图七张表
+
+`0009_memory_graph_tables.up.sql` 新建记忆图的七张表：`memory_entities`、`memory_entity_aliases`、`memory_entity_mentions`、`memory_relations`、`memory_events`、`memory_event_participants`、`memory_fact_links`。MySQL 是唯一事实源；Neo4j 只是从这些表投影出来的可重建索引，**本迁移不涉及 Neo4j**（Neo4j 的部署与投影见 `docs/记忆图索引技术方案.md`）。
+
+先停止旧 Worker 并备份，在开发库演练后再升级应用。应用不自动执行迁移。按「先在开发库、再在生产库」执行：
+
+```bash
+# 先在开发库，再在生产库（两库跑的是同一条命令，只换库名）
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev  < 0009_memory_graph_tables.up.sql
+mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_prod < 0009_memory_graph_tables.up.sql
+```
+
+- **只加表，不改既有表**：已执行 0001–0008 的库直接执行 0009 即可；
+- **开关与数据无关**：`MEMORY_GRAPH_ENABLED` 默认关闭，不连接 Neo4j、不提取或召回图；编辑与删除仍检查既有图关联并登记持久化清理意图，重新开启后台后补做。
+- **回滚**：`0009_memory_graph_tables.down.sql` 直接 DROP 这七张表，会丢掉图数据（实体 / 别名 / 提及 / 关系 / 事件 / 参与者 / 来源绑定）。图数据不是不可再生的（事实以 `memory_items` 为准，可从固定记忆受控回填），但需要代码也回到不使用图元素的版本；生产库应用过 0009 后不要轻易回滚。
+- **离线看护**：`tests/test_memory_graph_migration.py` 把模型与这份 SQL 逐项比对（列 / 类型 / 可空 / 主键 / 唯一键 / 索引），并钉死「同名 ≠ 同一实体（无名字唯一键）」「未消歧可表示（entity_id 可空）」「事实绑定有效版本（memory_revision NOT NULL）」三条设计。

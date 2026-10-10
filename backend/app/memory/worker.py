@@ -51,6 +51,7 @@ from typing import Iterable
 
 from app.config import get_settings
 from app.memory import db, repo, service, vector
+from app.memory.graph import runtime as graph_runtime
 from app.memory.errors import (
     MemoryExtractionError, MemoryLeaseLost, MemoryNotConfigured, MemoryStaleGeneration,
 )
@@ -176,6 +177,8 @@ class MemoryWorker:
         self._index_backoff = 0.0
         self._index_retry_at = 0.0
         self._drift_check_at = 0.0
+        self._graph_check_at = 0.0
+        self._graph_owner_after = ""
         self._db_ok: bool | None = None
         self._db_error = ""
         self._last_error = ""
@@ -277,7 +280,8 @@ class MemoryWorker:
             with db.session_scope() as session:               # 认领:短事务,立即提交
                 job = repo.claim_job(session, owner=self.owner, now=db.utc_naive(),
                                      lease_seconds=float(get_settings().memory_job_lease_seconds),
-                                     kinds=(JOB_KIND_EXTRACT,), scope=self._scope)
+                                     kinds=((JOB_KIND_EXTRACT, graph_runtime.JOB_GRAPH) if graph_runtime.switches().worker
+                                            and graph_runtime.switches().write else (JOB_KIND_EXTRACT,)), scope=self._scope)
             if job is None:
                 break
             stats["claimed"] += 1
@@ -291,6 +295,7 @@ class MemoryWorker:
 
         stats["ops"] = self._replay_ops(limit=None)
         if stats["claimed"] == 0:
+            self._repair_graph_drift()
             stats["indexed"] = self._replay_index(force=force)
             self.indexed += stats["indexed"]
         self._db_ok = True
@@ -304,6 +309,8 @@ class MemoryWorker:
 
     def _execute(self, job) -> str:
         """执行一个已认领的任务,返回 'succeeded' / 'failed'(收尾已经在库里写好)。"""
+        if job.kind == graph_runtime.JOB_GRAPH:
+            return self._execute_graph(job)
         stages = dict(job.stages or {})
         fence = service.Fence(job_id=job.id, owner=self.owner, claim_token=job.claim_token,
                               generation=int(job.generation or 0),
@@ -404,6 +411,65 @@ class MemoryWorker:
             self._note_index_failure(result.index.error)
         self._finish(job, fence, self._outcome_of(result))
         return "succeeded"
+
+    def _execute_graph(self, job) -> str:
+        from app.memory.graph import extract as graph_extract
+        import hashlib, json
+        fence = service.Fence(job_id=job.id, owner=self.owner, claim_token=job.claim_token,
+                              generation=job.generation, scope=job.scope)
+        lease = _LeaseGuard(self, job)
+        lease.start()
+        try:
+            with db.session_scope() as session:
+                repo.assert_claim_valid(session, user_id=job.user_id, job_id=job.id,
+                    owner=self.owner, claim_token=job.claim_token, generation=job.generation,
+                    scope=job.scope, now=db.utc_naive())
+                facts = [f for f in repo.list_by_ids(session, job.payload.get("memory_ids", []))
+                         if f.user_id == job.user_id and f.scope == job.scope and f.status == "active"]
+                if facts and job.thread_id:
+                    from app.memory.tables import MemoryItemRow
+                    from sqlalchemy import select
+                    context_ids = session.scalars(select(MemoryItemRow.id).where(
+                        MemoryItemRow.user_id == job.user_id, MemoryItemRow.scope == job.scope,
+                        MemoryItemRow.status == "active", MemoryItemRow.thread_id == job.thread_id)
+                        .order_by(MemoryItemRow.updated_at.desc(), MemoryItemRow.id).limit(64)).all()
+                    wanted = {f.id for f in facts}
+                    facts.extend(f for f in repo.list_by_ids(session, context_ids) if f.id not in wanted)
+            digest = hashlib.sha256(json.dumps([(f.id, f.revision, f.meta_version, f.text,
+                                                 f.fact_context) for f in facts], sort_keys=True,
+                                                default=str).encode()).hexdigest()
+            stages = dict(job.stages or {})
+            record = stages.get("graph_extract", {})
+            if record.get("digest") == digest and record.get("protocol") == graph_extract.PROTOCOL_VERSION:
+                report = graph_extract.restore(record["result"], facts=facts)
+            else:
+                from app.metering.context import bind, PURPOSE_MEMORY_EXTRACT
+                with bind(purpose=PURPOSE_MEMORY_EXTRACT):
+                    report = graph_extract.extract_graph(facts, [])
+                stages["graph_extract"] = {"digest": digest, "protocol": graph_extract.PROTOCOL_VERSION,
+                                           "result": graph_extract.dump(report)}
+                if not self._save_stages(job, fence, stages):
+                    raise MemoryLeaseLost("图提取阶段结果未保存")
+            with db.session_scope() as session:
+                repo.assert_claim_valid(session, user_id=job.user_id, job_id=job.id,
+                    owner=self.owner, claim_token=job.claim_token, generation=job.generation,
+                    scope=job.scope, now=db.utc_naive())
+                graph_runtime.apply(session, user_id=job.user_id, scope=job.scope, facts=facts,
+                    report=report, turn_key=job.id, generation=job.generation)
+                if not repo.finish_job(session, job_id=job.id, owner=self.owner,
+                    claim_token=job.claim_token, now=db.utc_naive(),
+                    outcome={"entities": len(report.entities), "relations": len(report.relations),
+                             "events": len(report.events), "dropped": len(report.dropped)}):
+                    raise MemoryLeaseLost("图任务收尾失去租约")
+            return "succeeded"
+        except MemoryLeaseLost as exc:
+            self._note_lease_lost(job, exc)
+            return "failed"
+        except Exception as exc:
+            self._fail(job, fence, type(exc).__name__, permanent=isinstance(exc, (MemoryExtractionError, MemoryStaleGeneration)))
+            return "failed"
+        finally:
+            lease.stop()
 
     # ---- 提取(阶段结果复用) ----
 
@@ -547,7 +613,8 @@ class MemoryWorker:
             with db.session_scope() as session:
                 op = repo.claim_op(session, owner=self.owner, now=db.utc_naive(),
                                    lease_seconds=float(get_settings().memory_job_lease_seconds),
-                                   scope=self._scope)
+                                   scope=self._scope, excluded_kinds=(() if graph_runtime.switches().worker
+                                       else (graph_runtime.OP_GRAPH,)))
             if op is None:
                 break
             if self._run_op(op):
@@ -558,7 +625,9 @@ class MemoryWorker:
     def _run_op(self, op) -> bool:
         """执行一条清理台账;返回是否成功(失败已经按退避放回队列 / 落 failed)。"""
         try:
-            if op.kind == OP_PURGE_USER:
+            if op.kind == graph_runtime.OP_GRAPH:
+                graph_runtime.sync(user_id=op.user_id, scope=op.scope)
+            elif op.kind == OP_PURGE_USER:
                 # 只删「代次小于新代次」的点:清除期间用户新写的记忆不受影响
                 vector.delete_user(op.user_id, scope=op.scope,
                                    before_generation=int(op.generation))
@@ -586,6 +655,37 @@ class MemoryWorker:
         if ok:
             logger.info("记忆清理台账 %s 已完成(%s)", op.id[:8], op.kind)
         return ok
+
+    def _repair_graph_drift(self):
+        if not graph_runtime.switches().worker or time.monotonic() < self._graph_check_at:
+            return
+        self._graph_check_at = time.monotonic() + 300
+        try:
+            from sqlalchemy import select, union
+            from app.memory.graph.tables import MemoryEntityRow, MemoryEventRow
+            with db.session_scope() as session:
+                owner_rows = union(select(MemoryEntityRow.user_id).where(
+                    MemoryEntityRow.scope == self._scope), select(MemoryEventRow.user_id).where(
+                    MemoryEventRow.scope == self._scope)).subquery()
+                owners = session.scalars(select(owner_rows.c.user_id).where(
+                    owner_rows.c.user_id > self._graph_owner_after)
+                    .order_by(owner_rows.c.user_id).limit(20)).all()
+            if not owners:
+                self._graph_owner_after = ""
+                return
+            client = graph_runtime.get_graph_client()
+            if not client.connect():
+                raise RuntimeError("Neo4j unavailable")
+            for owner in owners:
+                with db.session_scope() as session:
+                    repo.lock_user_state(session, owner, scope=self._scope, now=db.utc_naive())
+                    data = graph_runtime.snapshot(session, user_id=owner, scope=self._scope)
+                    if not client.audit(data)["clean"]:
+                        graph_runtime.queue_sync(session, user_id=owner, scope=self._scope,
+                            generation=data["generation"], now=db.utc_naive())
+                self._graph_owner_after = owner
+        except Exception as exc:
+            self._last_error = "graph_reconcile:" + type(exc).__name__
 
     # ---- 索引重放(自愈) ----
 

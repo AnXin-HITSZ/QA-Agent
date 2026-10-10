@@ -164,6 +164,17 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
         result.degraded.append(keyword_note)
 
     snapshots = {}
+    graph = {"enabled": False, "candidates": [], "paths": []}
+    if task == TASK_ANSWER:
+        from app.memory.graph import runtime as graph_runtime
+        try:
+            graph = graph_runtime.recall(user_id=user_id, scope=scope, query=q)
+        except Exception as exc:
+            graph = {"enabled": True, "candidates": [], "paths": [], "error": type(exc).__name__}
+            result.degraded.append("图召回不可用(" + type(exc).__name__ + ")")
+        if graph.get("budget_exhausted"):
+            result.degraded.append("图遍历达到预算上限，路径覆盖已受限")
+        result.counts["graph_raw"] = len(graph["candidates"])
     try:
         rows, filtered = _validate(user_id, scope=scope,
                                    candidates=[*dense, *keyword],
@@ -173,6 +184,22 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
         result.error = f"记忆检索不可用:候选校验失败({type(exc).__name__})"
         result.counts.update(dense_raw=len(dense), bm25=len(keyword))
         return result
+    if graph["candidates"]:
+        from app.memory import db, repo
+        with db.session_scope() as session:
+            graph_items = repo.list_by_ids(session, graph["candidates"])
+        graph_versions = graph.get("versions", {})
+        for item in graph_items:
+            expected = graph_versions.get(item.id)
+            if item.user_id != user_id or item.scope != scope or item.status != "active" or not expected:
+                continue
+            if any(getattr(item, key) != expected[key] for key in
+                   ("revision", "meta_version", "generation", "content_hash")):
+                continue
+            snapshots[item.id] = item
+            if item.id not in {r[0] for r in rows}:
+                rows.append((item.id, None, None))
+        graph["candidates"] = [mid for mid in graph["candidates"] if mid in snapshots]
     if filtered.get("filtered_stale"):
         result.degraded.append(f"{DEGRADE_STALE_INDEX}({filtered['filtered_stale']} 条)")
     if filtered.get("filtered_scope"):
@@ -191,8 +218,19 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
         return result
 
     fused = _rrf(rows, k=int(get_settings().memory_rrf_k))
+    if graph["candidates"]:
+        gr = {mid: i for i, mid in enumerate(graph["candidates"], 1)}
+        fused = [(mid, score + (1 / (max(1, get_settings().memory_rrf_k) + gr[mid])
+                               if mid in gr else 0), dr, br) for mid, score, dr, br in fused]
+        fused.sort(key=lambda row: row[1], reverse=True)
+        reserve = min(len(gr), max(1, profile.rerank_k // 3))
+        protected = [row for row in fused if row[0] in gr][:reserve]
+        head = [row for row in fused if row not in protected][:max(0, profile.rerank_k - reserve)]
+        included = {row[0] for row in [*head, *protected]}
+        fused = [*head, *protected, *[row for row in fused if row[0] not in included]]
     trace = result.trace if capture_trace else None
     if trace is not None:
+        trace["graph"] = graph
         # 只导出通过权威库归属与版本校验的候选，不泄露被过滤的外部 ID。
         trace["validated"] = [{"memory_id": mid, "vector_rank": dr, "keyword_rank": br}
                               for mid, dr, br in rows]
@@ -203,8 +241,44 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
     if rerank_note:
         result.degraded.append(rerank_note)
 
+    # Keep a supported path together when its highest-ranked member is selected.
+    # Never exceed the existing top_k or text budget; explain rejected bundles.
+    selected = []
+    by_rank = {r[0]: r for r in ranked}
+    selected_chars = 0
+    for row in ranked:
+        if row[0] in {r[0] for r in selected}:
+            continue
+        bundle = next((p["memory_ids"] for p in graph["paths"] if row[0] in p["memory_ids"]), [row[0]])
+        if any(mid not in by_rank for mid in bundle):
+            result.degraded.append("图证据组合有成员未通过校验，未使用不完整路径")
+            continue
+        members = [by_rank[mid] for mid in bundle if mid in by_rank and mid not in {r[0] for r in selected}]
+        size = sum(len(snapshots[r[0]].text) + len(context_label(snapshots[r[0]].fact_context)) for r in members)
+        if (len(members) + len(selected) <= limit and
+                selected_chars + size <= get_settings().memory_context_chars):
+            selected.extend(members)
+            selected_chars += size
+        else:
+            result.degraded.append("图证据组合超过数量或字符预算，未作为完整路径使用")
+        if len(selected) == limit:
+            break
+    if graph["paths"]:
+        ranked = selected
+
     hits, budget_note = _finalize(ranked, limit=limit,
                                   budget=int(get_settings().memory_context_chars), snapshots=snapshots)
+    if graph["paths"]:
+        selected_ids = {r[0] for r in ranked}
+        valid_ids = {h.memory_id for h in hits}
+        rejected = set()
+        for path in graph["paths"]:
+            members = set(path["memory_ids"])
+            if members <= selected_ids and not members <= valid_ids:
+                rejected |= members
+        if rejected:
+            hits = [h for h in hits if h.memory_id not in rejected]
+            result.degraded.append("检索收尾发生版本变化，已撤回不完整的图证据组合")
     if budget_note:
         result.degraded.append(budget_note)
     result.hits = hits

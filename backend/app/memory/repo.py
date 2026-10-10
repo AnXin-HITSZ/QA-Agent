@@ -441,6 +441,8 @@ def create_item(session, *, user_id: str, text: str, actor: str = ACTOR_LLM,
         actor=actor, reason=(reason or "")[:REASON_LIMIT], thread_id=thread_id, created_at=now,
         new_context=row.fact_context,
     ))
+    from app.memory.graph import runtime as graph_runtime
+    graph_runtime.enqueue(session, _item(row), now=now)
     return _item(row)
 
 
@@ -520,6 +522,9 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
             thread_id=thread_id, created_at=now,
         ))
     session.refresh(row)
+    from app.memory.graph import runtime as graph_runtime
+    graph_runtime.invalidate(session, _item(row), now=now)
+    graph_runtime.enqueue(session, _item(row), now=now)
     return _item(row)
 
 
@@ -564,6 +569,8 @@ def delete_item(session, *, user_id: str, memory_id: str, actor: str,
         thread_id=thread_id, created_at=now,
     ))
     session.refresh(row)
+    from app.memory.graph import runtime as graph_runtime
+    graph_runtime.invalidate(session, _item(row), now=now)
     return _item(row)
 
 
@@ -1028,6 +1035,11 @@ def enqueue_op(session, *, user_id: str, kind: str, now: datetime, scope: str = 
     """
     conds = [MemoryOpRow.user_id == user_id, MemoryOpRow.scope == scope,
              MemoryOpRow.kind == kind, MemoryOpRow.status.in_((JOB_PENDING, JOB_RUNNING))]
+    if kind == "graph_sync":
+        # A mutation during publication needs a new pending pass. Reusing the
+        # running operation would lose it when that publisher finishes.
+        conds.append(MemoryOpRow.status == JOB_PENDING)
+        conds.append(MemoryOpRow.generation == int(generation))
     if kind == "purge_user":
         conds.append(MemoryOpRow.generation == int(generation))
     else:
@@ -1048,13 +1060,14 @@ def enqueue_op(session, *, user_id: str, kind: str, now: datetime, scope: str = 
 
 
 def claim_op(session, *, owner: str, now: datetime, lease_seconds: float,
-             scope: str = SCOPE_FORMAL) -> MemoryOp | None:
+             scope: str = SCOPE_FORMAL, excluded_kinds: tuple[str, ...] = ()) -> MemoryOp | None:
     """认领一条待执行的清理操作（向量删除彼此独立，不像提取任务那样需要按用户串行）。"""
     candidates = session.execute(
         select(MemoryOpRow.id).where(
             MemoryOpRow.scope == scope,
             MemoryOpRow.status == JOB_PENDING,
             MemoryOpRow.next_run_at <= now,
+            MemoryOpRow.kind.not_in(excluded_kinds),
         ).order_by(MemoryOpRow.next_run_at.asc()).limit(20)
     ).all()
     for (op_id,) in candidates:
@@ -1269,9 +1282,12 @@ def purge_user(session, user_id: str, *, now: datetime,
                                    MemoryJobRow.scope == scope)
     ).rowcount)
     sources = delete_sources_for_user(session, user_id, scope=scope)
+    from app.memory.graph import runtime as graph_runtime
+    graph_runtime.purge(session, user_id=user_id, scope=scope, generation=generation, now=now)
     ops = int(session.execute(
         delete(MemoryOpRow).where(MemoryOpRow.user_id == user_id,
                                   MemoryOpRow.scope == scope,
+                                  MemoryOpRow.kind != "graph_sync",
                                   MemoryOpRow.status != JOB_RUNNING)
     ).rowcount)
     # 审计存活时间长于事实，必须按用户与作用域脱敏，不能只按当前 item_ids。

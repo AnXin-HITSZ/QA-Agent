@@ -76,10 +76,11 @@ def build_report(run_dir: Path) -> dict:
             raise ValueError("scores.json 与当前 results.json 不匹配，请重新 score")
         if results.get("run_valid") is False:
             raise ValueError("无效构建不能汇总正常质量评分")
-    build = _load(run_dir / "build.json")
-    dataset = _load(run_dir / "dataset.json")
+    build_dir = run_dir.parent.parent if run_dir.parent.name == "variants" else run_dir
+    build = _load(build_dir / "build.json")
+    dataset = _load(build_dir / "dataset.json")
     run_manifest = _load(run_dir / "run.json")
-    purge = _load(run_dir / "purge.json")
+    purge = _load(build_dir / "purge.json")
 
     questions = results.get("questions") or []
     modes: list[str] = []

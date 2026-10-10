@@ -169,16 +169,20 @@ class EvalEnv:
     正式索引(反之亦然),因为写入路径本身就带 scope。
     """
 
-    def __init__(self, run_id: str) -> None:
+    def __init__(self, run_id: str, variant: str = "") -> None:
         self.run_id = check_run_id(run_id)
         self.scope = eval_scope(self.run_id)
         self.user_id = eval_user_id(self.run_id)          # 缺省主体:整段数据集共用一个用户
         self.collection = vector.collection_name()        # 只记进产物,便于人工核对落在哪
-        self.dir = RUNS_DIR / self.run_id
+        self.build_dir = RUNS_DIR / self.run_id
+        self.variant = check_run_id(variant) if variant else ""
+        self.dir = self.build_dir / "variants" / self.variant if self.variant else self.build_dir
         self.dir.mkdir(parents=True, exist_ok=True)
         self.since = datetime.now(timezone.utc)
 
     def path(self, name: str) -> Path:
+        if name in ("dataset.json", "build.json", "purge.json"):
+            return self.build_dir / name
         return self.dir / name
 
     def write(self, name: str, payload: dict) -> Path:
@@ -386,7 +390,7 @@ def build(env: EvalEnv, dataset: dict, *, max_ticks: int = 200, sleep: float = 0
     from app.memory.worker import MemoryWorker
 
     require_ready()
-    from app.memory import extract, maintain
+    from app.memory import db, repo, extract, maintain
     identity = {"dataset_digest": dataset_digest(dataset), "collection": env.collection,
                 "config": {k: v for k, v in get_settings().model_dump(mode="json").items()
                            if (k.startswith("memory_") or k.startswith("embeddings_") or k.startswith("llm_"))
@@ -445,6 +449,23 @@ def build(env: EvalEnv, dataset: dict, *, max_ticks: int = 200, sleep: float = 0
                     and int(st.get("index_pending") or 0) == 0
                     and int(st.get("cleanup_pending") or 0) == 0
                     and int(st.get("cleanup_failed") or 0) == 0)
+    graph_check = {"enabled": False, "clean": True}
+    from app.memory.graph import runtime as graph_runtime
+    if graph_runtime.switches().write:
+        graph_check = {"enabled": True, "clean": True, "owners": []}
+        try:
+            client = graph_runtime.get_graph_client()
+            if not client.connect():
+                raise RuntimeError("Neo4j unavailable")
+            with db.session_scope() as session:
+                for subject in subjects:
+                    data = graph_runtime.snapshot(session, user_id=eval_user_id(env.run_id, subject), scope=env.scope)
+                    check = client.audit(data)
+                    graph_check["owners"].append(check)
+                    graph_check["clean"] = graph_check["clean"] and check["clean"]
+        except Exception as exc:
+            graph_check.update(clean=False, error=type(exc).__name__)
+        complete = complete and graph_check["clean"]
     summary = {
         "run_id": env.run_id, "scope": env.scope, "collection": env.collection,
         "user_ids": {s or "(缺省)": eval_user_id(env.run_id, s) for s in subjects},
@@ -454,6 +475,7 @@ def build(env: EvalEnv, dataset: dict, *, max_ticks: int = 200, sleep: float = 0
         "conversations": len(convs), "subjects": len(subjects),
         "exchanges": len(units), "jobs_queued": queued, "exchanges_processed": processed,
         "ticks": ticks, "drained": drained, "complete": complete,
+        "graph": graph_check,
         "memories": st.get("items", 0), "index_pending": st.get("index_pending", 0),
         "jobs": st.get("jobs", {}), "jobs_failed": int(jobs.get("failed") or 0),
         "cleanup": {"pending": st.get("cleanup_pending", 0),
@@ -509,6 +531,16 @@ def _build_state(env: EvalEnv, dataset: dict) -> dict:
     live_clean = not any(int(live_jobs.get(k) or 0) for k in ("pending", "running", "failed"))
     live_clean = live_clean and not any(int(current.get(k) or 0) for k in
                                        ("index_pending", "cleanup_pending", "cleanup_failed"))
+    from app.memory.graph import runtime as graph_runtime
+    if graph_runtime.switches().search:
+        client = graph_runtime.get_graph_client()
+        if not client.connect():
+            live_clean = False
+        else:
+            with db.session_scope() as session:
+                for subject in subjects_of(dataset):
+                    data = graph_runtime.snapshot(session, user_id=eval_user_id(env.run_id, subject), scope=env.scope)
+                    live_clean = live_clean and client.audit(data)["clean"]
     return {"complete": bool(build_summary.get("complete")) and live_clean,
             "digest": digest,
             "jobs_failed": int(build_summary.get("jobs_failed") or jobs.get("failed") or 0),
@@ -529,6 +561,40 @@ def _worktree_state() -> tuple[bool, int]:
         return False, 0
 
 
+def graph_manifest():
+    from dataclasses import asdict
+    from app.memory.graph import runtime
+    from app.memory.graph.extract import PROTOCOL_VERSION
+    return {"switches": asdict(runtime.switches()), "extract_protocol": PROTOCOL_VERSION,
+            "projection_protocol": runtime.PROJECTION_VERSION,
+            "max_hops": get_settings().memory_graph_max_hops,
+            "max_nodes": get_settings().memory_graph_max_nodes,
+            "candidate_k": get_settings().memory_graph_candidate_k,
+            "max_paths": get_settings().memory_graph_max_paths,
+            "max_entities": get_settings().memory_graph_max_entities,
+            "fanout_limit": get_settings().memory_graph_fanout_limit,
+            "query_timeout_seconds": get_settings().memory_graph_query_timeout_seconds}
+
+
+def fixed_snapshot(env, dataset):
+    import hashlib
+    from app.memory.graph import runtime
+    records = []
+    with db.session_scope() as session:
+        for subject in subjects_of(dataset):
+            uid = eval_user_id(env.run_id, subject)
+            if runtime.installed(session):
+                records.append(runtime.snapshot(session, user_id=uid, scope=env.scope)["digest"])
+            after = ""
+            while True:
+                batch = repo.index_items_page(session, user_id=uid, scope=env.scope, after=after, limit=500)
+                if not batch:
+                    break
+                records.extend((f.id, f.revision, f.meta_version, f.generation, f.content_hash) for f in batch)
+                after = batch[-1].id
+    return {"digest": hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()}
+
+
 def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_chars: int) -> dict:
     """可复现信息:代码版本 + 模型 + 关键参数 + 指令口径 + 作用域(绝不含 key)。"""
     s = get_settings()
@@ -538,6 +604,11 @@ def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_char
     except Exception:                                    # noqa: BLE001 —— 拿不到就留空,不猜
         commit = ""
     dirty, changed = _worktree_state()
+    source_hash = hashlib.sha256()
+    for path in sorted([*(BACKEND / "app").rglob("*.py"),
+                        *(BACKEND / "scripts/evalkit").rglob("*.py"), Path(__file__)]):
+        source_hash.update(str(path.relative_to(BACKEND)).encode())
+        source_hash.update(path.read_bytes())
     build_summary = None
     if env.path("build.json").exists():
         try:
@@ -545,6 +616,9 @@ def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_char
         except (ValueError, OSError):
             build_summary = None
     return {
+        "variant": env.variant,
+        "source_digest": source_hash.hexdigest(),
+        "graph": graph_manifest(),
         "code_commit": commit, "worktree_dirty": dirty, "worktree_changed_files": changed,
         "llm_model": s.llm_model, "llm_temperature": s.llm_temperature,
         "embeddings_model": s.embeddings_model, "embeddings_dim": s.embeddings_dim,
@@ -728,13 +802,15 @@ def _llm_usage(questions: list[dict], *, answer_calls: bool) -> dict:
 
 def _results_payload(env: EvalEnv, state: dict, modes: list[str], answer: bool,
                      results: list[dict]) -> dict:
+    graph_failed = any((row.get("modes", {}).get("memory", {}).get("retrieval_trace", {})
+                        .get("graph", {}).get("error")) for row in results)
     return {
         "run_id": env.run_id, "scope": env.scope, "collection": env.collection,
         "user_ids": sorted({row["memory_user"] for row in results}) or [env.user_id],
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "answer_calls": bool(answer),
-        "run_valid": bool(state["complete"]),
-        "invalid_reason": ("" if state["complete"] else
+        "run_valid": bool(state["complete"]) and not graph_failed,
+        "invalid_reason": ("图召回故障，不能作为正常有图消融结果" if graph_failed else "" if state["complete"] else
                            "构建未完成 / 有失败任务 / 索引未同步(诊断性放行;结果不计入正常质量对比)"),
         "build": {"complete": state["complete"], "dataset_digest": state["digest"],
                   "jobs_failed": state["jobs_failed"], "index_pending": state["index_pending"]},
@@ -941,7 +1017,9 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    env = EvalEnv(args.run_id)
+    env = EvalEnv(args.run_id, getattr(args, "variant", ""))
+    if env.variant and env.path("results.json").exists():
+        raise SystemExit("实验变体已存在，请换一个 variant；不覆盖已有结果")
     modes = [m for m in args.modes.split(",") if m]
     bad = [m for m in modes if m not in MODES]
     if bad:
@@ -953,8 +1031,19 @@ def cmd_ask(args: argparse.Namespace) -> int:
         if not prev.exists():
             raise SystemExit("没给 --dataset,也没有上次留下的 dataset.json:请显式指定数据集")
         dataset = load_dataset(str(prev))
+    if env.variant:
+        fixed = fixed_snapshot(env, dataset)
+        fixed_path = env.build_dir / "fixed-snapshot.json"
+        if fixed_path.exists() and json.loads(fixed_path.read_text(encoding="utf-8")) != fixed:
+            raise SystemExit("固定构建已变化，不能与已有消融变体比较")
+        if not fixed_path.exists():
+            fixed_path.write_text(json.dumps(fixed, sort_keys=True), encoding="utf-8")
     out = ask(env, dataset, modes=modes, answer=args.answer, context_chars=args.context_chars,
               allow_incomplete=bool(getattr(args, "allow_incomplete", False)))
+    if env.variant and fixed_snapshot(env, dataset) != fixed:
+        out["run_valid"] = False
+        env.write("results.json", out)
+        raise SystemExit("问答期间固定构建发生变化，结果已标为无效")
     env.write("run.json", _manifest(env, dataset, modes, args.context_chars))
     print(f"已导出 {len(out['questions'])} 条问题 × {len(modes)} 模式 → {env.path('results.json')}"
           + ("" if out["run_valid"] else ";**构建未通过有效检查,结果不计入正常质量对比**"))
@@ -963,7 +1052,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
 
 def cmd_score(args: argparse.Namespace) -> int:
     """本地评分(F1 / BLEU-1);judge 只在显式列进 --metrics 时才发裁判调用。"""
-    env = EvalEnv(args.run_id)
+    env = EvalEnv(args.run_id, getattr(args, "variant", ""))
     results_path = env.path("results.json")
     if not results_path.exists():
         raise SystemExit("没有 results.json:先跑 ask(或 run)生成回答")
@@ -1011,7 +1100,7 @@ def cmd_score(args: argparse.Namespace) -> int:
 
 def cmd_report(args: argparse.Namespace) -> int:
     """汇总 report.json + report.md(纯本地:不连库、不调模型)。"""
-    env = EvalEnv(args.run_id)
+    env = EvalEnv(args.run_id, getattr(args, "variant", ""))
     try:
         report = reporting.write_report(env.dir)
     except (FileNotFoundError, ValueError) as exc:
@@ -1090,6 +1179,7 @@ def main(argv: list[str] | None = None) -> int:
 
     a = sub.add_parser("ask", help="执行问题并导出回答 / 证据 / 耗时与 token")
     a.add_argument("--run-id", required=True)
+    a.add_argument("--variant", default="", help="同一固定构建下的独立实验名称")
     a.add_argument("--dataset", default="", help="缺省用 run 目录里留下的 dataset.json")
     a.add_argument("--modes", default=",".join(MODES))
     a.add_argument("--answer", action="store_true", help="真的调模型生成回答(会产生付费调用)")
@@ -1100,6 +1190,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sc = sub.add_parser("score", help="本地评分(F1 / BLEU-1);judge 需显式开启")
     sc.add_argument("--run-id", required=True)
+    sc.add_argument("--variant", default="", help="同一固定构建下的独立实验名称")
     sc.add_argument("--metrics", default="f1,bleu1", help="逗号分隔:f1,bleu1,judge(judge 付费)")
     sc.add_argument("--judge-retries", type=int, default=1, help="裁判输出格式错误的有限重试次数")
     sc.add_argument("--judge-use-answer-model", action="store_true")
@@ -1111,6 +1202,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rp = sub.add_parser("report", help="汇总 report.json + report.md(纯本地)")
     rp.add_argument("--run-id", required=True)
+    rp.add_argument("--variant", default="", help="同一固定构建下的独立实验名称")
     rp.set_defaults(func=cmd_report)
 
     r = sub.add_parser("run", help="build + ask(构建未通过则不提问;默认最后自动 purge)")
@@ -1125,6 +1217,15 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("purge", help="清掉本次评测的用户数据与索引")
     g.add_argument("--run-id", required=True)
     g.set_defaults(func=cmd_purge)
+
+    cp = sub.add_parser("compare", help="检查并比较固定构建的命名实验（纯本地）")
+    cp.add_argument("--run-id", required=True)
+    cp.add_argument("--variants", default="nograph,graph")
+    def cmd_compare(args):
+        from scripts.compare_memory_variants import compare
+        print(json.dumps(compare(RUNS_DIR / check_run_id(args.run_id), args.variants.split(",")), ensure_ascii=False))
+        return 0
+    cp.set_defaults(func=cmd_compare)
 
     args = p.parse_args(argv)
     return args.func(args)
