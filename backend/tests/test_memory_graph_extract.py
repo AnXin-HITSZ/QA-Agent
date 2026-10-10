@@ -48,6 +48,35 @@ class FakeLLM:
         return item
 
 
+def test_limits_are_explained_and_failed_outputs_have_safe_diagnostics():
+    facts = [_fact("甲负责乙项目")]
+    bad = _payload(entities=[{"ref": "a", "name": "甲", "kind": "person", "facts": [0]}],
+        relations=[{"subject": "a", "relation": "x" * 65, "object_text": "乙项目",
+                    "facts": [0], "quote": "甲负责乙项目"}])
+    good = _payload()
+    llm = FakeLLM(bad, good)
+    diagnostics = []
+    result = graph_extract.extract_graph(facts, [], llm=llm, retries=1,
+                                         diagnostic_sink=diagnostics.append)
+    assert result.attempts == 2
+    assert "relation ≤64" in llm.prompts[0][0].content
+    assert "kind ≤24" in llm.prompts[0][0].content
+    assert "relation 最多64" in llm.prompts[1][-1].content
+    assert diagnostics[0]["attempt"] == 1
+    assert "string_too_long" in diagnostics[0]["reason"]
+    assert len(diagnostics[0]["output_sha256"]) == 64
+    assert "甲负责乙项目" not in json.dumps(diagnostics, ensure_ascii=False)
+
+
+def test_exhausted_graph_retry_keeps_both_attempt_diagnostics():
+    diagnostics = []
+    with pytest.raises(MemoryExtractionError):
+        graph_extract.extract_graph([_fact("甲负责乙项目")], [],
+            llm=FakeLLM("invalid", "invalid"), retries=1,
+            diagnostic_sink=diagnostics.append)
+    assert [x["attempt"] for x in diagnostics] == [1, 2]
+
+
 def _fact(text, kind="profile", state="unknown", time_expression="", recorded=""):
     context = {"sources": [{"recorded_at": recorded}]} if recorded else {}
     return extract.ExtractedFact(text=text, kind=kind, state=state,

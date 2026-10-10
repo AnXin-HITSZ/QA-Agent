@@ -1,4 +1,4 @@
-"""图提取（mem-graph-extract/2）:把已经入库的事实整理成实体 / 关系 / 事件。
+"""图提取（mem-graph-extract/3）:把已经入库的事实整理成实体 / 关系 / 事件。
 
 为什么是独立的第二个阶段、而不是塞进 mem-extract/5（方案 §提取与一致性）:
 - 事实提取管「值不值得记」,图提取管「这些事实之间是什么结构」——两次调用各司其职,
@@ -35,9 +35,9 @@ from app.memory.models import clamp_text
 logger = logging.getLogger(__name__)
 
 # 图提取协议版本:提示词 / 字段结构一改就要 +1(阶段结果复用前要比对,见 worker)。
-PROTOCOL_VERSION = "mem-graph-extract/2"
+PROTOCOL_VERSION = "mem-graph-extract/3"
 
-# 单条图元素的规模上限(防模型吐一整段;超限按「截断并记原因」处理,不静默)。
+# 字段超限属于结构错误并有限重试；不静默截断字段。
 MAX_ALIASES_PER_ENTITY = 8
 MAX_PARTICIPANTS_PER_EVENT = 12
 MAX_ATTRIBUTES_PER_EVENT = 8
@@ -70,10 +70,12 @@ SYSTEM_PROMPT = """你是记忆图整理器。输入是已入库的事实（带�
 - 事件：描述不要改写——description_fact 填引用事实里信息最完整、时间最新的一条的事实编号，
   系统会用那条事实正文作为事件描述；同一次事件的重复提及合并成一条，把全部编号写进 facts；
   不同日期、不同计划状态（打算去 / 去过了）的事实必须分开，不得合并。
-- 参与者：写事实原文里的名称与角色（role 用 subject/participant/companion/organizer/recipient/giver/other 之类通用词）。
+- 参与者：name 必须是 entity_ref 对应实体的 name 或已声明 aliases，不能混用其它实体的引用；无法确定身份时 entity_ref 留空。
+- 跨事实身份：只有上下文明确支持同一对象时才合并；名称相同、职业相同或仅共现不充分。若引用新旧事实确认身份，可填写 identity_quote：在双方事实中均出现、具有区分力的原文身份依据，不能只填名称。不确定时分开声明，identity_quote 留空。
+- 字段长度按字符计：ref ≤64，name ≤120，relation ≤64（简短关系标签，不写句子），object_text ≤300，quote ≤2000；事件 kind ≤24（简短类型，不写描述），参与者 role ≤64；别名最多8个，facts 最多25个，参与者最多12个，attributes 最多8项，键≤40、值≤200。不要截断证据以伪造匹配。
 - attributes 只放事实正文里明确写出的键值（如金额、地点），没有就空对象；不要保存密码、密钥等秘密。
 输出结构（占位符仅说明字段，不提供领域示例）：
-{"entities":[{"ref":"e1","name":"<原文实体名称>","kind":"unknown","aliases":[],"facts":[0]}],
+{"entities":[{"ref":"e1","name":"<原文实体名称>","kind":"unknown","aliases":[],"facts":[0],"identity_quote":""}],
 "relations":[{"subject":"e1","relation":"<原文支持的关系>","object_entity":"","object_text":"<原文宾语>","facts":[0],"quote":"<支持关系的原文摘录>"}],
 "events":[{"kind":"unknown","description_fact":0,"facts":[0],"participants":[{"name":"<原文参与者>","entity_ref":"e1","role":"participant"}],"attributes":{}}]}
 没有可整理的内容返回 {"entities":[],"relations":[],"events":[]}。只输出 JSON，不要 Markdown 或解释。"""
@@ -94,7 +96,9 @@ _CORRECTIVE = ("上一次输出无法按要求解析({reason})。"
                '"relations": [{{"subject": "...", "relation": "...", "object_entity": "", '
                '"object_text": "...", "facts": [0], "quote": "原文摘录"}}], '
                '"events": [{{"kind": "...", "description_fact": 0, "facts": [0], '
-               '"participants": [], "attributes": {{}}}}]}}。')
+               '"participants": [], "attributes": {{}}}}]}}。'
+               'relation 最多64字符，事件 kind 最多24字符，使用简短标签。'
+               'quote 必须原样摘自 facts 引用的正文；参与者名称必须匹配 entity_ref 的名称或别名。')
 
 
 @dataclass
@@ -118,6 +122,7 @@ class GraphEntity(BaseModel):
     kind: EntityKind
     aliases: list[str] = Field(default_factory=list, max_length=MAX_ALIASES_PER_ENTITY)
     facts: list[int] = Field(min_length=1, max_length=MAX_FACTS_PER_ITEM)
+    identity_quote: str = Field(default="", max_length=300)
 
 
 class GraphRelation(BaseModel):
@@ -233,7 +238,7 @@ def build_messages(facts: Sequence, messages: Sequence[dict], note: str = "") ->
 
 
 def extract_graph(facts: Sequence, messages: Sequence[dict], *, llm=None,
-                  retries: int | None = None, note: str = "") -> GraphReport:
+                  retries: int | None = None, note: str = "", diagnostic_sink=None) -> GraphReport:
     """调用模型整理图元素;仅对「输出格式错误」做有限重试。
 
     与 extract.extract_facts 同一套纪律:业务异常(网络 / 超时)原样上抛由任务重试与
@@ -258,6 +263,12 @@ def extract_graph(facts: Sequence, messages: Sequence[dict], *, llm=None,
             report = _parse(content_of(response), facts=facts)
         except MemoryExtractionError as exc:
             reason = str(exc)
+            if diagnostic_sink is not None:
+                import hashlib
+                content = content_of(response)
+                diagnostic_sink({"attempt": attempts, "reason": reason,
+                                 "output_chars": len(content),
+                                 "output_sha256": hashlib.sha256(content.encode()).hexdigest()})
             if attempts > retries:
                 raise MemoryExtractionError(
                     f"图提取结果无法解析(共调用 {attempts} 次):{reason}") from None
@@ -319,6 +330,10 @@ def _parse(content: str, *, facts: Sequence) -> GraphReport:
             from app.memory.extract import brief
             raise MemoryExtractionError(f"实体条目结构不合法:{brief(exc)}") from None
         _check_indices(entity.facts, count, "实体")
+        if entity.identity_quote and not all(_grounded(entity.identity_quote, [texts[i]])
+                                            for i in entity.facts):
+            entity = entity.model_copy(update={"identity_quote": ""})
+            report.dropped.append("身份依据不匹配全部引用事实,已移除身份依据")
         if not _grounded(entity.name, texts):
             report.dropped.append("实体名在事实正文里找不到,已丢弃(不得引入清单外内容)")
             continue

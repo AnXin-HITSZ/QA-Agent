@@ -90,7 +90,7 @@ class Neo4jGraphClient(GraphClient):
         """Atomically replace one owner's projection; callers hold its SQL fence."""
         if not self.connect():
             raise RuntimeError("Neo4j unavailable")
-        from neo4j import Query
+        from neo4j import Query, unit_of_work
         owner = data["user_id"] + ":" + data["scope"]
         nodes = []
         edges = []
@@ -122,9 +122,12 @@ class Neo4jGraphClient(GraphClient):
             session.run(Query("CREATE CONSTRAINT qa_graph_key IF NOT EXISTS "
                               "FOR (n:QAMemoryGraph) REQUIRE n.key IS UNIQUE",
                               timeout=self._query_timeout)).consume()
+            @unit_of_work(timeout=self._query_timeout)
             def write(tx):
                 def run(q, **params):
-                    tx.run(Query(q, timeout=self._query_timeout), **params).consume()
+                    # Managed transactions take strings; timeout belongs to
+                    # the transaction, not a session-only Query wrapper.
+                    tx.run(q, **params).consume()
                 run("MATCH (n:QAMemoryGraph {owner:$owner}) DETACH DELETE n", owner=owner)
                 from app.config import get_settings
                 batch = max(1, min(1000, get_settings().memory_graph_sync_batch))

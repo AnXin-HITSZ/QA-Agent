@@ -900,7 +900,8 @@ def fail_job(session, *, job_id: str, owner: str, claim_token: str, error: str, 
         row.status = JOB_FAILED
         # 部分提交的任务保留原清单和进度供恢复，彻底清除仍会删除整行。
         if row.committed_at is None:
-            row.payload = {}
+            row.payload = ({"memory_ids": list((row.payload or {}).get("memory_ids", []))}
+                           if row.kind == "graph_extract" else {})
             row.stages = clear_stage_results(row.stages)
         row.finished_at = now
     else:
@@ -934,7 +935,8 @@ def requeue_expired(session, *, now: datetime, scope: str = SCOPE_FORMAL) -> int
         if row.attempts >= row.max_attempts:
             row.status = JOB_FAILED
             if row.committed_at is None:
-                row.payload = {}
+                row.payload = ({"memory_ids": list((row.payload or {}).get("memory_ids", []))}
+                               if row.kind == "graph_extract" else {})
                 row.stages = clear_stage_results(row.stages)
             row.finished_at = now
             row.last_error = (row.last_error or "租约过期且重试用尽")[:JOB_ERROR_LIMIT]

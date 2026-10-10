@@ -154,6 +154,8 @@ class _LeaseGuard:
         if ok:
             self.renewals += 1
         else:
+            if self._stop.is_set():
+                return True
             logger.warning("记忆任务 %s 的租约已不属于本次认领,执行方停止提交", self._job.id[:8])
         return ok
 
@@ -419,6 +421,7 @@ class MemoryWorker:
                               generation=job.generation, scope=job.scope)
         lease = _LeaseGuard(self, job)
         lease.start()
+        stages = dict(job.stages or {})
         try:
             with db.session_scope() as session:
                 repo.assert_claim_valid(session, user_id=job.user_id, job_id=job.id,
@@ -431,7 +434,7 @@ class MemoryWorker:
                     from sqlalchemy import select
                     context_ids = session.scalars(select(MemoryItemRow.id).where(
                         MemoryItemRow.user_id == job.user_id, MemoryItemRow.scope == job.scope,
-                        MemoryItemRow.status == "active", MemoryItemRow.thread_id == job.thread_id)
+                        MemoryItemRow.status == "active", MemoryItemRow.generation == job.generation)
                         .order_by(MemoryItemRow.updated_at.desc(), MemoryItemRow.id).limit(64)).all()
                     wanted = {f.id for f in facts}
                     facts.extend(f for f in repo.list_by_ids(session, context_ids) if f.id not in wanted)
@@ -440,16 +443,26 @@ class MemoryWorker:
                                                 default=str).encode()).hexdigest()
             stages = dict(job.stages or {})
             record = stages.get("graph_extract", {})
-            if record.get("digest") == digest and record.get("protocol") == graph_extract.PROTOCOL_VERSION:
+            if (record.get("digest") == digest and record.get("protocol") == graph_extract.PROTOCOL_VERSION
+                    and record.get("model") == service.llm_model_identity()):
                 report = graph_extract.restore(record["result"], facts=facts)
             else:
                 from app.metering.context import bind, PURPOSE_MEMORY_EXTRACT
+                def record_diagnostic(entry):
+                    entries = list(stages.get("graph_diagnostics", {}).get("attempts", []))
+                    stages["graph_diagnostics"] = {"attempts": [*entries, entry][-8:]}
+                    if not self._save_stages(job, fence, stages):
+                        raise MemoryLeaseLost("图诊断保存时失去租约")
                 with bind(purpose=PURPOSE_MEMORY_EXTRACT):
-                    report = graph_extract.extract_graph(facts, [])
+                    report = graph_extract.extract_graph(facts, [], diagnostic_sink=record_diagnostic)
                 stages["graph_extract"] = {"digest": digest, "protocol": graph_extract.PROTOCOL_VERSION,
+                                           "model": service.llm_model_identity(),
+                                           "attempts": report.attempts, "dropped": len(report.dropped),
+                                           "status": "ok",
                                            "result": graph_extract.dump(report)}
                 if not self._save_stages(job, fence, stages):
                     raise MemoryLeaseLost("图提取阶段结果未保存")
+            lease.stop()
             with db.session_scope() as session:
                 repo.assert_claim_valid(session, user_id=job.user_id, job_id=job.id,
                     owner=self.owner, claim_token=job.claim_token, generation=job.generation,
@@ -466,10 +479,14 @@ class MemoryWorker:
             self._note_lease_lost(job, exc)
             return "failed"
         except Exception as exc:
+            lease.stop()
             self._fail(job, fence, type(exc).__name__, permanent=isinstance(exc, (MemoryExtractionError, MemoryStaleGeneration)))
             return "failed"
         finally:
             lease.stop()
+            if self.diagnostic_sink is not None and self.scope.startswith("eval:"):
+                self.diagnostic_sink({"job_id": job.id, "thread_id": job.thread_id,
+                                      "user_id": job.user_id, "scope": self.scope, "stages": stages})
 
     # ---- 提取(阶段结果复用) ----
 

@@ -52,7 +52,7 @@ def test_grouped_jobs_apply_and_delete_current_projection(env, monkeypatch):
         jobs = session.scalars(select(MemoryJobRow)).all()
         assert len(jobs) == 1
         assert set(jobs[0].payload["memory_ids"]) == {a.id, b.id}
-    monkeypatch.setattr(extract, "extract_graph", lambda facts, messages: report(facts))
+    monkeypatch.setattr(extract, "extract_graph", lambda facts, messages, **kw: report(facts))
     worker = MemoryWorker()
     monkeypatch.setattr(worker, "_replay_ops", lambda **kw: 0)
     assert worker.run_once(limit=1, force=True)["succeeded"] == 1
@@ -75,6 +75,91 @@ def test_same_name_refs_are_not_collapsed(env):
     with db.session_scope() as session:
         runtime.apply(session, user_id=USER, scope="", facts=[a], report=r, turn_key="turn", generation=a.generation)
         assert len(session.scalars(select(MemoryEntityRow)).all()) == 2
+
+
+@pytest.mark.parametrize("quote,expected", [("", "pending"), ("甲", "pending"),
+    ("负责独立项目的维护工作", "resolved"), ("不存在的身份依据", "pending")])
+def test_cross_fact_identity_requires_corroboration(env, quote, expected):
+    from app.memory.graph import repo as graph_repo
+    a = add("甲负责独立项目的维护工作，今天更新了文档")
+    b = add("甲负责独立项目的维护工作，昨天修复了故障")
+    def entity_report(indices, identity_quote=""):
+        return extract._parse(json.dumps({"entities": [{"ref": "a", "name": "甲",
+            "kind": "person", "facts": indices, "identity_quote": identity_quote}],
+            "relations": [], "events": []}), facts=[a, b])
+    with db.session_scope() as session:
+        runtime.apply(session, user_id=USER, scope="", facts=[a, b],
+                      report=entity_report([0]), turn_key="one", generation=a.generation)
+        runtime.apply(session, user_id=USER, scope="", facts=[a, b],
+                      report=entity_report([1]), turn_key="two", generation=a.generation)
+        runtime.apply(session, user_id=USER, scope="", facts=[a, b],
+                      report=entity_report([0, 1], quote), turn_key="three", generation=a.generation)
+        mentions = graph_repo.mentions_for_memory(session, b.id)
+        assert mentions and all(m.status == expected for m in mentions)
+        assert len(session.scalars(select(MemoryEntityRow)).all()) == 1
+
+
+def test_graph_failure_diagnostics_persist_and_export(env, monkeypatch):
+    add()
+    def fail(facts, messages, *, diagnostic_sink):
+        diagnostic_sink({"attempt": 1, "reason": "relation:string_too_long",
+                         "output_chars": 20, "output_sha256": "0" * 64})
+        from app.memory.errors import MemoryExtractionError
+        raise MemoryExtractionError("invalid graph")
+    monkeypatch.setattr(extract, "extract_graph", fail)
+    worker = MemoryWorker()
+    monkeypatch.setattr(worker, "_replay_ops", lambda **kw: 0)
+    assert worker.run_once(limit=1, force=True)["failed"] == 1
+    with db.session_scope() as session:
+        job = session.scalars(select(MemoryJobRow)).one()
+        assert job.status == "failed"
+        assert job.stages["graph_diagnostics"]["attempts"][0]["reason"] == "relation:string_too_long"
+        assert job.payload["memory_ids"]
+
+
+def test_stopped_lease_guard_does_not_report_normal_release(env, monkeypatch, caplog):
+    from app.memory.worker import _LeaseGuard
+    worker = MemoryWorker()
+    guard = _LeaseGuard(worker, SimpleNamespace(id="abcdefgh", claim_token="claim"))
+    monkeypatch.setattr(repo, "renew_lease", lambda *a, **kw: False)
+    guard.stop()
+    assert guard._renew() is True
+    assert "租约已不属于" not in caplog.text
+    active = _LeaseGuard(worker, SimpleNamespace(id="abcdefgh", claim_token="claim"))
+    assert active._renew() is False
+    assert "租约已不属于" in caplog.text
+
+
+def test_legacy_retry_recovers_only_same_owner_scope_thread(env):
+    a = add(scope="eval:a")
+    add(scope="eval:b")
+    with db.session_scope() as session:
+        payload = runtime.retry_input(session, SimpleNamespace(user_id=USER,
+            scope="eval:a", generation=a.generation, thread_id="t", payload={}))
+        assert payload == {"memory_ids": [a.id]}
+        with pytest.raises(ValueError, match="来源缺失"):
+            runtime.retry_input(session, SimpleNamespace(user_id=USER,
+                scope="eval:a", generation=a.generation, thread_id="missing", payload={}))
+        with pytest.raises(ValueError, match="空输入"):
+            runtime.retry_input(session, SimpleNamespace(user_id=USER,
+                scope="eval:b", generation=a.generation, thread_id="t",
+                payload={"memory_ids": [a.id]}))
+
+
+def test_graph_diagnostic_sink_exports_failure_without_raw_output(env, monkeypatch):
+    a = add(scope="eval:diagnostic")
+    def fail(facts, messages, *, diagnostic_sink):
+        diagnostic_sink({"attempt": 1, "reason": "kind:string_too_long",
+                         "output_chars": 40, "output_sha256": "0" * 64})
+        from app.memory.errors import MemoryExtractionError
+        raise MemoryExtractionError("invalid graph")
+    monkeypatch.setattr(extract, "extract_graph", fail)
+    worker = MemoryWorker(scope=a.scope)
+    records = []
+    worker.diagnostic_sink = records.append
+    monkeypatch.setattr(worker, "_replay_ops", lambda **kw: 0)
+    worker.run_once(limit=1, force=True)
+    assert records[0]["stages"]["graph_diagnostics"]["attempts"][0]["reason"] == "kind:string_too_long"
 
 
 def test_shared_fact_survives_one_source_delete(env):
@@ -116,7 +201,7 @@ def test_off_empty_graph_does_not_invent_cleanup(env, monkeypatch):
 def test_failed_apply_reuses_paid_stage(env, monkeypatch):
     add()
     calls = []
-    monkeypatch.setattr(extract, "extract_graph", lambda facts, messages: (calls.append(1) or report(facts)))
+    monkeypatch.setattr(extract, "extract_graph", lambda facts, messages, **kw: (calls.append(1) or report(facts)))
     original = runtime.apply
     monkeypatch.setattr(runtime, "apply", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("fail")))
     worker = MemoryWorker()

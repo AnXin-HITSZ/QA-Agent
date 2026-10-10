@@ -110,6 +110,30 @@ def _parse_date(value):
         return None
 
 
+def retry_input(session, job):
+    """Recover legacy failed graph jobs without restoring raw dialogue payloads."""
+    from sqlalchemy import select
+    from app.memory.tables import MemoryItemRow
+    memory_repo.assert_generation(session, job.user_id, job.generation,
+                                  scope=job.scope, now=db.utc_naive())
+    ids = list((job.payload or {}).get("memory_ids", []))
+    if not ids:
+        if not job.thread_id:
+            raise ValueError("图任务缺少可恢复的会话来源")
+        ids = list(session.scalars(select(MemoryItemRow.id).where(
+            MemoryItemRow.user_id == job.user_id, MemoryItemRow.scope == job.scope,
+            MemoryItemRow.generation == job.generation, MemoryItemRow.status == "active",
+            MemoryItemRow.thread_id == job.thread_id).order_by(MemoryItemRow.id).limit(501)))
+        if not ids or len(ids) > 500:
+            raise ValueError("图任务来源缺失或超过恢复上限，请分页重新登记图构建")
+    ids = [f.id for f in memory_repo.list_by_ids(session, ids)
+           if (f.user_id, f.scope, f.generation, f.status) ==
+              (job.user_id, job.scope, job.generation, "active")]
+    if not ids:
+        raise ValueError("图任务来源缺失，不能登记空输入重试")
+    return {"memory_ids": ids}
+
+
 def apply(session, *, user_id, scope, facts, report, turn_key, generation):
     now = db.utc_naive()
     memory_repo.assert_generation(session, user_id, generation, scope=scope, now=now)
@@ -130,6 +154,20 @@ def apply(session, *, user_id, scope, facts, report, turn_key, generation):
         known = {m.entity_id for f in evidence_facts for m in repo.mentions_for_memory(session, f.id)
                  if m.status == "resolved" and repo.name_key(m.surface) == repo.name_key(entity.name)}
         proven = [c for c in candidates if c.id in known]
+        proven = [c for c in proven if c.generation == generation
+                  and (c.kind == entity.kind or "unknown" in (c.kind, entity.kind))]
+        # Extending an existing identity to another fact needs corroboration,
+        # not merely a same-name old fact included in the model's input.
+        linked = {f.id for f in evidence_facts if any(
+            m.status == "resolved" and m.entity_id in known
+            and repo.name_key(m.surface) == repo.name_key(entity.name)
+            for m in repo.mentions_for_memory(session, f.id))}
+        if linked and len(linked) < len(evidence_facts):
+            from app.memory.graph.extract import _flatten, _grounded
+            quote = entity.identity_quote
+            distinctive = _flatten(quote).replace(_flatten(entity.name), "").strip()
+            if len(distinctive) < 8 or not all(_grounded(quote, [f.text]) for f in evidence_facts):
+                proven = []
         # Two same-name refs in one report cannot reuse the same ID.
         proven = [c for c in proven if c.id not in identities.values()]
         if len(proven) == 1:
@@ -152,6 +190,14 @@ def apply(session, *, user_id, scope, facts, report, turn_key, generation):
             repo.add_mention(session, user_id=user_id, scope=scope, surface=entity.name,
                 memory_id=f.id, turn_key=turn_key + ":" + entity.ref, speaker=None, entity_id=target.id,
                 status="resolved", evidence={"source": f.fact_context}, generation=generation, now=now)
+            # A later evidence-backed decision also resolves earlier pending
+            # mentions of this fact; confirmed identities are never overwritten.
+            for mention in repo.mentions_for_memory(session, f.id):
+                if (mention.status == "pending" and mention.generation == generation
+                        and repo.name_key(mention.surface) == repo.name_key(entity.name)):
+                    repo.resolve_mention(session, mention_id=mention.id, entity_id=target.id,
+                        status="resolved", evidence={"decision": "corroborated_fact",
+                                                     "identity_quote": entity.identity_quote})
 
     def link(kind, fid, indices, quote=""):
         for i in indices:

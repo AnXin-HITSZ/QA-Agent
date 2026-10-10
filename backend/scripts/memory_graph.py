@@ -70,17 +70,41 @@ def main():
                 print(json.dumps({"queued_items": queued, "note": "由 Worker 执行，包含付费图提取"}))
                 return 0
             if args.action == "retry":
-                from sqlalchemy import update
+                from sqlalchemy import select, update
                 from app.memory.tables import MemoryJobRow, MemoryOpRow
-                for table, kind in ((MemoryJobRow, runtime.JOB_GRAPH), (MemoryOpRow, runtime.OP_GRAPH)):
-                    session.execute(update(table).where(table.user_id == args.user_id, table.scope == args.scope,
-                        table.kind == kind, table.status == "failed").values(status="pending", attempts=0,
-                        next_run_at=db.utc_naive(), last_error="", finished_at=None))
+                jobs = session.scalars(select(MemoryJobRow).where(
+                    MemoryJobRow.user_id == args.user_id, MemoryJobRow.scope == args.scope,
+                    MemoryJobRow.kind == runtime.JOB_GRAPH, MemoryJobRow.status == "failed")).all()
+                for job in jobs:
+                    job.payload = runtime.retry_input(session, job)
+                    job.status, job.attempts = "pending", 0
+                    job.next_run_at, job.finished_at = db.utc_naive(), None
+                    job.last_error = ""
+                session.execute(update(MemoryOpRow).where(MemoryOpRow.user_id == args.user_id,
+                    MemoryOpRow.scope == args.scope, MemoryOpRow.kind == runtime.OP_GRAPH,
+                    MemoryOpRow.status == "failed").values(status="pending", attempts=0,
+                    next_run_at=db.utc_naive(), last_error="", finished_at=None))
                 print('{"retry_registered":true}')
                 return 0
         if args.action == "status":
+            from sqlalchemy import select, func
+            from app.memory.graph.tables import MemoryEntityMentionRow
+            from app.memory.tables import MemoryJobRow
+            with db.session_scope() as session:
+                mentions = dict(session.execute(select(MemoryEntityMentionRow.status, func.count())
+                    .where(MemoryEntityMentionRow.user_id == args.user_id,
+                           MemoryEntityMentionRow.scope == args.scope)
+                    .group_by(MemoryEntityMentionRow.status)).all())
+                failures = [{"job_id": row.id, "thread_id": row.thread_id,
+                             "last_error": row.last_error,
+                             "diagnostics": (row.stages or {}).get("graph_diagnostics", {})}
+                    for row in session.scalars(select(MemoryJobRow).where(
+                        MemoryJobRow.user_id == args.user_id, MemoryJobRow.scope == args.scope,
+                        MemoryJobRow.kind == runtime.JOB_GRAPH, MemoryJobRow.status == "failed")
+                        .order_by(MemoryJobRow.id).limit(20))]
             print(json.dumps({"digest": data["digest"], "counts": {k: len(data[k]) for k in
-                ("entities", "relations", "events", "links", "mentions")}}, ensure_ascii=False))
+                ("entities", "relations", "events", "links", "mentions")},
+                "mention_status": mentions, "failed_graph_jobs": failures}, ensure_ascii=False))
             return 0
         if not runtime.switches().master or not client.connect():
             raise RuntimeError("图关闭或 Neo4j 不可用")
