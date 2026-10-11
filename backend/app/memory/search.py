@@ -32,7 +32,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from app.config import get_settings
@@ -218,25 +218,34 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
         return result
 
     fused = _rrf(rows, k=int(get_settings().memory_rrf_k))
+    base_ids = {row[0] for row in fused if row[2] or row[3]}
+    base_head = [row[0] for row in fused if row[0] in base_ids][:profile.rerank_k]
+    rerank_profile = profile
+    rerank_fused = fused
     if graph["candidates"]:
         gr = {mid: i for i, mid in enumerate(graph["candidates"], 1)}
         fused = [(mid, score + (1 / (max(1, get_settings().memory_rrf_k) + gr[mid])
                                if mid in gr else 0), dr, br) for mid, score, dr, br in fused]
         fused.sort(key=lambda row: row[1], reverse=True)
-        reserve = min(len(gr), max(1, profile.rerank_k // 3))
-        protected = [row for row in fused if row[0] in gr][:reserve]
-        head = [row for row in fused if row not in protected][:max(0, profile.rerank_k - reserve)]
-        included = {row[0] for row in [*head, *protected]}
-        fused = [*head, *protected, *[row for row in fused if row[0] not in included]]
+        # Graph supplements the established two-route pool instead of evicting
+        # candidates before the reranker can inspect their relevance.
+        protected = [row for mid in base_head for row in fused if row[0] == mid]
+        room = max(0, max(1, int(get_settings().memory_rerank_max_docs)) - len(protected))
+        extras = [row for row in fused if row[0] in gr and row[0] not in base_head][:room]
+        included = {row[0] for row in [*protected, *extras]}
+        rerank_fused = [*protected, *extras, *[row for row in fused if row[0] not in included]]
+        rerank_profile = replace(profile, rerank_k=max(1, len(included)))
     trace = result.trace if capture_trace else None
     if trace is not None:
         trace["graph"] = graph
+        trace["base_rerank_pool"] = base_head
+        trace["rerank_pool"] = [row[0] for row in rerank_fused[:rerank_profile.rerank_k]]
         # 只导出通过权威库归属与版本校验的候选，不泄露被过滤的外部 ID。
         trace["validated"] = [{"memory_id": mid, "vector_rank": dr, "keyword_rank": br}
                               for mid, dr, br in rows]
         trace["fused"] = [{"memory_id": mid, "rank": i, "rrf": score}
                           for i, (mid, score, _, _) in enumerate(fused, 1)]
-    ranked, rerank_note = _rerank(user_id, q, fused, profile, limit=limit, purpose=purpose,
+    ranked, rerank_note = _rerank(user_id, q, rerank_fused, rerank_profile, limit=limit, purpose=purpose,
                                  snapshots=snapshots, trace=trace)
     if rerank_note:
         result.degraded.append(rerank_note)
@@ -244,9 +253,10 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
     # Keep a supported path together when its highest-ranked member is selected.
     # Never exceed the existing top_k or text budget; explain rejected bundles.
     selected = []
+    accepted_bundles = []
     by_rank = {r[0]: r for r in ranked}
     selected_chars = 0
-    for row in ranked:
+    for row in ranked if graph["paths"] else []:
         if row[0] in {r[0] for r in selected}:
             continue
         bundle = next((p["memory_ids"] for p in graph["paths"] if row[0] in p["memory_ids"]), [row[0]])
@@ -259,6 +269,7 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
                 selected_chars + size <= get_settings().memory_context_chars):
             selected.extend(members)
             selected_chars += size
+            accepted_bundles.append(set(bundle))
         else:
             result.degraded.append("图证据组合超过数量或字符预算，未作为完整路径使用")
         if len(selected) == limit:
@@ -272,8 +283,7 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
         selected_ids = {r[0] for r in ranked}
         valid_ids = {h.memory_id for h in hits}
         rejected = set()
-        for path in graph["paths"]:
-            members = set(path["memory_ids"])
+        for members in accepted_bundles:
             if members <= selected_ids and not members <= valid_ids:
                 rejected |= members
         if rejected:
@@ -286,7 +296,7 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
         trace["ranked"] = [{"memory_id": row[0], "rank": i, "score": row[1], "origin": row[5]}
                            for i, row in enumerate(ranked, 1)]
         trace["final"] = [h.memory_id for h in hits]
-    result.counts.update(rerank_in=min(len(fused), profile.rerank_k), final=len(hits),
+    result.counts.update(rerank_in=min(len(rerank_fused), rerank_profile.rerank_k), final=len(hits),
                          rerank_out=sum(1 for h in hits if h.origin == "rerank"))
     return result
 
@@ -546,9 +556,8 @@ def _rerank(user_id: str, query: str, fused, profile: SearchProfile, *, limit: i
     返回 (按最终顺序排列的候选, 降级说明)。候选是
     (memory_id, 排序分数, RRF 分数, 向量排名, 关键词排名, 来源)。
 
-    `top_n` 取**本次实际的最终条数**(调用方覆盖 top_k 时就是那个值,不是档位默认值):
-    否则会出现「按 50 条重排、最终只留 3 条」的错配 —— 多花的重排预算白费,而且模型是
-    在被截掉的候选里排的序。
+    `top_n` 取实际候选条数：先完整排序，再按最终 top_k 与证据组合预算选择。
+    否则未返回的路径成员只剩融合顺序，无法根据重排判断组合是否值得占用预算。
     """
     head = fused[: max(1, profile.rerank_k)]
     tail = fused[len(head):]
@@ -592,7 +601,7 @@ def _rerank(user_id: str, query: str, fused, profile: SearchProfile, *, limit: i
 
     try:
         with bind_context(purpose=purpose):
-            outcome = rerank_client.rerank(query, docs, top_n=min(max(1, int(limit)), len(docs)),
+            outcome = rerank_client.rerank(query, docs, top_n=len(docs),
                                            instruct=profile.rerank_instruct)
     except Exception as exc:  # noqa: BLE001 —— 客户端只对编程错误抛;这里也兜住,绝不影响检索
         logger.warning("重排序异常已回退:%s:%s", type(exc).__name__, exc)

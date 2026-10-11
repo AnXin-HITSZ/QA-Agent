@@ -245,7 +245,7 @@ def apply(session, *, user_id, scope, facts, report, turn_key, generation):
     queue_sync(session, user_id=user_id, scope=scope, generation=generation, now=now)
 
 
-def snapshot(session, *, user_id, scope):
+def snapshot(session, *, user_id, scope, include_texts=False):
     generation = memory_repo.generation_of(session, user_id, scope=scope)
     items = []
     after = ""
@@ -258,6 +258,8 @@ def snapshot(session, *, user_id, scope):
         after = batch[-1].id
         if len(items) > 10000:
             raise ValueError("图快照超过安全上限，需分区重建")
+        if len(batch) < 500:
+            break
     by_id = {f.id: f for f in items}
     links = session.scalars(select(MemoryFactLinkRow).where(
         MemoryFactLinkRow.user_id == user_id, MemoryFactLinkRow.scope == scope)).all()
@@ -305,6 +307,10 @@ def snapshot(session, *, user_id, scope):
                          "generation": f.generation, "content_hash": f.content_hash}
                         for f in items if f.id in used_memories]}
     out["digest"] = hashlib.sha256(json.dumps(out, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    if include_texts:
+        # Reuse the authoritative rows already read in this transaction. Text
+        # stays outside the projection/digest and must never trigger a rebuild.
+        out["retrieval_texts"] = {f.id: f.text for f in items if f.id in used_memories}
     return out
 
 
@@ -330,7 +336,7 @@ def recall(*, user_id, scope, query):
     if not client.connect():
         raise RuntimeError("Neo4j 不可用")
     with db.session_scope() as session:
-        data = snapshot(session, user_id=user_id, scope=scope)
+        data = snapshot(session, user_id=user_id, scope=scope, include_texts=True)
     result = client.recall(data, query=query)
     result["versions"] = {m["id"]: m for m in data["memories"]}
     return result

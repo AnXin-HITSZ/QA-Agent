@@ -77,6 +77,18 @@ def test_same_name_refs_are_not_collapsed(env):
         assert len(session.scalars(select(MemoryEntityRow)).all()) == 2
 
 
+def test_retrieval_texts_reuse_snapshot_without_changing_projection(env):
+    a = add()
+    add("无图来源的独立事实")
+    with db.session_scope() as session:
+        runtime.apply(session, user_id=USER, scope="", facts=[a], report=report([a]),
+                      turn_key="text-reuse", generation=a.generation)
+        projection = runtime.snapshot(session, user_id=USER, scope="")
+        retrieval = runtime.snapshot(session, user_id=USER, scope="", include_texts=True)
+        assert retrieval.pop("retrieval_texts") == {a.id: a.text}
+        assert retrieval == projection
+
+
 @pytest.mark.parametrize("quote,expected", [("", "pending"), ("甲", "pending"),
     ("负责独立项目的维护工作", "resolved"), ("不存在的身份依据", "pending")])
 def test_cross_fact_identity_requires_corroboration(env, quote, expected):

@@ -32,3 +32,42 @@ def test_compare_rejects_scores_from_different_answers(tmp_path):
         (path / (name + ".json")).write_text(json.dumps(data))
     with pytest.raises(ValueError, match="评分不属于当前答案"):
         compare(tmp_path, ["graph"])
+
+
+def test_runtime_faults_are_not_confused_with_budget_diagnostics():
+    from scripts.compare_memory_variants import runtime_issues
+    result = {"questions": [{"id": "q", "modes": {"memory": {
+        "degraded": ["图遍历达到预算上限，路径覆盖已受限"]}}}]}
+    assert runtime_issues(result) == []
+    result["questions"][0]["modes"]["memory"]["degraded"].append("记忆向量召回不可用")
+    assert len(runtime_issues(result)) == 1
+
+
+def test_comparison_preserves_previous_reports_and_flags_service_fault(tmp_path):
+    from scripts.compare_memory_variants import compare
+    from scripts.evalkit.scoring import results_digest
+    legacy = tmp_path / "variant-comparison.md"
+    legacy.write_text("previous report")
+    (tmp_path / "dataset.json").write_text(json.dumps({"questions": [{"id": "q"}]}))
+    for name in ("off", "on"):
+        path = tmp_path / "variants" / name
+        path.mkdir(parents=True)
+        results = {"run_valid": True, "questions": [{"id": "q", "question": "test",
+            "modes": {"memory": {"degraded": []}}}]}
+        manifest = {"source_digest": "same", "modes": ["memory"],
+                    "graph": {"switches": {"search": name == "on"}}}
+        scores = {"results_digest": results_digest(results), "protocol": {},
+                  "summary": {"by_mode": {"memory": {"mean_f1": 0.5, "counts": {}}}}}
+        for filename, value in (("run", manifest), ("results", results), ("scores", scores)):
+            (path / (filename + ".json")).write_text(json.dumps(value))
+    first = compare(tmp_path, ["off", "on"])
+    assert first["comparable"]
+    path = tmp_path / "variants" / "off"
+    results["questions"][0]["modes"]["memory"]["degraded"] = ["记忆向量召回不可用"]
+    scores["results_digest"] = results_digest(results)
+    (path / "results.json").write_text(json.dumps(results))
+    (path / "scores.json").write_text(json.dumps(scores))
+    second = compare(tmp_path, ["off", "on"])
+    assert not second["comparable"] and second["configurations_match"]
+    assert first["report_directory"] != second["report_directory"]
+    assert legacy.read_text() == "previous report"

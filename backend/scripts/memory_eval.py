@@ -121,14 +121,14 @@ DEFAULT_CONTEXT_CHARS = 24000
 
 # 评测回答指令:**三种模式共用**,只有上下文来源不同(公平性要求,见模块 docstring)。
 # 与聊天页的实验室助手提示词不同:不引导任何工具 / SOP 行为,只要求依据证据简短作答。
-INSTRUCTION_VERSION = "eval-answer/3"
+INSTRUCTION_VERSION = "eval-answer/5"
 EVAL_ANSWER_INSTRUCTION = (
     "你是评测中的问答助手。请只依据下面提供的参考信息回答用户的问题(参考信息可能为空)。\n"
     "要求:\n"
     "- Always answer in English, including when reference information is in another language.\n"
-    "- 回答保持简短:一个短语或一句话,不要展开解释;\n"
+    "- 回答保持简短，不展开无关解释；问题要求列举、共同点或多个条件时，覆盖所有有依据的必要项目，不为简洁漏项;\n"
     "- 时间答案保留已有精度；相对时间有记录时间作参照时，可回答相对表达及其参照日期。未解析为精确日期不代表没有依据，不能补造具体日期。\n"
-    "- 只依据参考信息作答;参考信息里没有依据时,直接用英文回答「Cannot be determined from the provided information」;\n"
+    "- 只依据参考信息作答;参考信息里没有依据时,直接用英文回答「No information available」;\n"
     "- 不要编造,不要使用外部知识,不要调用任何工具或技能。"
 )
 
@@ -565,8 +565,9 @@ def graph_manifest():
     from dataclasses import asdict
     from app.memory.graph import runtime
     from app.memory.graph.extract import PROTOCOL_VERSION
+    from app.memory.graph.ranking import RECALL_VERSION
     return {"switches": asdict(runtime.switches()), "extract_protocol": PROTOCOL_VERSION,
-            "projection_protocol": runtime.PROJECTION_VERSION,
+            "projection_protocol": runtime.PROJECTION_VERSION, "recall_protocol": RECALL_VERSION,
             "max_hops": get_settings().memory_graph_max_hops,
             "max_nodes": get_settings().memory_graph_max_nodes,
             "candidate_k": get_settings().memory_graph_candidate_k,
@@ -1228,6 +1229,13 @@ def main(argv: list[str] | None = None) -> int:
     cp.set_defaults(func=cmd_compare)
 
     args = p.parse_args(argv)
+    if args.func in (cmd_build, cmd_ask, cmd_score, cmd_run):
+        from scripts.evalkit.billing import install
+        run_dir = RUNS_DIR / check_run_id(args.run_id)
+        variant = getattr(args, "variant", "")
+        if variant:
+            run_dir = run_dir / "variants" / check_run_id(variant)
+        install(run_dir / "billing-stop.json")
     return args.func(args)
 
 

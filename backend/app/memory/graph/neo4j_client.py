@@ -143,19 +143,21 @@ class Neo4jGraphClient(GraphClient):
 
     def recall(self, data: dict, *, query: str) -> dict:
         """Bounded BFS; structural paths are evidence links, not inferred claims."""
-        from collections import deque
         from neo4j import Query
         from app.config import get_settings
+        from app.memory.graph.ranking import priorities, RECALL_VERSION
         import time
         deadline = time.monotonic() + self._query_timeout
         settings = get_settings()
         owner = data["user_id"] + ":" + data["scope"]
         aliases = data.get("aliases", [])
+        scores = priorities(data, query)
         matches = []
         for e in data["entities"]:
             names = [e["name"], *[a["alias"] for a in aliases if a["entity_id"] == e["id"]]]
             if any(n and n.casefold() in query.casefold() for n in names):
                 matches.append((e["id"], e["name"]))
+        matches.sort(key=lambda m: (-scores.get(m[0], 0), -len(m[1]), m[1], m[0]))
         matches = matches[:max(1, settings.memory_graph_max_entities)]
         paths, visited = [], set()
         fanout_clipped = 0
@@ -174,36 +176,59 @@ class Neo4jGraphClient(GraphClient):
             marker = read("MATCH (n:QAMemoryGraph {key:$key}) RETURN n.digest AS digest", key=owner + ":manifest")
             if not marker or marker[0]["digest"] != data["digest"]:
                 raise RuntimeError("图投影版本与 MySQL 不一致")
-            queue = deque([(owner + ":entity:" + eid, [{"id": eid, "kind": "entity"}], name)
-                           for eid, name in matches])
-            while queue and len(visited) < max_nodes and len(paths) < max_paths:
-                key, path, name = queue.popleft()
-                if key in visited:
-                    continue
-                visited.add(key)
-                neighbors = read("MATCH (a:QAMemoryGraph {key:$key})-[r:QA_LINK]-(b:QAMemoryGraph) "
+            queue = [(owner + ":entity:" + eid, [{"id": eid, "kind": "entity"}], name)
+                     for eid, name in matches]
+            clipped = False
+            while queue and len(visited) < max_nodes:
+                # One bounded round trip per frontier, rather than per node.
+                queue.sort(key=lambda x: (-scores.get(x[1][-1]["id"], 0), len(x[1]), x[0]))
+                unique = {}
+                for entry in queue:
+                    if entry[0] not in visited:
+                        unique.setdefault(entry[0], entry)
+                frontier = list(unique.values())[:max_nodes - len(visited)]
+                clipped |= len(unique) > len(frontier)
+                queue = []
+                if not frontier:
+                    break
+                rows = read("UNWIND $keys AS source CALL (source) { "
+                    "MATCH (a:QAMemoryGraph {key:source})-[r:QA_LINK]-(b:QAMemoryGraph) "
                     "WHERE b.owner=$owner RETURN b.key AS key,b.id AS id,b.kind AS kind,r.role AS role "
-                    "ORDER BY b.key LIMIT $limit", key=key, owner=owner, limit=fanout + 1)
-                fanout_clipped += int(len(neighbors) > fanout)
-                for row in neighbors[:fanout]:
-                    nxt = [*path, {"id": row["id"], "kind": row["kind"], "role": row["role"]}]
-                    if row["kind"] == "memory":
-                        fact_ids = {n["id"] for n in path if n["kind"] in ("relation", "event")}
-                        members = [l["memory_id"] for l in data["links"] if l["fact_id"] in fact_ids]
-                        paths.append({"entity": name, "nodes": nxt,
-                                      "memory_ids": list(dict.fromkeys([*members, row["id"]]))})
-                        if len(paths) >= max_paths:
-                            break
-                    elif len(nxt) <= max_depth and row["key"] not in visited:
-                        queue.append((row["key"], nxt, name))
+                    "ORDER BY coalesce($scores[b.id],0) DESC, "
+                    "CASE WHEN b.kind='memory' THEN 1 ELSE 0 END, b.key LIMIT $limit } "
+                    "RETURN source,key,id,kind,role", keys=[x[0] for x in frontier],
+                    owner=owner, scores=scores, limit=fanout + 1)
+                grouped = {}
+                for row in rows:
+                    grouped.setdefault(row["source"], []).append(row)
+                visited.update(x[0] for x in frontier)
+                for key, path, name in frontier:
+                    neighbors = grouped.get(key, [])
+                    fanout_clipped += int(len(neighbors) > fanout)
+                    for row in neighbors[:fanout]:
+                        if any(n["id"] == row["id"] and n["kind"] == row["kind"] for n in path):
+                            continue
+                        nxt = [*path, {"id": row["id"], "kind": row["kind"], "role": row["role"]}]
+                        if row["kind"] == "memory":
+                            fact_ids = {n["id"] for n in path if n["kind"] in ("relation", "event")}
+                            members = [l["memory_id"] for l in data["links"] if l["fact_id"] in fact_ids]
+                            mids = list(dict.fromkeys([*members, row["id"]]))
+                            paths.append({"entity": name, "nodes": nxt, "memory_ids": mids,
+                                          "priority": max((scores.get(mid, 0) for mid in mids), default=0)})
+                        elif len(nxt) <= max_depth and row["key"] not in visited:
+                            queue.append((row["key"], nxt, name))
             # A concurrent replace between queries must invalidate the whole pass.
             marker = read("MATCH (n:QAMemoryGraph {key:$key}) RETURN n.digest AS digest", key=owner + ":manifest")
             if not marker or marker[0]["digest"] != data["digest"]:
                 raise RuntimeError("图召回期间投影发生变化")
+        paths.sort(key=lambda p: (-p["priority"], len(p["nodes"]), tuple(p["memory_ids"])))
+        clipped |= len(paths) > max_paths
+        paths = paths[:max_paths]
         candidates = list(dict.fromkeys(mid for p in paths for mid in p["memory_ids"]))
         return {"enabled": True, "matched_entities": matches, "paths": paths,
                 "nodes_visited": len(visited), "fanout_clipped": fanout_clipped,
-                "budget_exhausted": bool(queue) or len(paths) >= max_paths or fanout_clipped > 0,
+                "budget_exhausted": bool(queue) or clipped or fanout_clipped > 0,
+                "recall_version": RECALL_VERSION,
                 "candidates": candidates[:settings.memory_graph_candidate_k], "digest": data["digest"]}
 
     def audit(self, data: dict) -> dict:

@@ -170,8 +170,8 @@ def usage_of(response) -> dict | None:
 # ---------------------------------------------------------------- LLM 裁判(显式开启才调用)
 
 
-JUDGE_PROTOCOL_VERSION = "locomo-judge/2"
-JUDGE_PROMPT_VERSION = "locomo-judge-prompt/2"
+JUDGE_PROTOCOL_VERSION = "locomo-judge/3"
+JUDGE_PROMPT_VERSION = "locomo-judge-prompt/3"
 
 JUDGE_SYSTEM_PROMPT = (
     "你是长期记忆问答评测的评分裁判。只依据给出的问题、参考答案与待评回答做判断,"
@@ -183,7 +183,8 @@ JUDGE_SYSTEM_PROMPT = (
     "- 答非所问、含糊回避、或给出了参考答案之外编造的关键信息 → 不正确;\n"
     "- 若题目注明「不可回答」:待评回答明确表示不知道 / 对话中没有相关信息 → 正确;"
     "否则(包括编造一个答案)→ 不正确;\n"
-    "- 若参考答案非空:待评回答表示不知道 / 没有相关信息 → 不正确。\n"
+    "- 不可回答标记的规则优先；仅对可回答题，参考答案非空而待评回答表示不知道 → 不正确。\n"
+    "- 覆盖核心信息但同时给出与参考答案矛盾的数量、实体或关系，仍为不正确；不能忽略这些冲突。\n"
     '只输出一个 JSON 对象,不要多余文字:{"correct": true 或 false, "reason": "一句话理由"}'
 )
 
@@ -207,7 +208,7 @@ class JudgeVerdict(BaseModel):
 
 def judge_prompt(question: str, reference: str, answer: str, *, unanswerable: bool) -> str:
     """裁判输入:问题 + 参考答案(不可回答类换成对应说明)+ 待评回答;不含模式名。"""
-    return json.dumps({"question": question, "reference": reference,
+    return json.dumps({"question": question, "reference": "" if unanswerable else reference,
                        "answer": answer, "unanswerable": unanswerable}, ensure_ascii=False)
 
 

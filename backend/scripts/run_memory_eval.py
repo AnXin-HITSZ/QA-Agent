@@ -253,7 +253,10 @@ def main(argv=None) -> int:
         output_dir = run_dir / "variants" / args.variant if args.variant else run_dir
         rc = execute(commands, output_dir, record)
         if not rc:
-            print("\n完成。报告:", output_dir / "report.md")
+            if args.action == "compare":
+                print("\n完成。对比报告目录:", run_dir / "comparisons")
+            else:
+                print("\n完成。报告:", output_dir / "report.md")
             print("查看进度：bash eval-memory.sh --action status --run-id", run_id)
             print("清理服务端测试数据：bash eval-memory.sh --action purge --run-id", run_id)
         return rc

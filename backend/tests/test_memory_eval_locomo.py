@@ -515,6 +515,11 @@ def test_judge_prompt_never_exposes_mode_names():
         assert mode not in prompt
 
 
+def test_unanswerable_judge_input_removes_conflicting_reference():
+    assert json.loads(scoring.judge_prompt("Q", "No", "No information available", unanswerable=True))["reference"] == ""
+    assert json.loads(scoring.judge_prompt("Q", "No", "No", unanswerable=False))["reference"] == "No"
+
+
 # ---------------------------------------------------------------- 用量与耗时统计
 
 
