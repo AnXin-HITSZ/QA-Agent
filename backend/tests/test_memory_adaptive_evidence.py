@@ -4,7 +4,7 @@ import pytest
 from tests.test_memory_search import search_env,_seed,U1
 from tests.test_memory_source_evidence import sources,seed_episode
 from app.memory import search,db,repo,episodes,rerank
-from app.memory import evidence_selection as selection,evidence_retrieval_v3 as adaptive
+from app.memory import evidence_selection as selection,evidence_retrieval as adaptive
 
 
 def hit(mid,value,context=None):
