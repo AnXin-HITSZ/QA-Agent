@@ -56,7 +56,8 @@ def plan(args, run_id: str) -> list[list[str]]:
             command.extend(["--variant", args.variant])
     commands = {"full": [build, ask, score, report], "build": [build], "ask": [ask],
             "score": [score, report], "report": [report], "purge": [["purge", *common]],
-            "status": [], "compare": [["compare", *common, "--variants", getattr(args, "variants", "nograph,graph")]]}[args.action]
+            "status": [], "compare": [["compare", *common, "--variants", getattr(args, "variants", "nograph,graph"),
+                                       "--axis", getattr(args,"axis","graph")]]}[args.action]
     if getattr(args, "full_dataset", False):
         commands.insert(0, ["prepare", "--input", str(args.input), "--output", str(args.dataset),
                             "--sample-limit", "0"])
@@ -191,6 +192,7 @@ def main(argv=None) -> int:
     parser.add_argument("--run-id", help="缺省 full/build 新建；其他动作使用最近 run")
     parser.add_argument("--variant", default="", help="同一固定构建的命名消融实验")
     parser.add_argument("--variants", default="nograph,graph", help="compare 的两个实验名称")
+    parser.add_argument("--axis", choices=["graph","evidence"],default="graph",help="消融只允许对应轴的开关不同")
     parser.add_argument("--dataset", type=Path,
                         help="已 prepare 的数据集；相对路径以 backend 为基准")
     parser.add_argument("--full-dataset", action="store_true",

@@ -443,7 +443,12 @@ class MemoryWorker:
                                                 default=str).encode()).hexdigest()
             stages = dict(job.stages or {})
             record = stages.get("graph_extract", {})
-            if (record.get("digest") == digest and record.get("protocol") == graph_extract.PROTOCOL_VERSION
+            unified = any((f.fact_context or {}).get("structured_graph") for f in facts)
+            protocol = "raw-grounded-graph/1" if unified else graph_extract.PROTOCOL_VERSION
+            if unified:
+                from app.memory.unified_extract import stored_graph
+                report = stored_graph(facts)
+            elif (record.get("digest") == digest and record.get("protocol") == protocol
                     and record.get("model") == service.llm_model_identity()):
                 report = graph_extract.restore(record["result"], facts=facts)
             else:
@@ -455,7 +460,7 @@ class MemoryWorker:
                         raise MemoryLeaseLost("图诊断保存时失去租约")
                 with bind(purpose=PURPOSE_MEMORY_EXTRACT):
                     report = graph_extract.extract_graph(facts, [], diagnostic_sink=record_diagnostic)
-                stages["graph_extract"] = {"digest": digest, "protocol": graph_extract.PROTOCOL_VERSION,
+                stages["graph_extract"] = {"digest": digest, "protocol": protocol,
                                            "model": service.llm_model_identity(),
                                            "attempts": report.attempts, "dropped": len(report.dropped),
                                            "status": "ok",
@@ -503,7 +508,7 @@ class MemoryWorker:
         if not isinstance(record, dict):
             return None
         if (record.get("digest") != _messages_digest(messages, note)
-                or record.get("protocol") != extract.PROTOCOL_VERSION
+                or record.get("protocol") != extract.protocol_version()
                 or record.get("model") != service.llm_model_identity()):
             return None
         try:
@@ -522,7 +527,7 @@ class MemoryWorker:
         stages[STAGE_TOTAL] = len(report.facts)
         stages[STAGE_EXTRACT] = {
             "digest": _messages_digest(messages, note),
-            "protocol": extract.PROTOCOL_VERSION,
+            "protocol": extract.protocol_version(),
             "model": service.llm_model_identity(),
             "status": "ok",
             "facts": len(report.facts),

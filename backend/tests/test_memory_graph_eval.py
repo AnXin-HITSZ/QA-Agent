@@ -71,3 +71,27 @@ def test_comparison_preserves_previous_reports_and_flags_service_fault(tmp_path)
     assert not second["comparable"] and second["configurations_match"]
     assert first["report_directory"] != second["report_directory"]
     assert legacy.read_text() == "previous report"
+
+
+def test_evidence_axis_allows_only_completion_switches_to_differ(tmp_path):
+    from scripts.compare_memory_variants import compare
+    from scripts.evalkit.scoring import results_digest
+    (tmp_path/"dataset.json").write_text(json.dumps({"questions":[{"id":"q"}]}))
+    for name,enabled in (("base",False),("completion",True)):
+        path=tmp_path/"variants"/name
+        path.mkdir(parents=True)
+        results={"run_valid":True,"questions":[{"id":"q","question":"same question","modes":{"memory":{}}}]}
+        manifest={"source_digest":"same-code","source_snapshot":"same-sources","modes":["memory"],
+            "memory_context_chars":2000,"graph":{"switches":{"search":True}},
+            "evidence_completion":{"source_search":enabled,"rounds":2 if enabled else 0,"source_budget":1000}}
+        scores={"results_digest":results_digest(results),"protocol":{},
+            "summary":{"by_mode":{"memory":{"counts":{},"mean_f1":0.5}}}}
+        for filename,data in (("run",manifest),("results",results),("scores",scores)):
+            (path/(filename+".json")).write_text(json.dumps(data))
+    assert compare(tmp_path,["base","completion"],axis="evidence")["comparable"]
+    changed=tmp_path/"variants/completion/run.json"
+    manifest=json.loads(changed.read_text())
+    manifest["source_snapshot"]="different-sources"
+    changed.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError,match="变体条件不同"):
+        compare(tmp_path,["base","completion"],axis="evidence")

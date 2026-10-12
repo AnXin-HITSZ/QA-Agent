@@ -210,6 +210,26 @@ class MemorySourceRow(Base):
     )
 
 
+class MemoryEpisodeRow(Base):
+    """Opt-in, expiring user utterances; evidence only, never authoritative facts."""
+    __tablename__ = "memory_episodes"
+    id: Mapped[str] = mapped_column(CHAR(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(CHAR(36), nullable=False)
+    scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    messages: Mapped[list] = mapped_column(JSON, nullable=False)
+    content_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(_DT6, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(_DT6, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("user_id", "scope", "turn_id", "generation", name="uk_memory_episodes_turn"),
+        Index("ix_memory_episodes_owner", "user_id", "scope", "status"),
+        Index("ix_memory_episodes_expiry", "expires_at"), _TABLE_OPTS,
+    )
+
+
 class MemoryOpRow(Base):
     """删除 / 清理的可恢复台账（0005）：先在事实事务里登记，再在事务外执行。
 

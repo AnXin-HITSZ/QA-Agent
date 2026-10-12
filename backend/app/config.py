@@ -182,6 +182,15 @@ class Settings(BaseSettings):
     memory_top_k: int = 6                      # 进上下文的最终条数
     memory_rrf_k: int = 60                     # RRF 平滑常数(名次权重 1/(k+rank))
     memory_context_chars: int = 2000           # 注入提示词的记忆总字符预算(超出截断并标注)
+    memory_source_store_enabled: bool = False  # 显式允许限期保存用户原始来源；不存工具/助手正文
+    memory_source_search_enabled: bool = False
+    memory_source_retention_days: int = 30
+    memory_source_max_episodes: int = 100
+    memory_source_max_chars: int = 30000
+    memory_source_candidate_k: int = 12
+    memory_source_context_chars: int = 1000
+    memory_evidence_rounds: int = 0             # 0=原检索；1=仅来源；2=最多一次规划、两条补查询
+    memory_unified_extract_enabled: bool = False # 生效还需图写入开关；单次调用提取事实和来源支持的图候选
     memory_bm25_corpus_limit: int = 1000       # BM25 语料上限(单用户有效记忆条数,超出只取最近部分)
     # 维护决策(ADD/UPDATE/DELETE/NOOP)看的是「有没有和它冲突的旧记忆」,与回答问题
     # 目标不同:候选要更大(宁可多看几条,漏掉冲突就会写重),最终条数也更多。见 §8 末段。

@@ -520,6 +520,21 @@ def test_unanswerable_judge_input_removes_conflicting_reference():
     assert json.loads(scoring.judge_prompt("Q", "No", "No", unanswerable=False))["reference"] == "No"
 
 
+def test_identical_judge_inputs_reuse_verdict_but_model_change_does_not():
+    results={"answer_calls":True,"questions":[{"id":"q","category":4,"question":"Q","reference":"R",
+        "modes":{"memory":{"answer":"R"},"full_context":{"answer":"R"}}}]}
+    cache={}
+    llm=memorykit.FakeLLM('{"correct":true,"reason":"matches"}')
+    scores=scoring.score_results(results,metrics=["judge"],judge_llm=llm,judge_model="same",judge_cache=cache)
+    rows=scores["per_question"][0]["modes"]
+    assert rows["memory"]["judge_cache_hit"] is False
+    assert rows["full_context"]["judge_cache_hit"] is True
+    again=scoring.score_results(results,metrics=["judge"],judge_llm=memorykit.FakeLLM("invalid"),judge_model="same",judge_cache=cache)
+    assert again["per_question"][0]["modes"]["memory"]["judge_cache_hit"]
+    changed=scoring.score_results(results,metrics=["judge"],judge_llm=memorykit.FakeLLM("invalid"),judge_model="other",judge_cache=cache,judge_retries=0)
+    assert changed["per_question"][0]["modes"]["memory"]["judge_error"]
+
+
 # ---------------------------------------------------------------- 用量与耗时统计
 
 

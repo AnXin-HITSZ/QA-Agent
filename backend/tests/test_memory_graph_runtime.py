@@ -45,6 +45,23 @@ def test_transaction_rollback_does_not_leave_graph_job(env):
         assert not session.scalars(select(MemoryJobRow)).all()
 
 
+def test_unified_graph_worker_uses_saved_raw_structure_without_second_llm(env,monkeypatch):
+    from app.memory.unified_extract import parse
+    from tests.test_memory_unified_extract import response,MESSAGES
+    context=parse(json.dumps(response()),MESSAGES).facts[0].fact_context
+    with db.session_scope() as session:
+        repo.create_item(session,user_id=USER,text="Ada reviewed a report.",fact_context=context,
+            now=db.utc_naive(),thread_id="t")
+    monkeypatch.setattr(extract,"extract_graph",lambda *a,**kw: pytest.fail("second extraction call"))
+    worker=MemoryWorker()
+    monkeypatch.setattr(worker,"_replay_ops",lambda **kw:0)
+    assert worker.run_once(limit=1,force=True)["succeeded"]==1
+    with db.session_scope() as session:
+        data=runtime.snapshot(session,user_id=USER,scope="")
+        assert {x["name"] for x in data["entities"]}=={"Ada","Lee"}
+        assert data["relations"][0]["object_text"]=="East report"
+
+
 def test_grouped_jobs_apply_and_delete_current_projection(env, monkeypatch):
     a = add()
     b = add("乙项目使用丙技术")

@@ -26,6 +26,7 @@ MEMORY_TABLES = (
     "memory_user_state",
     "memory_sources",
     "memory_ops",
+    "memory_episodes",
 )
 
 # 0005 新增的增量列：这些是「作用域隔离 / 认领凭证 / 版本化索引标记 / 来源与时间」的落点，
@@ -98,6 +99,10 @@ def test_every_migration_table_is_owned_by_a_model_module():
              | set(mig.model_tables("app.memory.graph.tables")))
     assert owned == set(mig.migration_tables()), (
         f"迁移与模型模块的表集合不一致(模型 {sorted(owned)},迁移 {sorted(mig.migration_tables())})")
+
+
+def test_0010_source_episode_schema_matches_model():
+    assert mig.migration_tables()["memory_episodes"] == model_tables()["memory_episodes"]
 
 
 def test_memory_text_columns_are_text_not_capped_varchars():
