@@ -109,6 +109,8 @@ class SearchResult:
     trace: dict = field(default_factory=dict)  # 显式诊断时保存排名，不进入回答上下文
     error: str = ""                 # 整体不可用(两路都失败)时的原因;非空即没有可用证据
     source_context: str = ""        # optional bounded original-source evidence, not facts
+    candidates: list[Evidence] = field(default_factory=list)  # opt-in bounded, validated rerank pool
+    selection_limit: int = 0
 
     @property
     def ok(self) -> bool:
@@ -263,6 +265,22 @@ def _search_once(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: in
                                  snapshots=snapshots, trace=trace)
     if rerank_note:
         result.degraded.append(rerank_note)
+
+    if task == TASK_ANSWER and get_settings().memory_evidence_selection_enabled:
+        from app.memory.evidence_selection import select_facts
+        result.candidates, note = _finalize(ranked, limit=max(1,get_settings().memory_rerank_max_docs),
+                                          budget=10**9, snapshots=snapshots)
+        result.selection_limit = max(1,limit)
+        if note:
+            result.degraded.append(note)
+        select_facts(result)
+        if trace is not None:
+            trace["ranked"]=[{"memory_id":r[0],"rank":i,"score":r[1],"origin":r[5]}
+                             for i,r in enumerate(ranked,1)]
+            trace["final"]=[h.memory_id for h in result.hits]
+        result.counts.update(rerank_in=min(len(rerank_fused),rerank_profile.rerank_k),
+                             final=len(result.hits),rerank_out=sum(h.origin=="rerank" for h in result.hits))
+        return result
 
     # Keep a supported path together when its highest-ranked member is selected.
     # Never exceed the existing top_k or text budget; explain rejected bundles.

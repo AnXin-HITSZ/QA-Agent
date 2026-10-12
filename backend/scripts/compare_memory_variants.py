@@ -43,7 +43,7 @@ def compare(root: Path, names: list[str], *, axis: str = "graph") -> dict:
         signature = {k: manifest.get(k) for k in ("code_commit", "source_digest", "dataset", "scope", "collection",
             "llm_model", "llm_temperature", "embeddings_model", "embeddings_dim", "rerank_model", "rerank_enabled",
             "memory_top_k", "memory_vector_k", "memory_bm25_k", "memory_rerank_k", "memory_rrf_k", "memory_context_chars",
-            "answer_instruction", "context_chars", "source_snapshot", "unified_extract")}
+            "answer_instruction", "context_chars", "source_snapshot", "unified_extract", "evidence_selection", "memory_budget_scope")}
         signature["dataset"] = manifest.get("dataset", {}).get("digest")
         signature["questions"] = [(q["id"], q["question"]) for q in results["questions"]]
         signature["modes"] = manifest.get("modes")

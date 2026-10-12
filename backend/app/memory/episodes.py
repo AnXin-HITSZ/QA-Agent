@@ -136,6 +136,7 @@ def corpus(user_id, scope):
                 if used > max(1, s.memory_source_max_chars):
                     return out, True
                 out.append({"id": f"{row.id}:{i}", "episode_id": row.id, "turn_id": row.turn_id,
+                    "center_message_id":msg['message_id'], "messages":group,
                     "speaker": msg.get("speaker", ""),
                     "message_ids": [m["message_id"] for m in group], "text": text,
                     "generation": generation, "content_hash": row.content_hash})

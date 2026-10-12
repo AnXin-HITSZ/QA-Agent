@@ -63,6 +63,9 @@ def candidates(query, corpus):
 
 def enrich(result, *, user_id, scope, once):
     s = get_settings()
+    if s.memory_evidence_selection_enabled:
+        from app.memory.evidence_retrieval_v3 import enrich as adaptive_enrich
+        return adaptive_enrich(result,user_id=user_id,scope=scope,once=once)
     if not s.memory_source_search_enabled or s.memory_evidence_rounds <= 0:
         return result
     from app.memory.search import format_evidence
