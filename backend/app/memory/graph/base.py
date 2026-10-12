@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from app.config import Settings
 
@@ -35,14 +37,29 @@ class GraphSwitches:
     worker: bool      # 有效后台(图同步 / 删除 / 对账由 Worker 执行)
 
 
+_evaluation_recall = ContextVar('evaluation_graph_recall',default=True)
+
+
+@contextmanager
+def evaluation_recall(mode='configured'):
+    """CLI-only ablation: never enables a graph disabled by production configuration."""
+    if mode not in ('configured','disabled'):
+        raise ValueError('invalid graph recall experiment mode')
+    token=_evaluation_recall.set(mode!='disabled')
+    try:
+        yield
+    finally:
+        _evaluation_recall.reset(token)
+
+
 def resolve_switches(settings: Settings) -> GraphSwitches:
     """把配置解析成有效开关(唯一的收敛点;纯函数,便于测试矩阵)。"""
     master = bool(settings.memory_graph_enabled)
     return GraphSwitches(
         master=master,
-        write=master and bool(settings.memory_graph_write_enabled),
-        search=master and bool(settings.memory_graph_search_enabled),
-        worker=master and bool(settings.memory_graph_worker_enabled),
+        write=master,
+        search=master and _evaluation_recall.get(),
+        worker=master,
     )
 
 

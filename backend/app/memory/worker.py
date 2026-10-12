@@ -205,7 +205,7 @@ class MemoryWorker:
 
     def start(self) -> None:
         """启动后台线程(应用 lifespan 调用);未启用 / 未配库时什么都不做。"""
-        if not get_settings().memory_worker_enabled or not db.enabled():
+        if not db.enabled():
             return
         self._ensure_thread()
 
@@ -260,13 +260,6 @@ class MemoryWorker:
     def _run_once(self, *, limit: int | None, force: bool = False) -> dict:
         stats = {"claimed": 0, "succeeded": 0, "failed": 0, "recovered": 0, "indexed": 0,
                  "ops": 0}
-        if not get_settings().memory_write_enabled:
-            # 暂停自动写入:一件任务都不领(队列原样留着,开回来继续)。
-            # 但**清理台账与索引重放照跑**:那是已经发生过的删除与派生数据的收尾,
-            # 既不产生新记忆、也不读对话内容 —— 用户的删除意图不该因为暂停写入而搁置。
-            stats["ops"] = self._replay_ops(limit=None)
-            stats["indexed"] = self._replay_index(force=force)
-            return {**stats, "skipped": "自动写入已暂停(MEMORY_WRITE_ENABLED=false)"}
         if limit is None:
             limit = int(get_settings().memory_worker_tick_limit)
             limit = TICK_CAP if limit <= 0 else min(limit, TICK_CAP)
@@ -739,8 +732,6 @@ class MemoryWorker:
 
     def _drift_seen(self, *, force: bool) -> bool:
         """周期核验当前版本点及 payload；发现缺失或不一致后修复标记。"""
-        if not bool(get_settings().memory_worker_index_repair):
-            return False
         now = time.monotonic()
         if not force and now < self._drift_check_at:
             return False
@@ -791,7 +782,7 @@ class MemoryWorker:
             except Exception as exc:  # noqa: BLE001
                 db_ok, db_error = False, type(exc).__name__
         return {
-            "enabled": bool(get_settings().memory_worker_enabled),
+            "enabled": db.enabled(),
             "configured": db.enabled(),
             "running": bool(self._thread and self._thread.is_alive()),
             "scope": self._scope,

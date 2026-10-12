@@ -15,8 +15,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run-id", required=True)
     args=p.parse_args()
-    if not get_settings().memory_source_store_enabled:
-        raise SystemExit("enable MEMORY_SOURCE_STORE_ENABLED before importing authorized source data")
+    if get_settings().memory_source_retention_days <= 0:
+        raise SystemExit("set MEMORY_SOURCE_RETENTION_DAYS to a positive value before importing authorized source data")
     env=EvalEnv(args.run_id)
     if env.path("purge.json").exists():
         raise SystemExit("purged build cannot be restored")

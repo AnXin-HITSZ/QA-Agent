@@ -55,22 +55,17 @@ def test_master_off_is_disabled_and_never_touches_driver(monkeypatch):
     assert "neo4j" not in sys.modules
 
 
-def test_switch_matrix_subordinate_to_master():
-    """子开关一律受总开关约束;总开关开、子开关关 = 「只建图不召回」等的合法组合。"""
-    rows = [
-        # master, write, search, worker → 期望有效值
-        (False, True, True, True, (False, False, False, False)),   # 子开关单独开无效
-        (True, False, False, False, (True, False, False, False)),  # 全子关:仅装配不动作
-        (True, True, False, True, (True, True, False, True)),      # 写 + 后台,不召回
-        (True, False, True, False, (True, False, True, False)),    # 读固定图数据,不新增
-        (True, True, True, True, (True, True, True, True)),        # 全开
-    ]
-    for master, write, search, worker, want in rows:
-        sw = resolve_switches(_settings(memory_graph_enabled=master,
-                                        memory_graph_write_enabled=write,
-                                        memory_graph_search_enabled=search,
-                                        memory_graph_worker_enabled=worker))
-        assert (sw.master, sw.write, sw.search, sw.worker) == want, (master, write, search, worker)
+def test_graph_master_controls_entire_graph_and_cli_ablation_is_scoped():
+    from app.memory.graph.base import evaluation_recall
+    for master in (False,True):
+        s=_settings(memory_graph_enabled=master)
+        sw=resolve_switches(s)
+        assert (sw.master,sw.write,sw.search,sw.worker)==(master,master,master,master)
+        with evaluation_recall("disabled"):
+            sw=resolve_switches(s)
+            assert (sw.master,sw.write,sw.search,sw.worker)==(master,master,False,master)
+        assert resolve_switches(s).search==master
+
 
 
 def test_enabled_without_password_fails_closed_without_driver_import():

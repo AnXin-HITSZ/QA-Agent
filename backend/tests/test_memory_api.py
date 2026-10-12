@@ -251,36 +251,36 @@ def test_status_reports_every_switch(env):
     assert body["last_run_at"] == "" and body["last_error"] == ""
 
 
-def test_pausing_automatic_writes_keeps_every_memory_and_still_allows_manual_edits(env, monkeypatch):
+def test_obsolete_write_flag_does_not_disable_automatic_or_manual_operations(env, monkeypatch):
     """暂停自动写入 = 不再登记新提取;**不是**删数据,也不拦用户自己动手。"""
     (a,) = _seed(env, TEXT_A)
-    monkeypatch.setattr(env.settings, "memory_write_enabled", False)
+    monkeypatch.setenv("MEMORY_WRITE_ENABLED", "false")
 
-    assert env.client.get(f"{API}/status").json()["write_enabled"] is False
+    assert env.client.get(f"{API}/status").json()["write_enabled"] is True
     assert len(env.client.get(API).json()["items"]) == 1                    # 记忆还在
     assert service.enqueue_extraction(user_id=STUB_ADMIN_ID, dedupe_key="k1",
                                       messages=[{"role": "user",
-                                                 "content": "我住在深圳"}]) is None
+                                                 "content": "我住在深圳"}]) is not None
     assert env.client.post(API, json={"text": "手动加一条"}).status_code == 201
     assert env.client.delete(f"{API}/{a}").status_code == 200       # 手动的删也照常放行
     assert len(env.client.get(API).json()["items"]) == 1                    # 手添的那条
 
 
-def test_pausing_search_does_not_hide_the_memories(env, monkeypatch):
+def test_obsolete_search_flag_does_not_hide_the_memories(env, monkeypatch):
     _seed(env, TEXT_A)
-    monkeypatch.setattr(env.settings, "memory_search_enabled", False)
+    monkeypatch.setenv("MEMORY_SEARCH_ENABLED", "false")
 
     body = env.client.get(API).json()
 
     assert body["items"] and body["items"][0]["text"] == TEXT_A    # 列表照常(页面里的检索是用户主动行为)
 
 
-def test_a_disabled_feature_is_503_but_the_status_stays_readable(env, monkeypatch):
+def test_unconfigured_feature_is_503_but_the_status_stays_readable(env, monkeypatch):
     _seed(env, TEXT_A)
-    monkeypatch.setattr(env.settings, "memory_enabled", False)
+    monkeypatch.setattr(env.settings, "mysql_url", "")
 
     refused = env.client.get(API)
-    assert refused.status_code == 503 and "MEMORY_ENABLED" in refused.json()["detail"]
+    assert refused.status_code == 503 and "MYSQL_URL" in refused.json()["detail"]
 
     status_body = env.client.get(f"{API}/status").json()
     assert status_body["enabled"] is False and status_body["items"] == 0

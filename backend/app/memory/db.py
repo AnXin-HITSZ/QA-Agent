@@ -31,7 +31,7 @@ def configured() -> bool:
 def enabled() -> bool:
     """长期记忆总开关：显式打开（默认开）且配了数据库。业务侧最便宜的前置判断。"""
     try:
-        return bool(get_settings().memory_enabled) and configured()
+        return configured()
     except Exception:  # noqa: BLE001 —— 配置异常当关闭，不影响聊天
         return False
 

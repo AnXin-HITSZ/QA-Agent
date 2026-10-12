@@ -16,9 +16,8 @@ USER = "11111111-1111-1111-1111-111111111111"
 def env(memory_db, monkeypatch):
     Base.metadata.create_all(memory_db.db.get_engine())
     monkeypatch.setattr(memory_db.settings, "memory_graph_enabled", True)
-    monkeypatch.setattr(memory_db.settings, "memory_graph_write_enabled", True)
-    monkeypatch.setattr(memory_db.settings, "memory_graph_worker_enabled", True)
-    monkeypatch.setattr(memory_db.settings, "memory_write_enabled", True)
+
+
     class Environment:
         settings = memory_db.settings
     return Environment()

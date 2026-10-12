@@ -213,7 +213,9 @@ def test_partial_commit_restores_original_facts_after_model_change(worker_env, m
     result = extract.dump(extract.ExtractionReport(facts=[_fact(first), _fact(second)]))
     job = _partial_job(worker_env, result=result)
     fake = _install_llm(monkeypatch, "不应调用模型")
-    monkeypatch.setattr(worker_env.settings, "memory_maintenance_enabled", False)
+    from app.memory import maintain
+    monkeypatch.setattr(maintain,"decide",lambda fact,*a,**kw:maintain.MaintenanceDecision(
+        events=[maintain.AddEvent(event="ADD",text=fact.split("\n")[0])]))
     assert worker_env.worker._execute(job) == "succeeded"
     assert fake.calls == []
     assert {i.text for i in service.list_items(user_id=U1)["items"]} == {first, second}

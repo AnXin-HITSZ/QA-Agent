@@ -61,14 +61,12 @@ class RerankOutcome:
 def configured() -> bool:
     """是否配置齐了(开关 + 地址 + Key + 模型名)。缺一项都不算可用。"""
     s = get_settings()
-    return bool(s.rerank_enabled and (s.rerank_api_url or "").strip()
+    return bool((s.rerank_api_url or "").strip()
                 and (s.rerank_api_key or "").strip() and (s.rerank_model or "").strip())
 
 
 def config_note() -> str:
     s = get_settings()
-    if not s.rerank_enabled:
-        return "重排序已关闭(RERANK_ENABLED=false),本次用 RRF 融合结果"
     return ("未配置重排序(RERANK_API_URL / RERANK_API_KEY 至少缺一项),"
             "本次用 RRF 融合结果")
 

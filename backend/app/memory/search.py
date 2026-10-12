@@ -148,6 +148,8 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
     if task == TASK_ANSWER and not result.error and result.query and user_id:
         from app.memory.evidence_retrieval import enrich
         result = enrich(result, user_id=user_id, scope=scope, once=_search_once)
+    if not capture_trace:
+        result.trace = {}
     return result
 
 
@@ -266,9 +268,10 @@ def _search_once(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: in
     if rerank_note:
         result.degraded.append(rerank_note)
 
-    if task == TASK_ANSWER and get_settings().memory_evidence_selection_enabled:
+    if task == TASK_ANSWER:
         from app.memory.evidence_selection import select_facts
-        result.candidates, note = _finalize(ranked, limit=max(1,get_settings().memory_rerank_max_docs),
+        result.trace['graph']=graph  # internal path protection also applies without exported diagnostics
+        result.candidates, note = _finalize(ranked, limit=max(1,limit,profile.rerank_k,get_settings().memory_rerank_max_docs),
                                           budget=10**9, snapshots=snapshots)
         result.selection_limit = max(1,limit)
         if note:

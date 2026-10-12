@@ -57,7 +57,7 @@ def test_invalid_original_grounding_or_structure_rejected(search_env,change):
 
 def test_one_call_and_staged_restore_preserve_precise_graph(search_env,monkeypatch):
     s=search_env.settings
-    for k in ("memory_graph_enabled","memory_graph_write_enabled","memory_unified_extract_enabled"):
+    for k in ("memory_graph_enabled",):
         monkeypatch.setattr(s,k,True)
     llm=memorykit.FakeLLM(json.dumps(response()))
     report=extract.extract_facts(MESSAGES,llm=llm,retries=0)
@@ -68,7 +68,7 @@ def test_one_call_and_staged_restore_preserve_precise_graph(search_env,monkeypat
 
 
 def test_graph_master_off_keeps_legacy_extraction(search_env,monkeypatch):
-    monkeypatch.setattr(search_env.settings,"memory_unified_extract_enabled",True)
+
     monkeypatch.setattr(search_env.settings,"memory_graph_enabled",False)
     report=extract.extract_facts(MESSAGES,llm=memorykit.FakeLLM('{"facts":[]}'))
     assert not report.facts and extract.protocol_version()==extract.PROTOCOL_VERSION

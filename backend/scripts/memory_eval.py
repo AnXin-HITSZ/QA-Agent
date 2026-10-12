@@ -199,13 +199,9 @@ class EvalEnv:
 
 def require_ready(*, needs_write: bool = True) -> None:
     """评测要在真存储上跑:没配库 / 功能关闭 / 写被暂停时直接说清楚,别跑出半份结果。"""
-    if not db.configured() or not get_settings().memory_enabled:
+    if not db.configured():
         raise SystemExit("长期记忆未启用:先在 backend/.env 配好 MYSQL_URL 并置 MEMORY_ENABLED=true")
-    if needs_write and not get_settings().memory_write_enabled:
-        # 这一条最阴险:暂停写入时 enqueue_extraction 静默返回 None,构建会「跑完、没报错、
-        # 一条记忆也没有」—— 假的成功比报错更难发现,所以直接拒绝。
-        raise SystemExit("MEMORY_WRITE_ENABLED=false:评测的提取任务会被静默丢弃,拒绝继续"
-                         "(先打开写入开关再跑评测)")
+
 
 
 def users_in_scope(scope: str) -> list[str]:
@@ -567,7 +563,7 @@ def graph_manifest():
     from app.memory.graph.extract import PROTOCOL_VERSION
     from app.memory.graph.ranking import RECALL_VERSION
     return {"switches": asdict(runtime.switches()), "extract_protocol": PROTOCOL_VERSION,
-            "unified_graph_protocol": "raw-grounded-graph/1" if get_settings().memory_unified_extract_enabled else "",
+            "unified_graph_protocol": "raw-grounded-graph/1" if get_settings().memory_graph_enabled else "",
             "projection_protocol": runtime.PROJECTION_VERSION, "recall_protocol": RECALL_VERSION,
             "max_hops": get_settings().memory_graph_max_hops,
             "max_nodes": get_settings().memory_graph_max_nodes,
@@ -601,7 +597,7 @@ def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_char
     """可复现信息:代码版本 + 模型 + 关键参数 + 指令口径 + 作用域(绝不含 key)。"""
     s = get_settings()
     from app.memory import episodes
-    source_snapshot = episodes.fingerprint([eval_user_id(env.run_id, x) for x in subjects_of(dataset)], env.scope) if dataset and (s.memory_source_store_enabled or s.memory_source_search_enabled) else ""
+    source_snapshot = episodes.fingerprint([eval_user_id(env.run_id, x) for x in subjects_of(dataset)], env.scope) if dataset else ""
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=BACKEND, capture_output=True,
                                 text=True, timeout=10).stdout.strip()
@@ -626,20 +622,20 @@ def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_char
         "code_commit": commit, "worktree_dirty": dirty, "worktree_changed_files": changed,
         "llm_model": s.llm_model, "llm_temperature": s.llm_temperature,
         "embeddings_model": s.embeddings_model, "embeddings_dim": s.embeddings_dim,
-        "rerank_model": s.rerank_model, "rerank_enabled": bool(s.rerank_enabled),
-        "memory_maintenance_enabled": bool(s.memory_maintenance_enabled),
+        "rerank_model": s.rerank_model, "rerank_enabled": __import__("app.memory.rerank",fromlist=["configured"]).configured(),
+        "memory_maintenance_enabled": True,
         "memory_top_k": s.memory_top_k, "memory_vector_k": s.memory_vector_k,
         "memory_bm25_k": s.memory_bm25_k, "memory_rerank_k": s.memory_rerank_k,
         "memory_rrf_k": s.memory_rrf_k, "memory_context_chars": s.memory_context_chars,
         "source_snapshot": source_snapshot,
-        "evidence_selection": "evidence-selection/1" if s.memory_evidence_selection_enabled else "legacy",
-        "memory_budget_scope": "rendered_body_excluding_global_header" if s.memory_evidence_selection_enabled else "legacy_text_metadata",
-        "evidence_completion": {"protocol": "evidence-completion/3" if s.memory_evidence_selection_enabled else "evidence-completion/2",
-            "source_search": s.memory_source_search_enabled, "rounds": s.memory_evidence_rounds,
+        "evidence_selection": "evidence-selection/1",
+        "memory_budget_scope": "rendered_body_excluding_global_header",
+        "evidence_completion": {"protocol": "evidence-completion/3",
+            "source_search": s.memory_evidence_rounds > 0, "rounds": s.memory_evidence_rounds,
             "source_budget": s.memory_source_context_chars,
             "episode_cap": s.memory_source_max_episodes, "scan_chars": s.memory_source_max_chars,
             "source_candidates": s.memory_source_candidate_k},
-        "unified_extract": bool(s.memory_unified_extract_enabled),
+        "unified_extract": bool(s.memory_graph_enabled),
         "modes": modes, "context_chars": context_chars,
         "answer_instruction_version": INSTRUCTION_VERSION,
         "answer_instruction": EVAL_ANSWER_INSTRUCTION,
@@ -701,7 +697,7 @@ def _recall(user_id: str, query: str, *, scope: str) -> dict:
     """
     from app.memory.search import TASK_ANSWER, format_evidence, search as memory_search
 
-    if not db.enabled() or not get_settings().memory_search_enabled:
+    if not db.enabled():
         return {"text": "", "hits": [], "degraded": ["记忆检索已关闭(配置如此)"],
                 "error": "", "counts": {}}
     result = memory_search(user_id=user_id, query=query, task=TASK_ANSWER, scope=scope,
@@ -1031,6 +1027,12 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
+    from app.memory.graph.base import evaluation_recall
+    with evaluation_recall(getattr(args,'graph_recall','configured')):
+        return _cmd_ask(args)
+
+
+def _cmd_ask(args: argparse.Namespace) -> int:
     env = EvalEnv(args.run_id, getattr(args, "variant", ""))
     if env.variant and env.path("results.json").exists():
         raise SystemExit("实验变体已存在，请换一个 variant；不覆盖已有结果")
@@ -1048,7 +1050,7 @@ def cmd_ask(args: argparse.Namespace) -> int:
     if env.variant:
         fixed = fixed_snapshot(env, dataset)
         from app.memory import episodes
-        source_fixed = episodes.fingerprint([eval_user_id(env.run_id,x) for x in subjects_of(dataset)],env.scope) if (get_settings().memory_source_store_enabled or get_settings().memory_source_search_enabled) else ""
+        source_fixed = episodes.fingerprint([eval_user_id(env.run_id,x) for x in subjects_of(dataset)],env.scope)
         if source_fixed:
             source_path = env.build_dir / "source-fixed.json"
             if source_path.exists() and json.loads(source_path.read_text(encoding="utf-8"))["digest"] != source_fixed:
@@ -1213,6 +1215,8 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("ask", help="执行问题并导出回答 / 证据 / 耗时与 token")
     a.add_argument("--run-id", required=True)
     a.add_argument("--variant", default="", help="同一固定构建下的独立实验名称")
+    a.add_argument("--graph-recall", choices=['configured','disabled'], default='configured',
+                   help='仅评测命令：disabled复用固定图但禁用召回；不能开启环境中关闭的图')
     a.add_argument("--dataset", default="", help="缺省用 run 目录里留下的 dataset.json")
     a.add_argument("--modes", default=",".join(MODES))
     a.add_argument("--answer", action="store_true", help="真的调模型生成回答(会产生付费调用)")

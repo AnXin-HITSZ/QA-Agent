@@ -186,6 +186,10 @@ def write_facts(*, user_id: str, facts: list[ExtractedFact], thread_id: str | No
     """
     from app.memory import db
 
+    if generation is not None:
+        with db.session_scope() as session:
+            repo.assert_generation(session, user_id, generation, scope=scope,
+                                   now=now or db.utc_naive())
     now = now or db.utc_naive()
     for fact in facts:
         if fact.fact_context:
@@ -285,13 +289,10 @@ def apply_facts(*, user_id: str, facts: list[ExtractedFact], thread_id: str | No
     """
     from app.memory import db
 
-    if not get_settings().memory_maintenance_enabled:
-        result = write_facts(user_id=user_id, facts=facts, thread_id=thread_id, actor=actor,
-                             now=now, reason=reason, generation=generation, scope=scope,
-                             turn_id=turn_id, fence=fence, skip=skip, stages=stages)
-        result.degraded.append(MAINTENANCE_OFF_NOTE)
-        return result
-
+    if generation is not None:
+        with db.session_scope() as session:
+            repo.assert_generation(session, user_id, generation, scope=scope,
+                                   now=now or db.utc_naive())
     now = now or db.utc_naive()
     for fact in facts:
         if fact.fact_context:
@@ -768,7 +769,7 @@ def recall_for_answer(*, user_id: str, query: str) -> Recall:
     """
     from app.memory import db
 
-    if not db.enabled() or not get_settings().memory_search_enabled:
+    if not db.enabled():
         return Recall()
     from app.memory.search import TASK_ANSWER, format_evidence, search as memory_search
 
@@ -815,8 +816,6 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
 
     if not db.enabled():
         return None                       # 记忆关闭:聊天照常,不登记也不报错
-    if not get_settings().memory_write_enabled:
-        return None                       # 暂停自动写入:只影响「登记」,已排队的任务不动
     now = now or db.utc_naive()
     cleaned = [{"role": str(m.get("role") or ""), "content": str(m.get("content") or ""),
                 "message_id": str(m.get("message_id") or f"m{i}"),
@@ -1058,9 +1057,9 @@ def status(*, user_id: str, scope: str = SCOPE_FORMAL) -> dict:
     settings = get_settings()
     out = {
         "enabled": db.enabled(),
-        "write_enabled": bool(settings.memory_write_enabled),
-        "search_enabled": bool(settings.memory_search_enabled),
-        "maintenance_enabled": bool(settings.memory_maintenance_enabled),
+        "write_enabled": db.enabled(),
+        "search_enabled": db.enabled(),
+        "maintenance_enabled": True,
         "configured": db.configured(),
         "items": 0, "deleted_items": 0, "index_pending": 0,
         "cleanup_pending": 0, "cleanup_failed": 0,

@@ -425,7 +425,7 @@ def memory_db(monkeypatch, tmp_path):
     s = get_settings()
     monkeypatch.setattr(s, "mysql_url",
                         f"sqlite+pysqlite:///{(tmp_path / 'memory.db').as_posix()}")
-    monkeypatch.setattr(s, "memory_enabled", True)
+
     db.dispose()                                   # 别让别的用例的引擎跨到这里
     engine = db.get_engine()
     Base.metadata.create_all(engine)

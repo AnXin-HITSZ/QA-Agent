@@ -514,8 +514,8 @@ def test_context_budget_truncates_and_marks_it(search_env, monkeypatch):
 
     result = search.search(U1, QUERY)
 
-    assert _ids(result) == [a]                     # 预算只够第一条(且只够前 8 个字)
-    assert result.hits[0].trimmed and len(result.hits[0].text) == 8
+    assert result.hits == []  # 标签加完整正文放不下时不返回破碎事实
+    assert len(search.format_evidence(result)) <= 8
     assert any("上下文预算" in note for note in result.degraded)
 
 
@@ -570,8 +570,7 @@ def test_format_evidence_labels_dates_and_truncation(search_env, monkeypatch):
 
     block = search.format_evidence(result)
 
-    assert block.startswith("[记忆 1｜") and "(截断)" in block
-    assert TEXT_A[:8] in block and TEXT_A not in block
+    assert block == ""  # 不再把半句正文冒充有效证据
 
 
 def test_format_evidence_is_empty_without_hits():
@@ -581,5 +580,5 @@ def test_format_evidence_is_empty_without_hits():
 def test_settings_have_rerank_defaults_that_are_off():
     """默认不启用重排序:没配 Key 的环境不该偷偷调外部服务。"""
     s = get_settings()
-    assert isinstance(s.rerank_enabled, bool) and s.memory_rrf_k > 0
+    assert "rerank_enabled" not in type(s).model_fields and s.memory_rrf_k > 0
     assert s.memory_top_k <= s.memory_rerank_k <= s.memory_vector_k + s.memory_bm25_k

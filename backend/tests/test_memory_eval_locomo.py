@@ -51,9 +51,10 @@ V1_QUESTIONS = [{"id": "q1", "conversation_id": "c1", "question": "写实验记�
 def env(memory_db, cache_env, monkeypatch, tmp_path):
     """离线评测环境:与 test_memory_eval.py 的 env 同一套装配(运行目录也改到临时目录)。"""
     s = get_settings()
-    monkeypatch.setattr(s, "memory_maintenance_enabled", False)   # 固定生成参数:维护关掉
-    monkeypatch.setattr(s, "memory_write_enabled", True)
-    monkeypatch.setattr(s, "memory_search_enabled", True)
+    from app.memory import maintain
+    monkeypatch.setattr(maintain,"decide",lambda fact,*a,**kw:maintain.MaintenanceDecision(
+        events=[maintain.AddEvent(event="ADD",text=fact.split("\n")[0])]))   # 维护模型独立替身
+
     prod_collection = s.memory_collection
     monkeypatch.setattr(me, "RUNS_DIR", tmp_path / "runs")
 

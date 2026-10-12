@@ -58,7 +58,7 @@ def env(tmp_path, monkeypatch, cache_env):
     s = get_settings()
     monkeypatch.setattr(s, "mysql_url",
                         f"sqlite+pysqlite:///{(tmp_path / 'chat.db').as_posix()}")
-    monkeypatch.setattr(s, "memory_enabled", True)
+
     auth_db.dispose()
     memory_db.dispose()
     engine = auth_db.get_engine()
@@ -207,16 +207,16 @@ def test_no_memories_means_no_block_at_all(env, monkeypatch):
     assert graph.config["configurable"]["memory_prompt"] == ""
 
 
-def test_pausing_search_leaves_the_answer_alone(env, monkeypatch):
+def test_obsolete_search_flag_does_not_disable_recall(env, monkeypatch):
     """暂停检索(§12 的开关):不召回、不注入,但**照常登记** —— 两个开关互不牵连。"""
     _seed(env, ABOUT_ME)
-    monkeypatch.setattr(env.settings, "memory_search_enabled", False)
+    monkeypatch.setenv("MEMORY_SEARCH_ENABLED", "false")
     graph = FakeGraph()
 
     r = _post(env, monkeypatch, graph)
 
     assert r.status_code == 200
-    assert graph.config["configurable"]["memory_prompt"] == ""
+    assert graph.config["configurable"]["memory_prompt"] != ""
     assert len(_jobs(env)) == 1                                  # 写入这一侧没被关掉
 
 
@@ -331,16 +331,16 @@ def test_a_failed_generation_registers_nothing(env, monkeypatch):
     assert _jobs(env) == []
 
 
-def test_pausing_automatic_writes_registers_nothing_but_still_answers(env, monkeypatch):
+def test_obsolete_write_flag_does_not_disable_enqueue(env, monkeypatch):
     """暂停自动写入:不登记新任务,聊天与召回都不受影响(已排队的任务也不动)。"""
     _seed(env, ABOUT_ME)
-    monkeypatch.setattr(env.settings, "memory_write_enabled", False)
+    monkeypatch.setenv("MEMORY_WRITE_ENABLED", "false")
     graph = FakeGraph()
 
     r = _post(env, monkeypatch, graph)
 
     assert r.status_code == 200
-    assert _jobs(env) == []
+    assert len(_jobs(env)) == 1
     assert ABOUT_ME in graph.config["configurable"]["memory_prompt"]   # 读的那一侧照常
 
 
@@ -385,14 +385,12 @@ def test_an_empty_answer_registers_nothing(env, monkeypatch):
     assert _jobs(env) == []
 
 
-def test_disabling_memory_leaves_chat_untouched(env, monkeypatch):
-    """MEMORY_ENABLED=false:整层静默关闭 —— 不注入、不登记,聊天照常。"""
+def test_unconfigured_shared_database_refuses_authenticated_chat(env, monkeypatch):
+    """认证与记忆共用数据库，缺少连接配置时拒绝请求。"""
     _seed(env, ABOUT_ME)
-    monkeypatch.setattr(env.settings, "memory_enabled", False)
     graph = FakeGraph()
-
-    r = _post(env, monkeypatch, graph)
-
-    assert r.status_code == 200 and r.json()["content"] == ANSWER
-    assert graph.config["configurable"]["memory_prompt"] == ""
-    assert _jobs(env) == []                                      # 一行都没登记
+    with monkeypatch.context() as patch:
+        patch.setattr(env.settings, "mysql_url", "")
+        r = _post(env, patch, graph)
+        assert r.status_code == 503
+    assert _jobs(env) == []

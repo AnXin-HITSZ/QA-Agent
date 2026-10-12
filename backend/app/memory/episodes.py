@@ -17,6 +17,8 @@ PROTOCOL = "source-evidence/1"
 def fingerprint(user_ids, scope):
     digest = hashlib.sha256()
     with db.session_scope() as session:
+        if not inspect(session.connection()).has_table('memory_episodes'):
+            return ''
         rows = session.execute(select(MemoryEpisodeRow.id, MemoryEpisodeRow.generation,
             MemoryEpisodeRow.content_hash, MemoryEpisodeRow.status, MemoryEpisodeRow.expires_at).where(
             MemoryEpisodeRow.user_id.in_(user_ids), MemoryEpisodeRow.scope == scope)
@@ -28,7 +30,7 @@ def fingerprint(user_ids, scope):
 
 def retain(session, *, user_id, scope, turn_id, messages, now, expected_generation=None):
     s = get_settings()
-    if not s.memory_source_store_enabled:
+    if s.memory_source_retention_days <= 0:
         return False
     cleaned, used = [], 0
     for i, msg in enumerate(messages):

@@ -38,10 +38,8 @@ def get_memory_llm() -> MeteredChat:
 
     probe = UsageProbe()          # 与下面的 httpx 客户端同生命周期(闭包持有,不会被回收)
 
-    model_kwargs = {}
-    if s.memory_llm_json_mode:
-        # 要求供应商返回 JSON 对象;结构约束仍由 Pydantic 校验兜底(见模块 docstring)。
-        model_kwargs["response_format"] = {"type": "json_object"}
+    # 固定结构化输出策略，字段与引用仍由 Pydantic 校验。
+    model_kwargs = {"response_format": {"type": "json_object"}}
 
     inner = ChatOpenAI(
         base_url=s.llm_base_url,

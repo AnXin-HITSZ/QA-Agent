@@ -59,6 +59,9 @@ def select_facts(result):
     picked=[]; blocks=[]; used=0; dropped=[]
     diverse=broad_query(result.query)
     remaining=list(enumerate(pool))
+    by_id={h.memory_id:h for h in pool}
+    paths=result.trace.get('graph',{}).get('paths',[])
+    rejected_paths=[]
     while remaining and len(picked)<(result.selection_limit or max(1,s.memory_top_k)):
         def utility(pair):
             rank,hit=pair
@@ -66,17 +69,32 @@ def select_facts(result):
             return 1/(rank+2)*(1-.75*overlap if diverse else 1)
         best=max(remaining,key=utility)
         remaining.remove(best)
-        hit=best[1]; block=render(hit,len(picked)+1)
-        if used+len(block)+(1 if blocks else 0)>max(0,s.memory_context_chars):
-            dropped.append(hit.memory_id);continue
-        blocks.append(block);picked.append(hit);used=len('\n'.join(blocks))
+        hit=best[1]
+        group=next((p['memory_ids'] for p in paths if len(p['memory_ids'])>1 and hit.memory_id in p['memory_ids']),[hit.memory_id])
+        remaining=[pair for pair in remaining if pair[1].memory_id not in group]
+        if any(mid not in by_id for mid in group):
+            rejected_paths.append({'memory_ids':group,'reason':'missing_validated_member'})
+            continue
+        chosen={h.memory_id for h in picked}
+        members=[by_id[mid] for mid in dict.fromkeys(group) if mid not in chosen]
+        new_blocks=[render(h,len(picked)+i+1) for i,h in enumerate(members)]
+        if (len(picked)+len(members)>(result.selection_limit or max(1,s.memory_top_k)) or
+                len('\n'.join(blocks+new_blocks))>max(0,s.memory_context_chars)):
+            dropped.extend(h.memory_id for h in members)
+            if len(group)>1:rejected_paths.append({'memory_ids':group,'reason':'quantity_or_character_budget'})
+            continue
+        blocks.extend(new_blocks);picked.extend(members);used=len('\n'.join(blocks))
     result.hits=picked
     result.source_context='\n'.join(blocks)
     result.counts['final']=len(picked)
     result.trace['selection']={'protocol':PROTOCOL,'body_chars':used,'body_budget':s.memory_context_chars,
-        'dropped_for_budget':dropped,'diversity_heuristic':diverse,'candidate_count':len(pool)}
+        'dropped_for_budget':dropped,'diversity_heuristic':diverse,'candidate_count':len(pool),'rejected_paths':rejected_paths}
     chosen={h.memory_id for h in picked}
     paths=result.trace.get('graph',{}).get('paths',[])
     result.trace['selection']['complete_paths']=[p['memory_ids'] for p in paths if set(p['memory_ids'])<=chosen]
     result.trace['selection']['incomplete_paths']=[p['memory_ids'] for p in paths if set(p['memory_ids'])&chosen and not set(p['memory_ids'])<=chosen]
+    if dropped:
+        result.degraded.append('证据超出上下文预算，已跳过无法完整容纳的记忆')
+    if rejected_paths:
+        result.degraded.append('图证据组合未完整满足校验或预算，未作为完整路径使用')
     return result

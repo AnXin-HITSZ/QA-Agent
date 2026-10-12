@@ -49,7 +49,7 @@ def test_chinese_referring_start_keeps_previous_utterance_without_ascii_word_bou
 
 
 def test_direct_temporal_evidence_skips_source_and_planner(sources,monkeypatch):
-    monkeypatch.setattr(sources.settings,'memory_evidence_selection_enabled',True)
+
     r=search.SearchResult(query='When did Alex travel?',hits=[hit('a','Alex travelled',{'time':{'raw':'yesterday'}})])
     monkeypatch.setattr(episodes,'corpus',lambda *a:pytest.fail('unexpected corpus read'))
     out=adaptive.enrich(r,user_id=U1,scope='',once=lambda *a,**k:pytest.fail('unexpected query'))
@@ -57,7 +57,7 @@ def test_direct_temporal_evidence_skips_source_and_planner(sources,monkeypatch):
 
 
 def test_sources_never_displace_already_selected_facts(sources,monkeypatch):
-    monkeypatch.setattr(sources.settings,'memory_evidence_selection_enabled',True)
+
     ids=_seed(sources,'Alex travelled North','Alex travelled West','Alex travelled South')
     with db.session_scope() as s:items=repo.list_by_ids(s,ids)
     hits=[replace(hit(x.id,x.text),generation=x.generation,content_hash=x.content_hash,meta_version=x.meta_version) for x in items]
@@ -76,10 +76,10 @@ def test_sources_never_displace_already_selected_facts(sources,monkeypatch):
 
 
 def test_opt_in_search_exposes_more_candidates_than_final_limit(search_env,monkeypatch):
-    monkeypatch.setattr(search_env.settings,'memory_evidence_selection_enabled',True)
+
     ids=_seed(search_env,'first topic','second topic','third topic')
     search_env.dense.ids=ids
-    result=search.search(U1,'topic',top_k=1)
+    result=search.search(U1,'topic',top_k=1,capture_trace=True)
     assert len(result.hits)==1 and len(result.candidates)==3 and result.selection_limit==1
     assert result.trace['selection']['body_chars']==len(search.format_evidence(result))
 
@@ -89,11 +89,12 @@ def test_diagnostic_marks_incomplete_path_without_presenting_it_as_complete(sear
         trace={'graph':{'paths':[{'memory_ids':['a','missing']}]}})
     selection.select_facts(r)
     assert not r.trace['selection']['complete_paths']
-    assert r.trace['selection']['incomplete_paths']==[['a','missing']]
+    assert not r.hits
+    assert r.trace['selection']['rejected_paths'][0]['reason']=='missing_validated_member'
 
 
 def test_supplemented_pool_revalidates_deletion_before_final_selection(sources,monkeypatch):
-    monkeypatch.setattr(sources.settings,'memory_evidence_selection_enabled',True)
+
     mid=seed_episode(sources)
     with db.session_scope() as session:item=repo.get_item(session,U1,mid)
     h=replace(hit(mid,item.text),generation=item.generation,content_hash=item.content_hash,meta_version=item.meta_version)

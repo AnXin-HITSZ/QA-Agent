@@ -45,7 +45,7 @@ PROTOCOL_VERSION = "mem-extract/5"
 
 def protocol_version():
     from app.memory.graph import resolve_switches
-    if get_settings().memory_unified_extract_enabled and resolve_switches(get_settings()).write:
+    if resolve_switches(get_settings()).write:
         return "mem-unified-extract/2"
     return PROTOCOL_VERSION
 

@@ -51,12 +51,6 @@ def _require_usable() -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="长期记忆未配置(MYSQL_URL 为空):已存记忆不受影响,配置后重启即可使用",
         )
-    if not get_settings().memory_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=("长期记忆已关闭(MEMORY_ENABLED=false):本次不读也不写记忆;"
-                    "已存数据仍在库里,打开开关即可恢复"),
-        )
 
 
 @contextmanager

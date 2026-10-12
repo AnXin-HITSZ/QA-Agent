@@ -25,8 +25,8 @@ def seed_episode(env, *, scope="", turn="turn", content="Alex: I read The Silver
 
 @pytest.fixture
 def sources(search_env, monkeypatch):
-    monkeypatch.setattr(search_env.settings, "memory_source_store_enabled", True)
-    monkeypatch.setattr(search_env.settings, "memory_source_search_enabled", True)
+    monkeypatch.setattr(search_env.settings, "memory_source_retention_days", 30)
+    monkeypatch.setattr(search_env.settings, "memory_evidence_rounds", 1)
     monkeypatch.setattr(search_env.settings, "memory_evidence_rounds", 1)
     return search_env
 
@@ -93,11 +93,11 @@ def test_manual_edit_revokes_raw_source_and_retry_cannot_restore(sources):
 
 
 def test_retroactive_import_cannot_restore_never_retained_edited_source(sources,monkeypatch):
-    monkeypatch.setattr(sources.settings,"memory_source_store_enabled",False)
+    monkeypatch.setattr(sources.settings,"memory_source_retention_days",0)
     mid=seed_episode(sources)
     with db.session_scope() as session:
         repo.update_item(session,user_id=U1,memory_id=mid,new_text="corrected",actor="user",now=db.utc_naive())
-    monkeypatch.setattr(sources.settings,"memory_source_store_enabled",True)
+    monkeypatch.setattr(sources.settings,"memory_source_retention_days",30)
     with db.session_scope() as session:
         assert not episodes.retain(session,user_id=U1,scope="",turn_id="turn",now=db.utc_naive(),
             messages=[{"role":"user","content":"old source"}])
@@ -165,10 +165,10 @@ def test_supplemental_facts_share_budget_even_without_raw_snippets(sources,monke
     rows=[(mid,1.,1.,1,None,"rerank") for mid in ids]
     hits,_=search._finalize(rows,limit=3,budget=1000,snapshots=snapshots)
     monkeypatch.setattr(completion,"plan",lambda *a:completion.Plan(need_more=True,queries=["more"],missing=["other facts"]))
-    result=completion.enrich(search.SearchResult(query="original",hits=hits[:1]),user_id=U1,scope="",
+    result=completion.enrich(search.SearchResult(query="list all facts",hits=hits[:1]),user_id=U1,scope="",
         once=lambda *a,**kw:search.SearchResult(query="more",hits=hits[1:]))
     assert len(search.format_evidence(result))<=300
-    assert result.trace["completion"]["fact_budget_dropped"]
+    assert result.trace["selection"]["dropped_for_budget"]
 
 
 def test_source_recall_handles_inflections_without_using_speaker_as_main_topic(sources):

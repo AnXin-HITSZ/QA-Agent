@@ -54,7 +54,7 @@ def source_view(item):
 
 def enrich(result,*,user_id,scope,once):
     s=get_settings()
-    if not s.memory_source_search_enabled or s.memory_evidence_rounds<=0:return result
+    if s.memory_evidence_rounds<=0:return result
     from app.memory.evidence_retrieval import candidates,plan
     from app.memory.search import format_evidence
     needed,reason=needs_completion(result)
