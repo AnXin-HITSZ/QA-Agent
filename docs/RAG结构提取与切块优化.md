@@ -1,7 +1,7 @@
 # RAG 结构提取与切块优化
 
-本轮在 `codex/rag-improvements` 隔离 worktree 中实现，基线提交为
-`17fc35412cc4f42a01ac889e7c647f89944fefdb`。不修改主工作区，不连接真实服务。
+初始实现位于 `codex/rag-improvements` 隔离 worktree，基线提交为
+`17fc35412cc4f42a01ac889e7c647f89944fefdb`，随后合入最新主分支并迁移回主项目。
 原件内容识别是否完整、正确不属于本轮范围；命名 few-shot 和用户可用的 payload
 过滤查询仍是另行待办。
 
@@ -102,3 +102,23 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 新增离线测试覆盖 Word 顺序、Excel 合并表头、Markdown 结构、PPT 标题传播、正文覆盖与边界、
 框架预算、邻块版本一致性、去重与引用元数据，以及提取失败保住旧索引。
 离线测试不能证明真实语料的语义召回率提高；真实 Embedding/OCR、复杂文件样本及 Redis/Qdrant 远端联调尚需验证。
+
+## 合并后的真实开发环境冒烟（2026-10-12）
+
+主项目已快进至 `d4300f1`，保留原有未提交文档；本机 `.env` 已补齐缺少的 RAG 参数，未覆盖凭证。
+获用户授权后执行 `scripts/rag_live_smoke.py --allow-paid`，run_id 为 `e6891f3259ae`。
+报告保存在 `backend/data/rag-live-smoke/e6891f3259ae/report.json`（忽略目录，不提交凭证或运行数据）。
+
+- 真实 MySQL 开发库临时账号登录、匿名接口拒绝访问通过。
+- 真实 OSS 上传合成 PDF/Markdown，Redis 缓存、Qdrant 独立集合、Embedding、索引任务发布通过。
+- 原生索引产生 5 个向量；重复索引点数不变，调用日志确认第二次无付费索引请求。
+- 合成图片真实阿里云 OCR 与向量化通过；第二次识别命中缓存，调用日志无新增付费索引请求。
+- 真实语义检索返回 PDF 第 1、2 页；LLM 同步回答正确给出 Manager Lin，返回页码来源。
+- SSE 正常收到 done 与 PDF 页码；Vite 页面访问和代理至真实后端的登录通过。
+- 测试集合、合成原件及其缓存/登记、临时用户与会话/记忆任务已清理；临时服务已停止。
+- 索引任务日志合计 4 次外部请求（3 次 Embedding、1 次 OCR），重复任务各 0 次。
+  此数不包含查询 Embedding 与聊天 LLM；日志金额是估算，不是官方账单。
+
+脚本使用随机空闲本地端口、独立 OSS 前缀/集合/状态目录，拒绝非开发/测试 MySQL 库。
+通过真实 HTTP 路由和认证，但刻意不执行应用全局 lifespan、后台记忆 worker 或共享待办注入，
+以免处理其他用户任务；不据此宣称全局启动流程已验收。合成样本也不能代替真实语料质量评测。
