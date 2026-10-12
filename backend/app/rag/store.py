@@ -36,6 +36,7 @@ from qdrant_client.models import (
     Filter,
     FilterSelector,
     MatchValue,
+    MatchAny,
     PointStruct,
     ScoredPoint,
     VectorParams,
@@ -387,10 +388,10 @@ def indexed_keys(prefix: str = "") -> set[str]:
     return keys
 
 
-def search(query_vector: list[float], top_k: int = 5) -> list[ScoredPoint]:
+def search(query_vector: list[float], top_k: int = 5, *, collection: str | None = None) -> list[ScoredPoint]:
     """按向量检索当前生效集合,返回命中(含 payload 与 score),按相关度降序。"""
     client = get_client()
-    name = ensure_collection()
+    name = collection or ensure_collection()
     result = client.query_points(
         collection_name=name,
         query=query_vector,
@@ -398,3 +399,19 @@ def search(query_vector: list[float], top_k: int = 5) -> list[ScoredPoint]:
         with_payload=True,
     )
     return result.points
+
+
+def adjacent_chunks(payload: dict, *, collection: str, radius: int = 1) -> list[dict]:
+    """邻块与召回固定在同一集合；不跨文件内容版本或章节，不读 OSS 最新正文。"""
+    index = payload.get("chunk_index")
+    if radius <= 0 or not isinstance(index, int) or not payload.get("oss_key"):
+        return []
+    indices = [i for i in range(max(0, index - radius), index + radius + 1) if i != index]
+    filters = [FieldCondition(key="oss_key", match=MatchValue(value=payload["oss_key"])),
+               FieldCondition(key="chunk_index", match=MatchAny(any=indices))]
+    if payload.get("content_sha256"):
+        filters.append(FieldCondition(key="content_sha256", match=MatchValue(value=payload["content_sha256"])))
+    records, _ = get_client().scroll(collection_name=collection, scroll_filter=Filter(must=filters),
+                                    limit=len(indices), with_payload=True, with_vectors=False)
+    return [p.payload for p in records if p.payload and p.payload.get("section_path", []) == payload.get("section_path", [])
+            and p.payload.get("chunking_version") == payload.get("chunking_version")]

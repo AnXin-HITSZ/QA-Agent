@@ -192,6 +192,8 @@ def kb_env(cache_env, monkeypatch, tmp_path):
     monkeypatch.setattr(oss, "knowledge_store", lambda: kb)
     monkeypatch.setattr(store, "get_client", lambda: client)
     monkeypatch.setattr(ingest, "get_embeddings", lambda: embeddings)
+    # 路由依赖预检也必须打桩；不能依赖开发机 .env 中碰巧有真实 API key。
+    monkeypatch.setattr("app.api.routes.knowledge.get_embeddings", lambda: embeddings)
 
     return SimpleNamespace(kb=kb, qdrant=client, embeddings=embeddings, cache=cache_env,
                            cache_dir=tmp_path / "ocr", settings=s)

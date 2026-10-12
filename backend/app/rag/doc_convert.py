@@ -25,9 +25,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# 单次转换的最长等待(秒)。LibreOffice 首次启动要几秒,大文件更久;超时按失败记录。
+# Default retained for existing offline conversion helpers; runtime uses Settings.
 CONVERT_TIMEOUT_SECONDS = 90.0
 
+# 单次转换的最长等待(秒)。LibreOffice 首次启动要几秒,大文件更久;超时按失败记录。
 # 见模块 docstring:串行化转换,避免多个 LibreOffice 实例互相顶掉。
 _convert_lock = threading.Lock()
 
@@ -50,6 +51,8 @@ def _brief(raw: bytes) -> str:
 def doc_to_docx(data: bytes) -> tuple[bytes | None, str | None]:
     """把 .doc 字节转成 .docx 字节;成功 (docx, None),失败 (None, 原因),不抛异常。"""
     exe = soffice_bin()
+    from app.config import get_settings
+    timeout = get_settings().doc_convert_timeout_seconds
     if not exe:
         return None, (
             "unsupported: .doc 老格式需 LibreOffice 转换,当前机器未安装"
@@ -71,9 +74,9 @@ def doc_to_docx(data: bytes) -> tuple[bytes | None, str | None]:
                 str(src),
             ]
             try:
-                proc = subprocess.run(cmd, capture_output=True, timeout=CONVERT_TIMEOUT_SECONDS)
+                proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
             except subprocess.TimeoutExpired:
-                return None, f"doc 转换失败: LibreOffice 超时(>{CONVERT_TIMEOUT_SECONDS:.0f}s)"
+                return None, f"doc 转换失败: LibreOffice 超时(>{timeout:.0f}s)"
             except OSError as exc:
                 return None, f"doc 转换失败: 无法启动 LibreOffice: {exc}"
 

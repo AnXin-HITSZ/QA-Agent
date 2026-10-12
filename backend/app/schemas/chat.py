@@ -17,6 +17,10 @@ class SourceCitation(BaseModel):
     category: str | None = Field(default=None, description="所属分类前缀")
     score: float | None = Field(default=None, description="与问题的相关度(余弦相似度)")
     url: str | None = Field(default=None, description="短时效签名下载 URL(默认 15 分钟过期);OSS 未配置时为 None")
+    page_numbers: list[int] = Field(default_factory=list, description="检索证据覆盖的 PDF 页码；不是逐句引用")
+    chunk_indices: list[int] = Field(default_factory=list)
+    section_paths: list[list[str]] = Field(default_factory=list)
+    truncated: bool = False
 
 
 class ChatResponse(BaseModel):

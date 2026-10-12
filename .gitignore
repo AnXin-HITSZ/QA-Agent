@@ -15,6 +15,7 @@ __pycache__/
 venv/
 env/
 .pytest_cache/
+.rag-test-*/
 *.egg-info/
 .mypy_cache/
 .ruff_cache/

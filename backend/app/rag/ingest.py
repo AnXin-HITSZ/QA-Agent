@@ -50,11 +50,10 @@ from app.rag.document_extract import (
 )
 from app.rag.embeddings import get_embeddings
 from app.rag.metadata import parse_metadata
+from app.rag.chunking import Chunk, pack_units, strategy_signature
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_CHARS = 1000       # 单块目标字符数(中文约等于 token 数,远低于 8192 上限)
-_CHUNK_OVERLAP = 150      # 硬切超长块时的重叠字符数,避免跨块语义断裂
 _UPSERT_BATCH = 128       # 每批 upsert 的向量点数
 SKIP_CAP = 200            # 响应里 skipped 明细的上限(避免超大响应)
 FILE_CAP = 5000           # 任务文件明细上限(超出截断并标记)
@@ -106,13 +105,6 @@ class Scope:
 
 
 @dataclass
-class Chunk:
-    text: str
-    pages: tuple[int, ...] = ()
-    from_fields: bool = False
-
-
-@dataclass
 class Prepared:
     """一份原件准备结果(下载 + 提取 + 切块,尚未向量化)。"""
 
@@ -147,43 +139,9 @@ class Prepared:
 
 # ---- 切块 ----
 
-def _pack_units(units: list[TextUnit], size: int = _CHUNK_CHARS,
-                overlap: int = _CHUNK_OVERLAP) -> list[Chunk]:
-    """把自然单元(页 / 段)打成 ≤size 的切块,并保留每块覆盖的页码。
-
-    单块超长时按字符硬切(带重叠);此时页码取该单元自己的页码,不跨页乱标。
-    """
-    chunks: list[Chunk] = []
-    buf = ""
-    pages: set[int] = set()
-    fields = False
-
-    def flush() -> None:
-        nonlocal buf, pages, fields
-        if buf:
-            chunks.append(Chunk(buf, tuple(sorted(pages)), fields))
-        buf, pages, fields = "", set(), False
-
-    for u in units:
-        text = (u.text or "").strip()
-        if not text:
-            continue
-        if len(text) >= size:
-            flush()
-            step = max(1, size - overlap)
-            for i in range(0, len(text), step):
-                piece = text[i: i + size]
-                if piece:
-                    chunks.append(Chunk(piece, (u.page,) if u.page else (), u.from_fields))
-            continue
-        if buf and len(buf) + 1 + len(text) > size:
-            flush()
-        buf = f"{buf}\n{text}" if buf else text
-        if u.page:
-            pages.add(u.page)
-        fields = fields or u.from_fields
-    flush()
-    return chunks
+def _pack_units(units: list[TextUnit], size: int | None = None,
+                overlap: int | None = None, *, source: str = "") -> list[Chunk]:
+    return pack_units(units, size, overlap, source=source)
 
 
 def _category_of(key: str) -> str:
@@ -216,6 +174,16 @@ def build_points(key: str, chunks: list[Chunk], *, content_sha256: str, ext: str
             "extraction_version": extraction_version,
             "index_version": index_version,
             "recognized_fields": bool(ch.from_fields),
+            "body": ch.body or ch.text,
+            "section_path": list(ch.section),
+            "unit_kind": ch.kind,
+            "text_start": ch.start,
+            "text_end": ch.end,
+            "offset_version": "extracted-v2",
+            "chunking_version": strategy_signature(),
+            "frame_header": ch.frame_header,
+            "frame_footer": ch.frame_footer,
+            "context_prefix": ch.text[:len(ch.text) - len(ch.frame_header + (ch.body or ch.text) + ch.frame_footer)],
         }
         payload.update(meta)
         payloads.append(payload)
@@ -292,7 +260,7 @@ def prepare_file(kb, key: str, opts: Options) -> Prepared:
         prep.status = "failed" if _is_failure(res) else "skipped"
         prep.reason = reason
         return prep
-    chunks = _pack_units(res.units)
+    chunks = _pack_units(res.units, source=key)
     if not chunks:
         prep.status, prep.reason = "skipped", "empty:切块后为空"
         return prep
@@ -362,7 +330,8 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
     targets, missing = scope_files(kb, scope)   # 先验 OSS 通 + 固定清单
     embeddings = get_embeddings()               # 先验 embeddings 已配(fail-fast)
     ensure_available()                          # 再验缓存可用(fail-fast,§9)
-    store.ensure_collection()                   # 首次部署:先有一个空的生效集合可复制
+    active = store.ensure_collection()          # 固定本次重建的旧版本
+    previously_indexed = store.keys_in(active)
     version = store.create_staging()
     record_id = job_id or version               # 清单阶段记录的标识
     logger.info("索引任务开始:范围 %s → 候选集合 %s(目标 %d 个文件,提取方式 %s)",
@@ -378,7 +347,7 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
         copied_keys.add(k)
         return True
 
-    copied, dropped = store.copy_points(store.active_collection(), version, keep)
+    copied, dropped = store.copy_points(active, version, keep)
 
     details: list[dict] = []
     totals = {"total_files": len(targets) + len(missing), "indexed_files": 0,
@@ -401,6 +370,10 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
                 logger.warning("文件 %s 遇到瞬时故障(%s),%d 秒后重试", key, prep.reason, 2)
                 time.sleep(2)
                 prep = prepare_file(kb, key, opts)
+
+            if prep.status == "skipped" and key in previously_indexed:
+                prep.status = "failed"
+                prep.reason = "existing_index_preserved:已有索引文件本次无法提取，拒绝发布；" + (prep.reason or "")
 
             for k in ("total", "ok", "blank", "failed", "cached"):
                 pages[k] += prep.pages[k]
@@ -487,8 +460,8 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
     # 发布前把"复制进来但已被删除"的旧文件剔掉,避免新版本复活已删除内容
     gone = sorted(k for k in copied_keys if not kb.object_exists(k))
     for k in gone:
-        store.delete_by_oss_key(k, collection=version)
-        summary["copied_out_of_scope"] -= 1
+        removed = store.delete_by_oss_key(k, collection=version)
+        summary["copied_out_of_scope"] -= removed
     if gone:
         logger.info("候选集合剔除 %d 个已被删除的旧文件:%s", len(gone), gone[:5])
 
@@ -530,7 +503,7 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
 def _strategy_version() -> str:
     from app.rag.document_extract import EXTRACTION_VERSION
     from app.rag.ocr_cache import TEXT_RULES_VERSION
-    return f"{EXTRACTION_VERSION}.{TEXT_RULES_VERSION}"
+    return f"{EXTRACTION_VERSION}.{TEXT_RULES_VERSION}.chunk-{strategy_signature()}"
 
 
 # ---- 单文件清理 ----

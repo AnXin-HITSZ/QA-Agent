@@ -113,6 +113,9 @@ function actLabel(a: ToolActivity): string {
             <span class="src__off">链接不可用</span>
           </span>
           <span v-if="s.category" class="src__cat">{{ s.category }}</span>
+          <span v-if="s.page_numbers?.length" class="src__cat">第 {{ s.page_numbers.join('、') }} 页</span>
+          <span v-if="s.section_paths?.length" class="src__cat" :title="s.section_paths.map(p => p.join(' > ')).join('；')">{{ s.section_paths.map(p => p.join(' > ')).join('；') }}</span>
+          <span v-if="s.truncated" class="src__off">片段已截断</span>
           <span v-if="s.score != null" class="src__score">{{ s.score.toFixed(2) }}</span>
         </li>
       </ul>
@@ -280,6 +283,7 @@ height: 6px;
 }
 .src {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   font-size: 13px;

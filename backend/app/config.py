@@ -3,7 +3,7 @@
 import logging
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,33 @@ class Settings(BaseSettings):
     qdrant_url: str = ""  # 例:http://<ECS-IP>:6333;为空则 RAG 不可用
     qdrant_api_key: str = ""
     qdrant_collection: str = "lab_knowledge"
+
+    # RAG 切块预算包含来源与章节前缀；token 使用 UTF-8 字节保守上界，避免依赖模型分词器。
+    rag_chunk_chars: int = Field(default=1000, ge=128, le=16000)
+    rag_chunk_tokens: int = Field(default=2048, ge=128, le=32768)
+    rag_chunk_overlap: int = Field(default=150, ge=0)
+    rag_table_chunk_chars: int = Field(default=1400, ge=128, le=16000)
+    rag_code_chunk_chars: int = Field(default=1600, ge=128, le=16000)
+    rag_retrieval_candidates: int = Field(default=30, ge=1, le=200)
+    rag_neighbor_radius: int = Field(default=1, ge=0, le=3)
+    rag_context_chars: int = Field(default=12000, ge=256, le=100000)
+    rag_context_tokens: int = Field(default=16000, ge=256, le=200000)
+    rag_excel_header_rows: int = Field(default=0, ge=0, le=4)  # 0=检测合并区域，1..4=显式行数
+    rag_duplicate_overlap: float = Field(default=0.8, gt=0, le=1)
+    rag_duplicate_min_chars: int = Field(default=50, ge=1, le=1000)
+    rag_top_k: int = Field(default=5, ge=1, le=20)
+    rag_score_threshold: float = Field(default=0.2, ge=-1, le=1)
+    rag_min_boundary_ratio: float = Field(default=0.5, gt=0, le=1)
+    rag_detect_plain_headings: bool = True
+    rag_blank_pixel_level: int = Field(default=200, ge=1, le=255)
+    rag_blank_dark_ratio: float = Field(default=0.0005, ge=0, le=1)
+    doc_convert_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
+
+    @model_validator(mode="after")
+    def validate_rag_strategy(self):
+        if self.rag_chunk_overlap >= min(self.rag_chunk_chars, self.rag_table_chunk_chars, self.rag_code_chunk_chars):
+            raise ValueError("RAG_CHUNK_OVERLAP 必须小于各类切块字符预算")
+        return self
 
     # ---- 阿里云 OSS(RAG 原件仓库:存原始文档 blob,私有桶)----
     # 原件存 OSS(唯一事实源,抗 ECS 重建),ECS 的 Qdrant 只放向量 + 元数据。

@@ -68,5 +68,18 @@ def used_sources(messages: list, top_n: int = 5) -> list[dict]:
             score = hit.get("score") or 0.0
             prev = best.get(key)
             if prev is None or score > (prev.get("score") or 0.0):
-                best[key] = hit
+                chosen = dict(hit)
+            else:
+                chosen = dict(prev)
+            chosen["page_numbers"] = sorted({n for row in (prev or {}, hit)
+                                              for n in row.get("page_numbers", []) if isinstance(n, int) and n > 0})
+            chosen["chunk_indices"] = sorted({n for row in (prev or {}, hit)
+                                               for n in row.get("chunk_indices", [row.get("chunk_index")])
+                                               if isinstance(n, int) and n >= 0})
+            paths = list((prev or {}).get("section_paths") or [])
+            if hit.get("section_path") and hit["section_path"] not in paths:
+                paths.append(hit["section_path"])
+            chosen["section_paths"] = paths
+            chosen["truncated"] = bool((prev or {}).get("truncated") or hit.get("truncated"))
+            best[key] = chosen
     return sorted(best.values(), key=lambda h: h.get("score") or 0.0, reverse=True)[:top_n]

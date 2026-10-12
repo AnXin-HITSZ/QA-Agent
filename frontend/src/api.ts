@@ -19,6 +19,10 @@ export interface Source {
   category: string | null; // 所属分类前缀
   score: number | null; // 与问题的相关度(余弦相似度)
   url: string | null; // 15 分钟有效的签名下载 URL;为 null 时不可点
+  page_numbers?: number[];
+  chunk_indices?: number[];
+  section_paths?: string[][];
+  truncated?: boolean;
 }
 
 export interface SopImageReference {

@@ -44,10 +44,7 @@ IMAGE_EXTS = frozenset({"png", "jpg", "jpeg"})
 # 深色像素占比低于此值 → 判为空白页(扫描件里真正的空白页墨点极少)。
 # 阈值取 0.05%:200 DPI 的 A4 约等于 1900 个深色像素 —— 空白页的噪点够不着,
 # 但是哪怕只有一行短文字也会超过它,不会把"内容很少"的页误判成空白。
-_BLANK_DARK_RATIO = 0.0005
-_BLANK_PIXEL_LEVEL = 200  # 灰度低于它算「深色」
-
-EXTRACTION_VERSION = "1"  # 逐页提取策略版本,写进切块 payload 便于追溯
+EXTRACTION_VERSION = "2"  # 结构化 Office/Markdown 提取；重建后生效
 
 
 def effective_mode(extraction_mode: str, mixed_invoice: bool = False) -> str:
@@ -89,6 +86,8 @@ class TextUnit:
     page: int | None
     text: str
     from_fields: bool = False   # 文本来自专用接口的结构化字段(票据 / 付款详情)
+    section: tuple[str, ...] = ()
+    kind: str = "paragraph"
 
 
 @dataclass
@@ -156,8 +155,9 @@ def looks_blank(png: bytes) -> bool:
     total = sum(hist)
     if not total:
         return True
-    dark = sum(hist[:_BLANK_PIXEL_LEVEL])
-    return dark / total < _BLANK_DARK_RATIO
+    settings = get_settings()
+    dark = sum(hist[:settings.rag_blank_pixel_level])
+    return dark / total < settings.rag_blank_dark_ratio
 
 
 # ---- 原生 PDF 逐页 ----
@@ -304,7 +304,9 @@ def _extract_other(data: bytes, filename: str, mode: str, ext: str) -> DocumentR
                             error=res.error, extraction_version=f"native:{EXTRACTION_VERSION}")
     if mode != NATIVE_ONLY and not res.error:
         result.warnings.append("该格式不支持 OCR,已按原生文本抽取")
-    if res.text:
+    if res.units:
+        result.units = [TextUnit(u.page, u.text, section=u.section, kind=u.kind) for u in res.units]
+    elif res.text:
         result.units = [TextUnit(None, u) for u in (res.blocks or [res.text]) if u and u.strip()]
     else:
         result.needs_ocr = res.needs_ocr

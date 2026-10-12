@@ -70,12 +70,13 @@ def read_sop_image(skill_id: str, image_ids: list[str]):
 
 
 @tool(response_format="content_and_artifact")
-def search_knowledge(query: str, top_k: int = 5):
+def search_knowledge(query: str, top_k: int | None = None):
     """检索实验室知识库,返回与问题最相关的资料片段(带来源),供你据此作答。
 
     何时用:用户的问题需要实验室内部资料 / 文档 / 制度 / 数据支撑,而你并不确定答案时,
     先用它查库,再依据返回的片段回答;检索不到再据常识回答并说明「知识库中未找到」。
     query:用户问题或检索关键词。
+    top_k:可选的主命中数量；不传则使用系统配置。
     返回按相关度排序的资料片段(含来源文件名);引用来源(可点链接)由系统自动附到回答里,
     你无需在正文里罗列 URL。
     """

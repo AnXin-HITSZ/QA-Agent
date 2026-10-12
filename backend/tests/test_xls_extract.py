@@ -103,6 +103,23 @@ def test_multiple_sheets_keep_their_names(fake_xlrd):
     assert res.blocks == ["[表: 一月]", "x: 1", "[表: 二月]", "x: 2"]
 
 
+def test_explicit_multilevel_headers(fake_xlrd, monkeypatch):
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "rag_excel_header_rows", 2)
+    fake_xlrd([FakeSheet("经费", [["金额"], ["预算"], [5000.0]])])
+    result = extract(b"dummy", "a.xls")
+    assert result.blocks == ["[表: 经费]", "金额 / 预算: 5000"]
+    assert result.units[-1].section[0] == "工作表: 经费"
+
+
+def test_merged_multilevel_headers(fake_xlrd):
+    sheet = FakeSheet("预算", [["项目", "经费", ""], ["", "预算", "支出"], ["仪器", 5000, 1200]])
+    sheet.merged_cells = [(0, 2, 0, 1), (0, 1, 1, 3)]
+    fake_xlrd([sheet])
+    result = extract(b"dummy", "a.xls")
+    assert "经费 / 预算: 5000" in result.text and "经费 / 支出: 1200" in result.text
+
+
 # ---- 依赖与坏文件 ----
 
 def test_missing_xlrd_still_marks_unsupported(monkeypatch):

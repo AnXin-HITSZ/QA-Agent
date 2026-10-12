@@ -111,6 +111,10 @@ def _sign_sources(hits: list[dict]) -> list[SourceCitation]:
                 category=h.get("category"),
                 score=h.get("score"),
                 url=url,
+                page_numbers=h.get("page_numbers") or [],
+                chunk_indices=h.get("chunk_indices") or [],
+                section_paths=h.get("section_paths") or [],
+                truncated=bool(h.get("truncated")),
             )
         )
     return out
