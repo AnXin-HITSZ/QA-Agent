@@ -223,3 +223,13 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_pro
 - **开关与数据无关**：`MEMORY_GRAPH_ENABLED` 默认关闭，不连接 Neo4j、不提取或召回图；编辑与删除仍检查既有图关联并登记持久化清理意图，重新开启后台后补做。
 - **回滚**：`0009_memory_graph_tables.down.sql` 直接 DROP 这七张表，会丢掉图数据（实体 / 别名 / 提及 / 关系 / 事件 / 参与者 / 来源绑定）。图数据不是不可再生的（事实以 `memory_items` 为准，可从固定记忆受控回填），但需要代码也回到不使用图元素的版本；生产库应用过 0009 后不要轻易回滚。
 - **离线看护**：`tests/test_memory_graph_migration.py` 把模型与这份 SQL 逐项比对（列 / 类型 / 可空 / 主键 / 唯一键 / 索引），并钉死「同名 ≠ 同一实体（无名字唯一键）」「未消歧可表示（entity_id 可空）」「事实绑定有效版本（memory_revision NOT NULL）」三条设计。
+
+## 0010：可选原始用户来源片段
+
+新增 memory_episodes（模型 app/memory/tables.py）。需迁移后才能开启 MEMORY_SOURCE_STORE_ENABLED / MEMORY_SOURCE_SEARCH_ENABLED。默认关闭，应用启动不建表。仅开发库于2026-10-12实际执行；生产未迁移。
+
+up 使用 CREATE TABLE，非幂等；执行前核验目标库和表是否存在，使用迁移账号而非提升应用账号权限。down 删除全部来源片段，先关闭相关开关。普通记忆编辑/删除保守撤销来源轮次，purge 连同片段清除；限期保留与空正文幂等标识见 docs/来源回查与统一抽取技术方案及验证.md。
+
+离线模型与SQL对比由 test_memory_migration.py 覆盖；真实效果评测另行报告。
+
+0010 不单独指定 COLLATE，与既有记忆表一样使用 MySQL 的 utf8mb4 默认排序规则。首次开发库验证发现指定 unicode_ci 会与既有 0900_ai_ci 的 turn_id 关联发生错误1267；开发库已对齐。已有错误排序规则的安装应先查 information_schema.COLUMNS，确认全部关联字段及目标库，再用迁移权限对齐 memory_episodes，不能盲目修改既有权威表。只读真实检查入口为 test_memory_episodes_mysql.py；没有测试连接时明确跳过。

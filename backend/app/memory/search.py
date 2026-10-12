@@ -96,6 +96,8 @@ class Evidence:
     fact_context: dict = field(default_factory=dict)
     context_text: str = ""
     meta_version: int = 0
+    generation: int = 0
+    content_hash: str = ""
 
 
 @dataclass
@@ -106,6 +108,9 @@ class SearchResult:
     counts: dict[str, int] = field(default_factory=dict)
     trace: dict = field(default_factory=dict)  # 显式诊断时保存排名，不进入回答上下文
     error: str = ""                 # 整体不可用(两路都失败)时的原因;非空即没有可用证据
+    source_context: str = ""        # optional bounded original-source evidence, not facts
+    candidates: list[Evidence] = field(default_factory=list)  # opt-in bounded, validated rerank pool
+    selection_limit: int = 0
 
     @property
     def ok(self) -> bool:
@@ -136,6 +141,19 @@ def profile_for(task: str) -> SearchProfile:
 
 
 def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | None = None,
+           scope: str = SCOPE_FORMAL, purpose: str = PURPOSE_MEMORY_SEARCH,
+           capture_trace: bool = False) -> SearchResult:
+    result = _search_once(user_id, query, task=task, top_k=top_k, scope=scope,
+                          purpose=purpose, capture_trace=capture_trace)
+    if task == TASK_ANSWER and not result.error and result.query and user_id:
+        from app.memory.evidence_retrieval import enrich
+        result = enrich(result, user_id=user_id, scope=scope, once=_search_once)
+    if not capture_trace:
+        result.trace = {}
+    return result
+
+
+def _search_once(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | None = None,
            scope: str = SCOPE_FORMAL, purpose: str = PURPOSE_MEMORY_SEARCH,
            capture_trace: bool = False) -> SearchResult:
     """检索该用户**在本作用域内**的记忆;环境故障降级而不抛(聊天侧只做最便宜的一次调用)。
@@ -249,6 +267,23 @@ def search(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: int | No
                                  snapshots=snapshots, trace=trace)
     if rerank_note:
         result.degraded.append(rerank_note)
+
+    if task == TASK_ANSWER:
+        from app.memory.evidence_selection import select_facts
+        result.trace['graph']=graph  # internal path protection also applies without exported diagnostics
+        result.candidates, note = _finalize(ranked, limit=max(1,limit,profile.rerank_k,get_settings().memory_rerank_max_docs),
+                                          budget=10**9, snapshots=snapshots)
+        result.selection_limit = max(1,limit)
+        if note:
+            result.degraded.append(note)
+        select_facts(result)
+        if trace is not None:
+            trace["ranked"]=[{"memory_id":r[0],"rank":i,"score":r[1],"origin":r[5]}
+                             for i,r in enumerate(ranked,1)]
+            trace["final"]=[h.memory_id for h in result.hits]
+        result.counts.update(rerank_in=min(len(rerank_fused),rerank_profile.rerank_k),
+                             final=len(result.hits),rerank_out=sum(h.origin=="rerank" for h in result.hits))
+        return result
 
     # Keep a supported path together when its highest-ranked member is selected.
     # Never exceed the existing top_k or text budget; explain rejected bundles.
@@ -667,6 +702,9 @@ def _finalize(ranked, *, limit: int, budget: int, snapshots: dict) -> tuple[list
             cut = True
             trimmed = True
         metadata = context_label(item.fact_context)
+        if (item.fact_context or {}).get("structured_graph"):
+            from app.memory.unified_extract import precise_label
+            metadata += precise_label(item.fact_context)
         metadata_room = max(0, room - len(text))
         if len(metadata) > metadata_room:
             metadata = metadata[:metadata_room]
@@ -676,7 +714,8 @@ def _finalize(ranked, *, limit: int, budget: int, snapshots: dict) -> tuple[list
                              rrf=float(rrf), vector_rank=dense_rank, bm25_rank=keyword_rank,
                              updated_at=item.updated_at, thread_id=item.thread_id,
                              revision=item.revision, trimmed=cut, kind=item.kind,
-                             event_time=item.event_time, fact_context=item.fact_context, context_text=metadata, meta_version=item.meta_version))
+                             event_time=item.event_time, fact_context=item.fact_context, context_text=metadata,
+                             meta_version=item.meta_version, generation=item.generation, content_hash=item.content_hash))
     notes = [DEGRADE_BUDGET] if trimmed else []
     if changed:
         notes.append("检索期间记忆已变化，已丢弃版本不一致的候选")
@@ -688,6 +727,8 @@ from app.memory.temporal import context_label
 
 def format_evidence(result: SearchResult) -> str:
     """把证据拼成给 LLM 的参考块(明确标注是参考数据,不是指令,也不能当权限)。"""
+    if result.source_context:
+        return result.source_context
     if not result.hits:
         return ""
     blocks = []

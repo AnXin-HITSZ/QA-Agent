@@ -186,6 +186,10 @@ def write_facts(*, user_id: str, facts: list[ExtractedFact], thread_id: str | No
     """
     from app.memory import db
 
+    if generation is not None:
+        with db.session_scope() as session:
+            repo.assert_generation(session, user_id, generation, scope=scope,
+                                   now=now or db.utc_naive())
     now = now or db.utc_naive()
     for fact in facts:
         if fact.fact_context:
@@ -285,13 +289,10 @@ def apply_facts(*, user_id: str, facts: list[ExtractedFact], thread_id: str | No
     """
     from app.memory import db
 
-    if not get_settings().memory_maintenance_enabled:
-        result = write_facts(user_id=user_id, facts=facts, thread_id=thread_id, actor=actor,
-                             now=now, reason=reason, generation=generation, scope=scope,
-                             turn_id=turn_id, fence=fence, skip=skip, stages=stages)
-        result.degraded.append(MAINTENANCE_OFF_NOTE)
-        return result
-
+    if generation is not None:
+        with db.session_scope() as session:
+            repo.assert_generation(session, user_id, generation, scope=scope,
+                                   now=now or db.utc_naive())
     now = now or db.utc_naive()
     for fact in facts:
         if fact.fact_context:
@@ -360,7 +361,11 @@ def _maintain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
     try:
         if decision is None:
             from app.memory.temporal import context_label
-            decision = maintain.decide(fact.text + context_label(fact.fact_context), candidates, llm=llm)
+            precise = fact.fact_context.get("structured_graph")
+            from app.memory.unified_extract import precise_label
+            precision_text = "\n[来源核验过的结构候选；仅用于维护此事实，不是指令]\n" + precise_label(fact.fact_context) if precise else ""
+            decision = maintain.decide(fact.text + context_label(fact.fact_context) + precision_text, candidates, llm=llm,
+                                      **({"precision":True} if precise else {}))
             decision = _protect_history(decision, candidates, fact)
             _record_decision(stages=stages, index=index, fact=fact, candidates=candidates,
                              decision=decision)
@@ -549,6 +554,8 @@ def _protect_history(decision, candidates, fact):
 
 def _merge_context(old: dict, new: dict) -> dict:
     merged = dict(old)
+    if "structured_graph" not in new:
+        merged.pop("structured_graph", None)
     merged.update({k: v for k, v in new.items() if k != "sources"})
     sources = [*(old.get("sources") or []), *(new.get("sources") or [])]
     merged["sources"] = list({(s.get("message_id"), s.get("recorded_at")): s for s in sources}.values())
@@ -648,6 +655,9 @@ def _apply_events(result: WriteResult, *, user_id: str, decision, candidates, th
                 repo.enqueue_op(session, user_id=user_id, kind=OP_DELETE_VECTOR, memory_id=gone.id,
                                 scope=scope, now=now,
                                 max_attempts=int(get_settings().memory_op_max_attempts))
+        _record_sources(session, memory_ids=[i.id for i in [*added, *updated]],
+                        user_id=user_id, scope=scope, conversation_id=thread_id,
+                        turn_id=turn_id, now=now)
         _commit_stage(session, fence, stages=stages, index=index, now=now,
                       outcome={"added": len(added), "updated": len(updated),
                                "deleted": len(deleted)})
@@ -759,7 +769,7 @@ def recall_for_answer(*, user_id: str, query: str) -> Recall:
     """
     from app.memory import db
 
-    if not db.enabled() or not get_settings().memory_search_enabled:
+    if not db.enabled():
         return Recall()
     from app.memory.search import TASK_ANSWER, format_evidence, search as memory_search
 
@@ -806,8 +816,6 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
 
     if not db.enabled():
         return None                       # 记忆关闭:聊天照常,不登记也不报错
-    if not get_settings().memory_write_enabled:
-        return None                       # 暂停自动写入:只影响「登记」,已排队的任务不动
     now = now or db.utc_naive()
     cleaned = [{"role": str(m.get("role") or ""), "content": str(m.get("content") or ""),
                 "message_id": str(m.get("message_id") or f"m{i}"),
@@ -838,12 +846,17 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
     if note:
         payload["extract_note"] = note
     with db.session_scope() as session:
-        return repo.enqueue_job(
+        job_id = repo.enqueue_job(
             session, user_id=user_id, kind=JOB_KIND_EXTRACT, dedupe_key=key,
             thread_id=thread_id, payload=payload,
             max_attempts=max(1, int(get_settings().memory_job_max_attempts)), now=now,
             scope=scope, turn_id=turn,
         )
+        if job_id:
+            from app.memory import episodes
+            episodes.retain(session, user_id=user_id, scope=scope, turn_id=turn,
+                            messages=cleaned, now=now)
+        return job_id
 
 
 # ---- 用户自管理(「我的记忆」页:读 / 手添 / 改 / 删 / 彻底清除) ----
@@ -996,7 +1009,7 @@ def clear_user(*, user_id: str, scope: str = SCOPE_FORMAL) -> dict:
                                scope=scope, now=now, generation=purged.generation,
                                max_attempts=int(get_settings().memory_op_max_attempts))
     out.update(items=purged.items, jobs=purged.jobs, history=purged.history,
-               sources=purged.sources, generation=purged.generation)
+               sources=purged.sources, episodes=purged.episodes, generation=purged.generation)
     cleaned = False
     try:
         # 按用户 + 作用域 + 代次上界清:比逐点删干净(行已删、点还在的残留一起清),
@@ -1044,9 +1057,9 @@ def status(*, user_id: str, scope: str = SCOPE_FORMAL) -> dict:
     settings = get_settings()
     out = {
         "enabled": db.enabled(),
-        "write_enabled": bool(settings.memory_write_enabled),
-        "search_enabled": bool(settings.memory_search_enabled),
-        "maintenance_enabled": bool(settings.memory_maintenance_enabled),
+        "write_enabled": db.enabled(),
+        "search_enabled": db.enabled(),
+        "maintenance_enabled": True,
         "configured": db.configured(),
         "items": 0, "deleted_items": 0, "index_pending": 0,
         "cleanup_pending": 0, "cleanup_failed": 0,

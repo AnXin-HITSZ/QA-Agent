@@ -42,8 +42,17 @@ class UsageProbe:
         if sink is None:
             return
         entry: dict = {"status": int(response.status_code)}
+        import httpx
         try:
             payload = self._json(response)
+        except httpx.ResponseNotRead:
+            payload = None  # non-JSON/SSE intentionally stays unread for the caller
+        except (httpx.TransportError, httpx.StreamError):
+            # A failed eager read consumes the stream. Swallowing it makes the
+            # SDK's subsequent read raise StreamConsumed instead of the original
+            # retryable transport error. Keep the attempt and propagate the cause.
+            sink.append(entry)
+            raise
         except Exception:  # noqa: BLE001 —— 非 JSON / 读不了 body:只记状态码
             payload = None
         if isinstance(payload, dict):

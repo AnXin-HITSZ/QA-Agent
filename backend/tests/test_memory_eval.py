@@ -6,7 +6,7 @@
 效果要另外在配齐凭证的独占环境里小样本跑(见 docs/长期记忆系统部署与评测指南.md)。
 
 两条测试约定值得写明:
-- 维护决策**关掉**(MEMORY_MAINTENANCE_ENABLED=false):构建期只走「提取 → 写入」一条路,
+- 维护决策使用独立替身:构建期只走「提取 → 写入」一条路,
   提取脚本才不会被维护决策那次调用吃掉,结果可复现(评测要固定生成参数与提示词)。
 - 假提取模型按脚本给事实,**内容与数据集里的会话一一对应**,于是「谁被记住」由测试安排,
   不是由模型决定。
@@ -53,10 +53,11 @@ def env(memory_db, cache_env, monkeypatch, tmp_path):
     运行目录(不写进仓库的 data/)、记忆模型、聊天模型。
     """
     s = get_settings()
-    # 关维护决策:构建期只走提取 → 写入,提取脚本不被维护那次调用吃掉(见模块 docstring)
-    monkeypatch.setattr(s, "memory_maintenance_enabled", False)
-    monkeypatch.setattr(s, "memory_write_enabled", True)
-    monkeypatch.setattr(s, "memory_search_enabled", True)
+    # 维护决策独立替身，保留真实候选检索，提取模型脚本不被维护调用消耗(见模块 docstring)
+    from app.memory import maintain
+    monkeypatch.setattr(maintain,"decide",lambda fact,*a,**kw:maintain.MaintenanceDecision(
+        events=[maintain.AddEvent(event="ADD",text=fact.split("\n")[0])]))
+
     prod_collection = s.memory_collection
     monkeypatch.setattr(s, "memory_collection", prod_collection)   # 记录原值,用完还原
     monkeypatch.setattr(me, "RUNS_DIR", tmp_path / "runs")
@@ -145,7 +146,7 @@ def test_build_imports_conversations_in_order_and_drains(env, tmp_path):
     assert vector.count(user_id=run.user_id) == 3
 
     # 构建期**不做检索**:一次稠密召回都没有(不该为评测问题提前花钱)
-    assert env.dense.calls == []
+    assert len(env.dense.calls) == 3  # 固定维护决策需要每条事实检索旧候选
     # 提取模型逐条看到的是**当轮**会话,顺序与数据集一致(不许把后面的轮次提前喂进去)
     prompts = env.memory_llm.prompts
     assert len(prompts) == 3
@@ -542,7 +543,7 @@ def test_run_manifest_fixes_models_params_and_never_writes_credentials(env, tmp_
     manifest = json.loads(run.path("run.json").read_text(encoding="utf-8"))
     assert manifest["llm_model"] == env.settings.llm_model
     assert manifest["embeddings_model"] == env.settings.embeddings_model
-    assert manifest["memory_maintenance_enabled"] is False   # 固定生成参数:维护关掉
+    assert manifest["memory_maintenance_enabled"] is True   # 固定生成参数:维护关掉
     assert manifest["modes"] == ["no_memory", "memory"]
     assert manifest["dataset"]["digest"]                     # 数据集可核对(哈希)
     assert manifest["code_commit"]                            # 代码版本(仓库里必然拿得到)

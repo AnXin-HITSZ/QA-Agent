@@ -42,6 +42,13 @@ MAX_FACT_CHARS = 4000
 # 提取协议版本:提示词 / 字段结构一改就要 +1(阶段结果复用前要比对,见 worker)。
 PROTOCOL_VERSION = "mem-extract/5"
 
+
+def protocol_version():
+    from app.memory.graph import resolve_switches
+    if resolve_switches(get_settings()).write:
+        return "mem-unified-extract/2"
+    return PROTOCOL_VERSION
+
 # 高置信度的秘密模式(提示词已禁止输出,这里再拦一道;宁可少记一条,不落凭证)。
 # 只匹配「关键词 + 明确分隔符 + 内容」的形态,避免把「密码管理流程很麻烦」这类正常事实误杀。
 _SECRET_PATTERNS = (
@@ -184,6 +191,9 @@ def extract_facts(messages: Sequence[dict], *, llm=None,
       MemoryExtractionError —— 明确失败,绝不静默当成「没有新事实」;
     - 空结果({"facts": []})是正常返回,不是错误。
     """
+    if protocol_version() == "mem-unified-extract/2":
+        from app.memory import unified_extract
+        return unified_extract.extract(messages, llm=llm, retries=retries, note=note)
     if llm is None:
         from app.memory.llm import get_memory_llm
         llm = get_memory_llm()

@@ -30,7 +30,7 @@ KEY = "sk-test-not-a-real-key"
 def rerank_env(monkeypatch):
     """配置齐全的重排序环境:假 HTTP,不触网、不计费。"""
     s = get_settings()
-    monkeypatch.setattr(s, "rerank_enabled", True)
+
     monkeypatch.setattr(s, "rerank_api_url", URL)
     monkeypatch.setattr(s, "rerank_api_key", KEY)
     monkeypatch.setattr(s, "rerank_model", MODEL)
@@ -100,10 +100,9 @@ def _docs(n: int) -> list[str]:
 
 
 def test_not_configured_says_so_instead_of_pretending(rerank_env, monkeypatch):
-    monkeypatch.setattr(rerank_env, "rerank_enabled", False)
-    assert not rerank.configured() and "已关闭" in rerank.config_note()
+    monkeypatch.setattr(rerank_env, "rerank_api_url", "")
+    assert not rerank.configured() and "未配置" in rerank.config_note()
 
-    monkeypatch.setattr(rerank_env, "rerank_enabled", True)
     monkeypatch.setattr(rerank_env, "rerank_api_key", "")
     assert not rerank.configured() and "未配置" in rerank.config_note()
 

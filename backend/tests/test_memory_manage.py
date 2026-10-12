@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from app.config import get_settings
-from app.memory import repo, service, vector
+from app.memory import db, repo, service, vector
 from app.memory.errors import (
     MemoryConflict, MemoryNotFound, MemoryStaleGeneration,
 )
@@ -368,12 +368,8 @@ def test_a_write_from_before_the_clear_is_voided_not_silently_skipped(env):
         service.write_facts(user_id=U1, facts=facts, generation=0)
 
     assert _texts(env) == []                           # 一个字都没写回来
-    env.settings.memory_maintenance_enabled = False    # 维护关闭的回退路径同样要作废
-    try:
-        with pytest.raises(MemoryStaleGeneration):
-            service.apply_facts(user_id=U1, facts=facts, generation=0)
-    finally:
-        env.settings.memory_maintenance_enabled = True
+    with pytest.raises(MemoryStaleGeneration):
+        service.apply_facts(user_id=U1, facts=facts, generation=0)
     assert _texts(env) == []
     assert env.embeddings.texts == []                  # 作废发生在落库前,不产生向量化调用
 
@@ -396,4 +392,4 @@ def test_clear_is_idempotent_and_keeps_bumping(env):
     second = service.clear_user(user_id=U1)
     assert (first["generation"], second["generation"]) == (1, 2)
     assert second["items"] == 0 and second["jobs"] == 0
-    assert get_settings().memory_enabled                # 清除 ≠ 关掉记忆功能
+    assert db.enabled()                # 清除 ≠ 关掉记忆功能

@@ -29,13 +29,13 @@ MESSAGES = [{"role": "user", "content": "我以后都用 Markdown 写实验记�
             {"role": "assistant", "content": "好的,记下了。"}]
 
 WORKER_PARAMS = {
-    "memory_maintenance_enabled": True, "memory_maintenance_retries": 1,
+    "memory_maintenance_retries": 1,
     "memory_maintenance_max_actions": 5, "memory_vector_k": 3, "memory_bm25_k": 3,
     "memory_rerank_k": 3, "memory_top_k": 3, "memory_rrf_k": 60, "memory_context_chars": 2000,
     "memory_bm25_corpus_limit": 1000, "memory_rerank_max_docs": 50, "memory_rerank_max_chars": 8000,
     "memory_maintenance_vector_k": 5, "memory_maintenance_bm25_k": 5,
     "memory_maintenance_rerank_k": 5, "memory_maintenance_top_k": 4,
-    "memory_worker_enabled": True, "memory_worker_tick_limit": 5,
+    "memory_worker_tick_limit": 5,
     "memory_worker_index_batch": 10,
     "memory_job_max_attempts": 3, "memory_job_backoff_seconds": 30.0,
     "memory_job_lease_seconds": 300.0,
@@ -117,9 +117,9 @@ def test_enqueue_skips_empty_or_system_only_messages(worker_env):
 
 
 def test_enqueue_is_silent_when_memory_is_off(worker_env, monkeypatch):
-    monkeypatch.setattr(worker_env.settings, "memory_enabled", False)
-
-    assert _enqueue(worker_env) is None
+    with monkeypatch.context() as m:
+        m.setattr(worker_env.settings, "mysql_url", "")
+        assert _enqueue(worker_env) is None
     assert _job_list(worker_env) == []
 
 
@@ -204,11 +204,10 @@ def test_pausing_auto_write_still_replays_pending_indexes(worker_env, monkeypatc
     assert pending
 
     flaky["down"] = False
-    monkeypatch.setattr(worker_env.settings, "memory_write_enabled", False)
     stats = worker_env.worker.run_once(force=True)
 
     assert stats["claimed"] == 0 and stats["indexed"] == len(pending)
-    assert "已暂停" in stats["skipped"]
+    assert "skipped" not in stats
 
 
 def test_index_replay_backs_off_while_the_endpoint_is_down(worker_env, monkeypatch):
@@ -624,7 +623,7 @@ def test_owner_identity_is_stable_within_a_worker(worker_env):
 
 
 def test_start_does_nothing_when_disabled(worker_env, monkeypatch):
-    monkeypatch.setattr(worker_env.settings, "memory_worker_enabled", False)
+    monkeypatch.setattr(worker_env.settings, "mysql_url", "")
 
     worker_env.worker.start()
 

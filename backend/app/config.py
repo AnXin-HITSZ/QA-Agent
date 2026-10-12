@@ -154,34 +154,21 @@ class Settings(BaseSettings):
     # 软依赖:没配 MySQL / Qdrant / LLM 时聊天照常,只是不带长期记忆;
     # 记忆管理接口会返回 503 并说明缺什么,绝不假装「你没有记忆」。
     # —— 两个「暂停」开关(§12:必须分开说清,且都**不删任何数据**)——
-    # 三个开关的语义各不相同,别混用:
-    #   memory_enabled=false          整个功能关闭(聊天不带记忆、不登记提取);
-    #   memory_write_enabled=false    暂停**自动**写入:不登记新的提取任务、后台不再执行
-    #                                 (已排队的任务原样留着,恢复后继续);「我的记忆」里
-    #                                 用户自己手添 / 编辑 / 删除不受影响 —— 那是显式意图;
-    #   memory_search_enabled=false   暂停**回答时的**记忆检索:聊天不再注入记忆、也不再花
-    #                                 检索的那次向量化调用;「我的记忆」页里用户主动检索照常。
-    # 任何一个都不会删数据:恢复开关即恢复行为(已存记忆、审计、索引都在原地)。
-    memory_enabled: bool = True
-    memory_write_enabled: bool = True
-    memory_search_enabled: bool = True
+    # 普通记忆、维护与后台修复固定启用，MySQL未配置时按软依赖处理。
     memory_collection: str = "user_memory"     # Qdrant 集合名(知识库是 qdrant_collection)
     memory_max_text_chars: int = 800           # 单条记忆正文上限(超出截断)
     memory_max_message_chars: int = 2000       # 任务 payload 里单条消息的截断上限
     # 提取 / 维护决策走同一个聊天模型(复用上面的 LLM_* 配置),要求端点返回 JSON 对象。
     # 端点不支持 response_format=json_object(会 400)时置 false;结构校验与有限重试照常。
     # 注意:json_object 只保证「是 JSON」,不代表字段齐全 —— 结构约束仍由 Pydantic 校验。
-    memory_llm_json_mode: bool = True
     # 提取结果格式错误时的重试次数(单次任务内,只重试「输出不合法」,不重试业务异常)。
     memory_extract_retries: int = 1
     # —— 维护决策(§6:新事实 vs 已有候选 → ADD / UPDATE / DELETE / NONE)——
     # 关掉就退回「只新增 + 按正文去重」的 Phase 2 行为:不会改也不会删已有记忆。
     # 关掉后维护质量下降是**显式**的(结果里带 degraded 说明),不是静默降级。
-    memory_maintenance_enabled: bool = True
     memory_maintenance_retries: int = 1        # 仅重试「事件结构不合法」,网络错误交给任务退避
     memory_maintenance_max_actions: int = 5    # 一条事实最多产出几个事件(防止大面积改写)
     # 后台提取任务:轮询间隔 / 单轮领取上限 / 重试与租约(崩溃恢复靠租约过期重排)。
-    memory_worker_enabled: bool = True
     memory_worker_interval_seconds: float = 5.0
     memory_worker_tick_limit: int = 3          # 每轮最多处理几个任务(<=0 = 不限)
     memory_worker_index_batch: int = 50        # 空闲轮次里一次补写多少条待索引记忆(自愈)
@@ -195,7 +182,6 @@ class Settings(BaseSettings):
     # 索引自愈:补一轮待索引(条数) / 对账间隔(秒,逐条核验当前点及 payload → 选择性修复标记) / 总开关。
     memory_worker_ops_batch: int = 20          # 每轮最多做掉几条删除 / 清理台账
     memory_worker_drift_seconds: float = 300.0
-    memory_worker_index_repair: bool = True    # false = 周期性对账与选择性修复一起停(连核验也不跑)
     # 删除 / 彻底清除留下的向量清理台账:重试次数用尽会落 failed(界面显示「清理失败」)。
     memory_op_max_attempts: int = 8
     memory_op_backoff_seconds: float = 30.0
@@ -208,7 +194,13 @@ class Settings(BaseSettings):
     memory_rerank_k: int = 20                  # 送进重排序的候选条数(≤ vector_k + bm25_k)
     memory_top_k: int = 6                      # 进上下文的最终条数
     memory_rrf_k: int = 60                     # RRF 平滑常数(名次权重 1/(k+rank))
-    memory_context_chars: int = 2000           # 注入提示词的记忆总字符预算(超出截断并标注)
+    memory_context_chars: int = 2000           # 新选择器含渲染标签的正文预算；全局参考说明另计，旧选择器近似
+    memory_source_retention_days: int = 0
+    memory_source_max_episodes: int = 100
+    memory_source_max_chars: int = 30000
+    memory_source_candidate_k: int = 12
+    memory_source_context_chars: int = 1000
+    memory_evidence_rounds: int = 0             # 0=原检索；1=仅来源；2=最多一次规划、两条补查询
     memory_bm25_corpus_limit: int = 1000       # BM25 语料上限(单用户有效记忆条数,超出只取最近部分)
     # 维护决策(ADD/UPDATE/DELETE/NOOP)看的是「有没有和它冲突的旧记忆」,与回答问题
     # 目标不同:候选要更大(宁可多看几条,漏掉冲突就会写重),最终条数也更多。见 §8 末段。
@@ -220,7 +212,6 @@ class Settings(BaseSettings):
     # ---- 重排序(阿里云百炼 text-rerank;检索软依赖,不可用就回退 RRF)----
     # 与 embedding / LLM 一样走 DashScope 系端点,但**是独立模型与独立接口**,不共用 LLM_*。
     # 未配置时检索照常(降级为 RRF 融合顺序),不报错、不假装重排过。
-    rerank_enabled: bool = False
     rerank_model: str = ""                     # 例:qwen3.7-text-rerank(按百炼当前模型名填)
     # 例:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
     rerank_api_url: str = ""
@@ -240,9 +231,6 @@ class Settings(BaseSettings):
     # 约束(总开关关闭时一律无效),有效组合见 app/memory/graph/__init__.py 的模块注释。
     # 切换方式 = 改环境变量 + 重启进程(应用与评测进程各自重启),没有运行时热切换 / 请求级旁路。
     memory_graph_enabled: bool = False          # 总开关:图记忆全链路(写 + 投影 + 召回)
-    memory_graph_write_enabled: bool = False    # 写侧:提取图元素并投影(关掉 = 图不再增长,仍可读)
-    memory_graph_search_enabled: bool = False   # 读侧:回答检索加图通道(可用固定图数据做实验)
-    memory_graph_worker_enabled: bool = False   # 后台:图同步 / 删除 / 对账任务由记忆 Worker 执行
     # Neo4j 连接(bolt)。服务端只在本机 / 内网监听,不要把 7687 暴露到公网;凭据只从环境变量读。
     neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_username: str = "neo4j"

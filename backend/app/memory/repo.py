@@ -481,6 +481,8 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
     if expected_meta_version is not None and row.meta_version != expected_meta_version:
         raise MemoryConflict("记忆元数据已变化")
     content_changed = content_hash(new_text) != row.content_hash
+    if actor == "user" and content_changed and fact_context is UNSET and (row.fact_context or {}).get("structured_graph"):
+        fact_context = {k:v for k,v in row.fact_context.items() if k != "structured_graph"}
     meta_changed = ((kind is not None and kind != (row.kind or ""))
                     or (event_time is not UNSET and event_time != row.event_time)
                     or (fact_context is not UNSET and fact_context != row.fact_context))
@@ -525,6 +527,9 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
     from app.memory.graph import runtime as graph_runtime
     graph_runtime.invalidate(session, _item(row), now=now)
     graph_runtime.enqueue(session, _item(row), now=now)
+    if actor == "user":
+        from app.memory import episodes
+        episodes.revoke(session, user_id=user_id, scope=row.scope, memory_id=memory_id)
     return _item(row)
 
 
@@ -571,6 +576,8 @@ def delete_item(session, *, user_id: str, memory_id: str, actor: str,
     session.refresh(row)
     from app.memory.graph import runtime as graph_runtime
     graph_runtime.invalidate(session, _item(row), now=now)
+    from app.memory import episodes
+    episodes.revoke(session, user_id=user_id, scope=row.scope, memory_id=memory_id)
     return _item(row)
 
 
@@ -1246,6 +1253,7 @@ class PurgeResult:
     generation: int = 0
     sources: int = 0
     ops: int = 0
+    episodes: int = 0
 
 
 def purge_user(session, user_id: str, *, now: datetime,
@@ -1271,6 +1279,8 @@ def purge_user(session, user_id: str, *, now: datetime,
     即便有人用同一个 user_id 跑评测，purge 也删不到正式数据。
     """
     generation = bump_generation(session, user_id, now=now, scope=scope)
+    from app.memory import episodes
+    episodes_removed = episodes.purge(session, user_id=user_id, scope=scope)
     item_ids = [r[0] for r in session.execute(
         select(MemoryItemRow.id).where(MemoryItemRow.user_id == user_id,
                                        MemoryItemRow.scope == scope)
@@ -1300,4 +1310,4 @@ def purge_user(session, user_id: str, *, now: datetime,
         .execution_options(synchronize_session=False)
     ).rowcount)
     return PurgeResult(item_ids=item_ids, items=items, jobs=jobs, history=history,
-                       generation=generation, sources=sources, ops=ops)
+                       generation=generation, sources=sources, ops=ops, episodes=episodes_removed)

@@ -51,9 +51,10 @@ V1_QUESTIONS = [{"id": "q1", "conversation_id": "c1", "question": "写实验记�
 def env(memory_db, cache_env, monkeypatch, tmp_path):
     """离线评测环境:与 test_memory_eval.py 的 env 同一套装配(运行目录也改到临时目录)。"""
     s = get_settings()
-    monkeypatch.setattr(s, "memory_maintenance_enabled", False)   # 固定生成参数:维护关掉
-    monkeypatch.setattr(s, "memory_write_enabled", True)
-    monkeypatch.setattr(s, "memory_search_enabled", True)
+    from app.memory import maintain
+    monkeypatch.setattr(maintain,"decide",lambda fact,*a,**kw:maintain.MaintenanceDecision(
+        events=[maintain.AddEvent(event="ADD",text=fact.split("\n")[0])]))   # 维护模型独立替身
+
     prod_collection = s.memory_collection
     monkeypatch.setattr(me, "RUNS_DIR", tmp_path / "runs")
 
@@ -518,6 +519,21 @@ def test_judge_prompt_never_exposes_mode_names():
 def test_unanswerable_judge_input_removes_conflicting_reference():
     assert json.loads(scoring.judge_prompt("Q", "No", "No information available", unanswerable=True))["reference"] == ""
     assert json.loads(scoring.judge_prompt("Q", "No", "No", unanswerable=False))["reference"] == "No"
+
+
+def test_identical_judge_inputs_reuse_verdict_but_model_change_does_not():
+    results={"answer_calls":True,"questions":[{"id":"q","category":4,"question":"Q","reference":"R",
+        "modes":{"memory":{"answer":"R"},"full_context":{"answer":"R"}}}]}
+    cache={}
+    llm=memorykit.FakeLLM('{"correct":true,"reason":"matches"}')
+    scores=scoring.score_results(results,metrics=["judge"],judge_llm=llm,judge_model="same",judge_cache=cache)
+    rows=scores["per_question"][0]["modes"]
+    assert rows["memory"]["judge_cache_hit"] is False
+    assert rows["full_context"]["judge_cache_hit"] is True
+    again=scoring.score_results(results,metrics=["judge"],judge_llm=memorykit.FakeLLM("invalid"),judge_model="same",judge_cache=cache)
+    assert again["per_question"][0]["modes"]["memory"]["judge_cache_hit"]
+    changed=scoring.score_results(results,metrics=["judge"],judge_llm=memorykit.FakeLLM("invalid"),judge_model="other",judge_cache=cache,judge_retries=0)
+    assert changed["per_question"][0]["modes"]["memory"]["judge_error"]
 
 
 # ---------------------------------------------------------------- 用量与耗时统计

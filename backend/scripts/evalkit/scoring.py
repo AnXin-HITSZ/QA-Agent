@@ -420,7 +420,7 @@ def results_digest(results: dict) -> str:
 
 def score_results(results: dict, *, metrics: list[str], judge_llm=None,
                   judge_retries: int = 1, judge_model: str = "",
-                  judge_temperature: float | None = None) -> dict:
+                  judge_temperature: float | None = None, judge_cache: dict | None = None) -> dict:
     """对 results.json 的内容评分(纯本地);`judge` 在 metrics 里且给了模型才发裁判调用。"""
     if results.get("run_valid") is False:
         raise ValueError("无效构建仅供诊断，不能进行正常评分")
@@ -464,9 +464,21 @@ def score_results(results: dict, *, metrics: list[str], judge_llm=None,
                     if not reference.strip() and not unanswerable:
                         record["judge_skipped"] = "没有参考答案,跳过裁判"
                     else:
-                        verdict = judge_one(question.get("question", ""), reference,
+                        key = hashlib.sha256(json.dumps([JUDGE_SYSTEM_PROMPT, JUDGE_PROTOCOL_VERSION,
+                            judge_model, judge_temperature, judge_prompt(question.get("question", ""),
+                            reference, str(entry.get("answer") or ""), unanswerable=unanswerable)],
+                            ensure_ascii=False).encode()).hexdigest()
+                        cached = (judge_cache or {}).get(key)
+                        if cached and type(cached.get("correct")) is bool and isinstance(cached.get("reason"), str):
+                            verdict = {**cached, "attempts": 0, "latency_ms": 0, "usage": None}
+                            record["judge_cache_hit"] = True
+                        else:
+                            verdict = judge_one(question.get("question", ""), reference,
                                             str(entry.get("answer") or ""), llm=judge_llm,
                                             retries=judge_retries, unanswerable=unanswerable)
+                            record["judge_cache_hit"] = False
+                            if judge_cache is not None and type(verdict.get("correct")) is bool:
+                                judge_cache[key] = {"correct": verdict["correct"], "reason": verdict["reason"], "error": ""}
                         if verdict["correct"] is None:
                             record["judge_error"] = verdict["error"]
                         else:
@@ -483,6 +495,7 @@ def score_results(results: dict, *, metrics: list[str], judge_llm=None,
                           "prompt_version": JUDGE_PROMPT_VERSION,
                           "model": judge_model, "temperature": judge_temperature,
                           "retries": judge_retries,
+                          "cache": "exact-input-model-prompt-temperature/1" if judge_cache is not None else "none",
                           "note": ("裁判显式开启才调用;可独立配置或显式复用回答模型"
                                    "(不声称更强);提示词不含模式名;失败记 judge_error,"
                                    "不记 0 / 不正确")}

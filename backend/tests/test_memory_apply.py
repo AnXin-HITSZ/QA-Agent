@@ -30,7 +30,7 @@ MAINTAIN_PARAMS = {
     "memory_rerank_max_docs": 50, "memory_rerank_max_chars": 8000,
     "memory_maintenance_vector_k": 5, "memory_maintenance_bm25_k": 5,
     "memory_maintenance_rerank_k": 5, "memory_maintenance_top_k": 4,
-    "memory_maintenance_enabled": True, "memory_maintenance_retries": 1,
+    "memory_maintenance_retries": 1,
     "memory_maintenance_max_actions": 5,
 }
 
@@ -94,15 +94,13 @@ def test_no_candidate_means_no_model_call(apply_env):
     assert not any("未查重" in note for note in result.degraded)   # 候选为空不是「拿不到候选」
 
 
-def test_maintenance_off_falls_back_to_plain_add_and_says_so(apply_env, monkeypatch):
-    monkeypatch.setattr(apply_env.settings, "memory_maintenance_enabled", False)
+def test_maintenance_policy_always_uses_decisions(apply_env):
     _seed(apply_env, OLD)
-
-    result = _apply(apply_env, NEW, llm=_never_called())
-
+    result = _apply(apply_env, NEW, llm=memorykit.FakeLLM(json.dumps({"events":[{"event":"ADD","text":NEW}]})))
     assert result.per_fact[0].status == service.FACT_ADDED
-    assert sorted(_active(apply_env)) == sorted([OLD, NEW])     # 没改也没删旧记忆
-    assert service.MAINTENANCE_OFF_NOTE in result.degraded
+    assert sorted(_active(apply_env)) == sorted([OLD,NEW])
+    assert service.MAINTENANCE_OFF_NOTE not in result.degraded
+
 
 
 def test_blank_fact_is_reported_as_failed_and_kept_in_order(apply_env):
@@ -353,7 +351,7 @@ def test_index_failure_leaves_the_rows_pending_for_replay(apply_env, monkeypatch
 
 def test_settings_carry_the_maintenance_defaults():
     s = get_settings()
-    assert s.memory_maintenance_enabled is True
+    assert "memory_maintenance_enabled" not in type(s).model_fields
     assert s.memory_maintenance_retries >= 0
     assert s.memory_maintenance_max_actions >= 1
     assert s.memory_rrf_k > 0 and s.memory_context_chars > 0

@@ -82,6 +82,26 @@ def test_write_facts_persists_audits_and_indexes(mem_env):
     assert vector.count(user_id=U2) == 0
 
 
+def test_maintenance_add_and_update_record_origin_in_same_transaction(mem_env):
+    from app.memory import maintain, db
+    from app.memory.service import WriteResult
+    created = WriteResult()
+    service._apply_events(created, user_id=U1,
+        decision=maintain.MaintenanceDecision(events=[maintain.AddEvent(event="ADD", text="Prefers short notes")]),
+        candidates=[], thread_id="chat", actor="llm", now=db.utc_naive(), reason="",
+        turn_id="turn1", fact=_fact("Prefers short notes"))
+    item = created.outcome.added[0]
+    changed = WriteResult()
+    service._apply_events(changed, user_id=U1,
+        decision=maintain.MaintenanceDecision(events=[maintain.UpdateEvent(event="UPDATE", id=item.id,
+            text="Prefers short notes except for code")]),
+        candidates=[maintain.Candidate(memory_id=item.id,text=item.text,revision=item.revision)],
+        thread_id="chat", actor="llm", now=db.utc_naive(), reason="", turn_id="turn2",
+        fact=_fact("Prefers detailed code notes"))
+    with db.session_scope() as session:
+        assert {x.turn_id for x in repo.list_sources(session,item.id)} == {"turn1","turn2"}
+
+
 def test_duplicate_facts_are_skipped_not_written_twice(mem_env):
     """按规范化正文去重:全角 / 半角这种写法差异算同一条;重复是正常结果,不报错。"""
     result = service.write_facts(user_id=U1, facts=[

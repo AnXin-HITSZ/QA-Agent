@@ -19,7 +19,9 @@ def runtime_issues(results):
     return issues
 
 
-def compare(root: Path, names: list[str]) -> dict:
+def compare(root: Path, names: list[str], *, axis: str = "graph") -> dict:
+    if axis not in ("graph", "evidence"):
+        raise ValueError("invalid comparison axis")
     runs = []
     for name in names:
         if not name or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for c in name) or name in (".", ".."):
@@ -41,26 +43,32 @@ def compare(root: Path, names: list[str]) -> dict:
         signature = {k: manifest.get(k) for k in ("code_commit", "source_digest", "dataset", "scope", "collection",
             "llm_model", "llm_temperature", "embeddings_model", "embeddings_dim", "rerank_model", "rerank_enabled",
             "memory_top_k", "memory_vector_k", "memory_bm25_k", "memory_rerank_k", "memory_rrf_k", "memory_context_chars",
-            "answer_instruction", "context_chars")}
+            "answer_instruction", "context_chars", "source_snapshot", "unified_extract", "evidence_selection", "memory_budget_scope")}
         signature["dataset"] = manifest.get("dataset", {}).get("digest")
         signature["questions"] = [(q["id"], q["question"]) for q in results["questions"]]
         signature["modes"] = manifest.get("modes")
         signature["scoring_protocol"] = scores.get("protocol")
+        completion = dict(manifest.get("evidence_completion", {}))
+        if axis == "evidence":
+            completion = {k: v for k, v in completion.items() if k not in ("source_search", "rounds")}
+        signature["evidence_completion"] = completion
         graph = dict(manifest.get("graph", {}))
-        graph["switches"] = {k: v for k, v in graph.get("switches", {}).items() if k != "search"}
+        graph["switches"] = {k: v for k, v in graph.get("switches", {}).items()
+                             if axis != "graph" or k != "search"}
         signature["graph"] = graph
         if runs and signature != runs[0]["signature"]:
             raise ValueError("变体条件不同，不能归因于图召回")
         if not manifest.get("source_digest"):
             raise ValueError("变体缺少代码摘要，不能验证固定代码")
         runs.append({"variant": name, "signature": signature,
+                     "evidence_completion": manifest.get("evidence_completion", {}),
                      "runtime_issues": runtime_issues(results),
                      "scoring_errors": {mode: values.get("counts", {}).get("judge_errors", 0)
                                         for mode, values in scores["summary"]["by_mode"].items()
                                         if values.get("counts", {}).get("judge_errors", 0)},
                      "graph_search": manifest.get("graph", {}).get("switches", {}).get("search"),
                      "summary": scores["summary"]["by_mode"]})
-    result = {"comparable": not any(r["runtime_issues"] or r["scoring_errors"] for r in runs), "configurations_match": True,
+    result = {"axis": axis, "comparable": not any(r["runtime_issues"] or r["scoring_errors"] for r in runs), "configurations_match": True,
               "variants": [{k: v for k, v in r.items() if k != "signature"} for r in runs],
               "note": "评分模型/规则仍需相同；统计改善不等于已证明泛化收益。"}
     destination = root / "comparisons" / datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")

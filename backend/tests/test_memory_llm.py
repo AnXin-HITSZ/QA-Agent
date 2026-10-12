@@ -173,7 +173,7 @@ def test_passthrough_when_metering_disabled(monkeypatch):
 def test_factory_uses_llm_config_with_json_mode(memory_llm, monkeypatch):
     s = get_settings()
     monkeypatch.setattr(s, "llm_api_key", "test-key")
-    monkeypatch.setattr(s, "memory_llm_json_mode", True)
+
 
     client = memory_llm.get_memory_llm()
     assert isinstance(client, MeteredChat)
@@ -185,15 +185,12 @@ def test_factory_uses_llm_config_with_json_mode(memory_llm, monkeypatch):
     assert payload["response_format"] == {"type": "json_object"}
 
 
-def test_json_mode_can_be_switched_off(memory_llm, monkeypatch):
-    s = get_settings()
-    monkeypatch.setattr(s, "llm_api_key", "test-key")
-    monkeypatch.setattr(s, "memory_llm_json_mode", False)
+def test_structured_output_policy_is_fixed(memory_llm, monkeypatch):
+    monkeypatch.setattr(get_settings(),"llm_api_key","test-key")
+    client=memory_llm.get_memory_llm()
+    payload=client._inner._get_request_payload([HumanMessage(content="hi")])
+    assert payload["response_format"]=={"type":"json_object"}
 
-    client = memory_llm.get_memory_llm()
-    payload = client._inner._get_request_payload([HumanMessage(content="hi")])
-
-    assert "response_format" not in payload                        # 端点不支持时不带
 
 
 def test_factory_without_key_raises(memory_llm, monkeypatch):

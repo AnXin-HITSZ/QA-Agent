@@ -199,13 +199,9 @@ class EvalEnv:
 
 def require_ready(*, needs_write: bool = True) -> None:
     """评测要在真存储上跑:没配库 / 功能关闭 / 写被暂停时直接说清楚,别跑出半份结果。"""
-    if not db.configured() or not get_settings().memory_enabled:
+    if not db.configured():
         raise SystemExit("长期记忆未启用:先在 backend/.env 配好 MYSQL_URL 并置 MEMORY_ENABLED=true")
-    if needs_write and not get_settings().memory_write_enabled:
-        # 这一条最阴险:暂停写入时 enqueue_extraction 静默返回 None,构建会「跑完、没报错、
-        # 一条记忆也没有」—— 假的成功比报错更难发现,所以直接拒绝。
-        raise SystemExit("MEMORY_WRITE_ENABLED=false:评测的提取任务会被静默丢弃,拒绝继续"
-                         "(先打开写入开关再跑评测)")
+
 
 
 def users_in_scope(scope: str) -> list[str]:
@@ -396,7 +392,7 @@ def build(env: EvalEnv, dataset: dict, *, max_ticks: int = 200, sleep: float = 0
                            if (k.startswith("memory_") or k.startswith("embeddings_") or k.startswith("llm_"))
                            and not any(secret in k for secret in ("key", "url", "password"))},
                 "extract_note_version": locomo.EXTRACT_NOTE_VERSION,
-                "extract_protocol": extract.PROTOCOL_VERSION, "maintenance_protocol": maintain.PROTOCOL_VERSION}
+                "extract_protocol": extract.protocol_version(), "maintenance_protocol": maintain.PROTOCOL_VERSION}
     identity_path = env.path("build_identity.json")
     if env.path("purge.json").exists():
         raise SystemExit("此 run 已执行清理，请使用新的 run-id 构建")
@@ -567,6 +563,7 @@ def graph_manifest():
     from app.memory.graph.extract import PROTOCOL_VERSION
     from app.memory.graph.ranking import RECALL_VERSION
     return {"switches": asdict(runtime.switches()), "extract_protocol": PROTOCOL_VERSION,
+            "unified_graph_protocol": "raw-grounded-graph/1" if get_settings().memory_graph_enabled else "",
             "projection_protocol": runtime.PROJECTION_VERSION, "recall_protocol": RECALL_VERSION,
             "max_hops": get_settings().memory_graph_max_hops,
             "max_nodes": get_settings().memory_graph_max_nodes,
@@ -599,6 +596,8 @@ def fixed_snapshot(env, dataset):
 def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_chars: int) -> dict:
     """可复现信息:代码版本 + 模型 + 关键参数 + 指令口径 + 作用域(绝不含 key)。"""
     s = get_settings()
+    from app.memory import episodes
+    source_snapshot = episodes.fingerprint([eval_user_id(env.run_id, x) for x in subjects_of(dataset)], env.scope) if dataset else ""
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=BACKEND, capture_output=True,
                                 text=True, timeout=10).stdout.strip()
@@ -623,11 +622,20 @@ def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_char
         "code_commit": commit, "worktree_dirty": dirty, "worktree_changed_files": changed,
         "llm_model": s.llm_model, "llm_temperature": s.llm_temperature,
         "embeddings_model": s.embeddings_model, "embeddings_dim": s.embeddings_dim,
-        "rerank_model": s.rerank_model, "rerank_enabled": bool(s.rerank_enabled),
-        "memory_maintenance_enabled": bool(s.memory_maintenance_enabled),
+        "rerank_model": s.rerank_model, "rerank_enabled": __import__("app.memory.rerank",fromlist=["configured"]).configured(),
+        "memory_maintenance_enabled": True,
         "memory_top_k": s.memory_top_k, "memory_vector_k": s.memory_vector_k,
         "memory_bm25_k": s.memory_bm25_k, "memory_rerank_k": s.memory_rerank_k,
         "memory_rrf_k": s.memory_rrf_k, "memory_context_chars": s.memory_context_chars,
+        "source_snapshot": source_snapshot,
+        "evidence_selection": "evidence-selection/1",
+        "memory_budget_scope": "rendered_body_excluding_global_header",
+        "evidence_completion": {"protocol": "evidence-completion/3",
+            "source_search": s.memory_evidence_rounds > 0, "rounds": s.memory_evidence_rounds,
+            "source_budget": s.memory_source_context_chars,
+            "episode_cap": s.memory_source_max_episodes, "scan_chars": s.memory_source_max_chars,
+            "source_candidates": s.memory_source_candidate_k},
+        "unified_extract": bool(s.memory_graph_enabled),
         "modes": modes, "context_chars": context_chars,
         "answer_instruction_version": INSTRUCTION_VERSION,
         "answer_instruction": EVAL_ANSWER_INSTRUCTION,
@@ -689,7 +697,7 @@ def _recall(user_id: str, query: str, *, scope: str) -> dict:
     """
     from app.memory.search import TASK_ANSWER, format_evidence, search as memory_search
 
-    if not db.enabled() or not get_settings().memory_search_enabled:
+    if not db.enabled():
         return {"text": "", "hits": [], "degraded": ["记忆检索已关闭(配置如此)"],
                 "error": "", "counts": {}}
     result = memory_search(user_id=user_id, query=query, task=TASK_ANSWER, scope=scope,
@@ -703,6 +711,7 @@ def _recall(user_id: str, query: str, *, scope: str) -> dict:
         "hits": [{"memory_id": h.memory_id, "text": h.text, "score": h.score, "origin": h.origin,
                   "rrf": h.rrf, "vector_rank": h.vector_rank, "bm25_rank": h.bm25_rank,
                   "revision": h.revision, "trimmed": h.trimmed, "thread_id": h.thread_id or "",
+                  "source_message_ids": [x.get("message_id","") for x in h.fact_context.get("sources",[])],
                   "updated_at": h.updated_at.isoformat() if h.updated_at else ""}
                  for h in result.hits],
         "degraded": list(result.degraded), "error": "", "counts": dict(result.counts),
@@ -1018,6 +1027,12 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
+    from app.memory.graph.base import evaluation_recall
+    with evaluation_recall(getattr(args,'graph_recall','configured')):
+        return _cmd_ask(args)
+
+
+def _cmd_ask(args: argparse.Namespace) -> int:
     env = EvalEnv(args.run_id, getattr(args, "variant", ""))
     if env.variant and env.path("results.json").exists():
         raise SystemExit("实验变体已存在，请换一个 variant；不覆盖已有结果")
@@ -1034,6 +1049,14 @@ def cmd_ask(args: argparse.Namespace) -> int:
         dataset = load_dataset(str(prev))
     if env.variant:
         fixed = fixed_snapshot(env, dataset)
+        from app.memory import episodes
+        source_fixed = episodes.fingerprint([eval_user_id(env.run_id,x) for x in subjects_of(dataset)],env.scope)
+        if source_fixed:
+            source_path = env.build_dir / "source-fixed.json"
+            if source_path.exists() and json.loads(source_path.read_text(encoding="utf-8"))["digest"] != source_fixed:
+                raise SystemExit("固定来源数据已变化，请建立新的实验构建")
+            if not source_path.exists():
+                source_path.write_text(json.dumps({"digest":source_fixed}),encoding="utf-8")
         fixed_path = env.build_dir / "fixed-snapshot.json"
         if fixed_path.exists() and json.loads(fixed_path.read_text(encoding="utf-8")) != fixed:
             raise SystemExit("固定构建已变化，不能与已有消融变体比较")
@@ -1045,6 +1068,10 @@ def cmd_ask(args: argparse.Namespace) -> int:
         out["run_valid"] = False
         env.write("results.json", out)
         raise SystemExit("问答期间固定构建发生变化，结果已标为无效")
+    if env.variant and source_fixed and episodes.fingerprint([eval_user_id(env.run_id,x) for x in subjects_of(dataset)],env.scope) != source_fixed:
+        out["run_valid"] = False
+        env.write("results.json", out)
+        raise SystemExit("问答期间来源发生变化，结果无效")
     env.write("run.json", _manifest(env, dataset, modes, args.context_chars))
     print(f"已导出 {len(out['questions'])} 条问题 × {len(modes)} 模式 → {env.path('results.json')}"
           + ("" if out["run_valid"] else ";**构建未通过有效检查,结果不计入正常质量对比**"))
@@ -1084,10 +1111,17 @@ def cmd_score(args: argparse.Namespace) -> int:
             judge_llm = ChatOpenAI(model=judge_model, base_url=judge_base_url, api_key=key,
                                   temperature=judge_temperature,
                                   timeout=get_settings().llm_request_timeout)
-        print("注意:judge 已开启 —— 每条已生成答案会多发一次裁判模型调用(付费)。")
+        print("注意:judge 已开启（付费）；相同输入、模型和协议复用本构建的裁判缓存。")
+    cache_path = env.build_dir / "judge-cache-v1.json"
+    judge_cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
     scores = scoring.score_results(results, metrics=metrics, judge_llm=judge_llm,
                                    judge_retries=max(0, int(args.judge_retries)),
-                                   judge_model=judge_model, judge_temperature=judge_temperature)
+                                   judge_model=judge_model, judge_temperature=judge_temperature,
+                                   judge_cache=judge_cache if "judge" in metrics else None)
+    if "judge" in metrics:
+        temporary = cache_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(judge_cache, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(cache_path)
     env.write("scores.json", scores)
     summary = scores["summary"]["by_mode"]
     print(json.dumps({mode: {"mean_f1": s["mean_f1"], "macro_f1": s["macro_f1"],
@@ -1181,6 +1215,8 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("ask", help="执行问题并导出回答 / 证据 / 耗时与 token")
     a.add_argument("--run-id", required=True)
     a.add_argument("--variant", default="", help="同一固定构建下的独立实验名称")
+    a.add_argument("--graph-recall", choices=['configured','disabled'], default='configured',
+                   help='仅评测命令：disabled复用固定图但禁用召回；不能开启环境中关闭的图')
     a.add_argument("--dataset", default="", help="缺省用 run 目录里留下的 dataset.json")
     a.add_argument("--modes", default=",".join(MODES))
     a.add_argument("--answer", action="store_true", help="真的调模型生成回答(会产生付费调用)")
@@ -1222,9 +1258,10 @@ def main(argv: list[str] | None = None) -> int:
     cp = sub.add_parser("compare", help="检查并比较固定构建的命名实验（纯本地）")
     cp.add_argument("--run-id", required=True)
     cp.add_argument("--variants", default="nograph,graph")
+    cp.add_argument("--axis", choices=["graph", "evidence"], default="graph")
     def cmd_compare(args):
         from scripts.compare_memory_variants import compare
-        print(json.dumps(compare(RUNS_DIR / check_run_id(args.run_id), args.variants.split(",")), ensure_ascii=False))
+        print(json.dumps(compare(RUNS_DIR / check_run_id(args.run_id), args.variants.split(","), axis=args.axis), ensure_ascii=False))
         return 0
     cp.set_defaults(func=cmd_compare)
 

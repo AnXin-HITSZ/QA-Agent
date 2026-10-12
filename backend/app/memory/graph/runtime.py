@@ -166,7 +166,9 @@ def apply(session, *, user_id, scope, facts, report, turn_key, generation):
             from app.memory.graph.extract import _flatten, _grounded
             quote = entity.identity_quote
             distinctive = _flatten(quote).replace(_flatten(entity.name), "").strip()
-            if len(distinctive) < 8 or not all(_grounded(quote, [f.text]) for f in evidence_facts):
+            if len(distinctive) < 8 or not all(_grounded(quote,
+                [q["quote"] for q in (f.fact_context or {}).get("structured_graph", {}).get("quotes", [])]
+                or [f.text]) for f in evidence_facts):
                 proven = []
         # Two same-name refs in one report cannot reuse the same ID.
         proven = [c for c in proven if c.id not in identities.values()]
