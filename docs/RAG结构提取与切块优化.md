@@ -92,6 +92,10 @@ $env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 
 ## 验证边界
 
+2026-10-12 迁移前已合入主项目 `340c9cc`（最新记忆模块），无文本冲突。
+组合版本完整后端验证 **1222 passed / 44 skipped**；前端类型检查及生产构建通过。
+主项目未提交的 `todo.md` 与 `LEARNING_PROGRESS.md` 不包含在本次合并中。
+
 2026-10-12 最终离线验证：完整后端 **1177 passed / 43 skipped**，一条 Starlette 依赖弃用告警；
 前端 `vue-tsc --noEmit` 与 Vite 生产构建通过。跳过的真数据库/图库与 LibreOffice 用例不计为通过。
 
