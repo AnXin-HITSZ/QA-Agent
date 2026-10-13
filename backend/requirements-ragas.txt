@@ -1,0 +1,4 @@
+# Optional scoring environment only; do not install into the serving environment.
+ragas==0.4.3
+# Ragas 0.4.3 imports vertexai from the legacy community package.
+langchain-community==0.3.31

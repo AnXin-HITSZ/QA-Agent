@@ -12,6 +12,7 @@ certs/
 __pycache__/
 *.py[cod]
 .venv/
+.venv-ragas/
 venv/
 env/
 .pytest_cache/

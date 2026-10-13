@@ -1,0 +1,43 @@
+{
+  "synthetic": true,
+  "description": "手写合成资料与标准答案，仅用于 Ragas 集成验证，不代表真实知识库质量。",
+  "documents": {
+    "实验平台/设备.md": "# 星桥实验平台设备制度\n\n## 设备外借\n\n星桥平台的示波器外借必须由设备管理员林老师审批。申请人先登记设备编号和预计归还日期，审批通过后领取设备。\n\n## 设备归还\n\n归还时由工程师陈老师检查配件是否齐全。管理员林老师负责更新归还登记。\n",
+    "实验平台/采购.md": "# 星桥实验平台采购制度\n\n## 采购流程\n\n采购申请先由项目负责人审核，再交平台主管批准。超过两万元的采购还需附上三家供应商报价。审批完成前不得下单。\n",
+    "实验平台/预约.md": "# 星桥实验平台预约规则\n\n## 预约时段\n\n显微镜开放时间为工作日九点至十七点。使用者必须提前一天预约。预约取消应至少提前两小时通知管理员。\n"
+  },
+  "cases": [
+    {
+      "id": "approval",
+      "category": "single_fact",
+      "user_input": "请检索星桥实验平台的知识库资料：示波器外借由谁审批？",
+      "reference": "星桥实验平台的示波器外借由设备管理员林老师审批。",
+      "expected_sources": ["实验平台/设备.md"],
+      "answerable": true
+    },
+    {
+      "id": "return",
+      "category": "multiple_facts",
+      "user_input": "请检索星桥实验平台的知识库资料：示波器归还时谁检查配件，谁更新登记？",
+      "reference": "归还时工程师陈老师检查配件是否齐全，设备管理员林老师更新归还登记。",
+      "expected_sources": ["实验平台/设备.md"],
+      "answerable": true
+    },
+    {
+      "id": "appointment",
+      "category": "temporal_rule",
+      "user_input": "根据星桥实验平台知识库，显微镜几点开放，需要提前多久预约？",
+      "reference": "显微镜工作日九点至十七点开放，必须提前一天预约。",
+      "expected_sources": ["实验平台/预约.md"],
+      "answerable": true
+    },
+    {
+      "id": "unknown",
+      "category": "unanswerable",
+      "user_input": "请检索星桥实验平台的知识库资料：示波器外借的押金是多少？若资料未提供金额，请明确说明，不要猜测。",
+      "reference": "知识库资料没有提供示波器外借押金金额。",
+      "expected_sources": [],
+      "answerable": false
+    }
+  ]
+}
