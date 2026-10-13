@@ -24,6 +24,8 @@ def test_real_publish_recall_drift_and_clear():
         c.publish(data)
         assert c.audit(data)["clean"]
         assert c.recall(data, query="What did EntityAlpha do?")["candidates"] == ["memory"]
+        assert c.recall(data, query="No entity name here", seed_entity_ids=["entity"])["candidates"] == ["memory"]
+        assert c.recall(data, query="No entity name here", seed_entity_ids=["unknown"])["candidates"] == []
         with c._driver.session(database=c._database) as session:
             session.run("MATCH (n:QAMemoryGraph {key:$key}) SET n.revision=2",
                         key=uid + ":eval:integration:memory:memory").consume()

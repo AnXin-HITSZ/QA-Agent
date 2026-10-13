@@ -73,3 +73,27 @@ def test_multi_fact_path_is_kept_whole_or_rejected(search_env, monkeypatch):
     result = search.search(U1, "无关键词", top_k=1)
     assert not result.hits
     assert result.degraded
+
+
+def test_graph_receives_only_validated_top_three_candidates(search_env, monkeypatch):
+    ids = _seed(search_env, "one", "two", "three", "four")
+    search_env.dense.ids = ids
+    received = []
+    def recall(**kw):
+        received.extend(m.id for m in kw["seed_memories"])
+        return {"enabled": True, "candidates": [], "paths": []}
+    monkeypatch.setattr(runtime, "recall", recall)
+    search.search(U1, "unmatched")
+    assert received == ids[:3]
+
+
+def test_zero_seed_budget_keeps_independent_graph_route(search_env, monkeypatch):
+    _seed(search_env, "first")
+    monkeypatch.setattr(search_env.settings, "memory_graph_seed_memory_k", 0)
+    seen = []
+    def recall(**kw):
+        seen.append(kw)
+        return {"enabled": True, "candidates": [], "paths": []}
+    monkeypatch.setattr(runtime, "recall", recall)
+    search.search(U1, QUERY)
+    assert len(seen) == 1 and seen[0]["seed_memories"] == []

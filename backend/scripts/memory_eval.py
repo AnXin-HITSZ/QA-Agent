@@ -570,6 +570,7 @@ def graph_manifest():
             "candidate_k": get_settings().memory_graph_candidate_k,
             "max_paths": get_settings().memory_graph_max_paths,
             "max_entities": get_settings().memory_graph_max_entities,
+            "seed_memory_k": get_settings().memory_graph_seed_memory_k,
             "fanout_limit": get_settings().memory_graph_fanout_limit,
             "query_timeout_seconds": get_settings().memory_graph_query_timeout_seconds}
 

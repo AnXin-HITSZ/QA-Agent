@@ -141,7 +141,7 @@ class Neo4jGraphClient(GraphClient):
                         key=owner + ":manifest", owner=owner, digest=data["digest"])
             session.execute_write(write)
 
-    def recall(self, data: dict, *, query: str) -> dict:
+    def recall(self, data: dict, *, query: str, seed_entity_ids=()) -> dict:
         """Bounded BFS; structural paths are evidence links, not inferred claims."""
         from neo4j import Query
         from app.config import get_settings
@@ -158,7 +158,18 @@ class Neo4jGraphClient(GraphClient):
             if any(n and n.casefold() in query.casefold() for n in names):
                 matches.append((e["id"], e["name"]))
         matches.sort(key=lambda m: (-scores.get(m[0], 0), -len(m[1]), m[1], m[0]))
-        matches = matches[:max(1, settings.memory_graph_max_entities)]
+        query_matches = list(matches)
+        names_by_id = {e["id"]: e["name"] for e in data["entities"]}
+        candidate_matches = [(eid, names_by_id[eid]) for eid in dict.fromkeys(seed_entity_ids)
+                             if eid in names_by_id]
+        # Interleave entrances: a common query name must not starve candidate seeds.
+        entries = []
+        for index in range(max(len(query_matches), len(candidate_matches))):
+            for route in (query_matches, candidate_matches):
+                if index < len(route) and route[index] not in entries:
+                    entries.append(route[index])
+        matches = entries[:max(1, settings.memory_graph_max_entities)]
+        entry_clipped = len(entries) > len(matches)
         paths, visited = [], set()
         fanout_clipped = 0
         max_nodes = max(1, settings.memory_graph_max_nodes)
@@ -178,7 +189,7 @@ class Neo4jGraphClient(GraphClient):
                 raise RuntimeError("图投影版本与 MySQL 不一致")
             queue = [(owner + ":entity:" + eid, [{"id": eid, "kind": "entity"}], name)
                      for eid, name in matches]
-            clipped = False
+            clipped = entry_clipped
             while queue and len(visited) < max_nodes:
                 # One bounded round trip per frontier, rather than per node.
                 queue.sort(key=lambda x: (-scores.get(x[1][-1]["id"], 0), len(x[1]), x[0]))
@@ -225,7 +236,8 @@ class Neo4jGraphClient(GraphClient):
         clipped |= len(paths) > max_paths
         paths = paths[:max_paths]
         candidates = list(dict.fromkeys(mid for p in paths for mid in p["memory_ids"]))
-        return {"enabled": True, "matched_entities": matches, "paths": paths,
+        return {"enabled": True, "matched_entities": matches, "query_matched_entities": query_matches,
+                "candidate_seed_entities": list(seed_entity_ids), "paths": paths,
                 "nodes_visited": len(visited), "fanout_clipped": fanout_clipped,
                 "budget_exhausted": bool(queue) or clipped or fanout_clipped > 0,
                 "recall_version": RECALL_VERSION,

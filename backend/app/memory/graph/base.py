@@ -78,7 +78,7 @@ class GraphClient(ABC):
     def publish(self, data: dict) -> None:
         raise RuntimeError("图投影未启用")
 
-    def recall(self, data: dict, *, query: str) -> dict:
+    def recall(self, data: dict, *, query: str, seed_entity_ids=()) -> dict:
         return {"enabled": False, "candidates": [], "paths": []}
 
     @abstractmethod

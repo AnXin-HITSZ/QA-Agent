@@ -183,16 +183,6 @@ def _search_once(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: in
 
     snapshots = {}
     graph = {"enabled": False, "candidates": [], "paths": []}
-    if task == TASK_ANSWER:
-        from app.memory.graph import runtime as graph_runtime
-        try:
-            graph = graph_runtime.recall(user_id=user_id, scope=scope, query=q)
-        except Exception as exc:
-            graph = {"enabled": True, "candidates": [], "paths": [], "error": type(exc).__name__}
-            result.degraded.append("图召回不可用(" + type(exc).__name__ + ")")
-        if graph.get("budget_exhausted"):
-            result.degraded.append("图遍历达到预算上限，路径覆盖已受限")
-        result.counts["graph_raw"] = len(graph["candidates"])
     try:
         rows, filtered = _validate(user_id, scope=scope,
                                    candidates=[*dense, *keyword],
@@ -202,6 +192,18 @@ def _search_once(user_id: str, query: str, *, task: str = TASK_ANSWER, top_k: in
         result.error = f"记忆检索不可用:候选校验失败({type(exc).__name__})"
         result.counts.update(dense_raw=len(dense), bm25=len(keyword))
         return result
+    if task == TASK_ANSWER:
+        from app.memory.graph import runtime as graph_runtime
+        try:
+            graph = graph_runtime.recall(user_id=user_id, scope=scope, query=q,
+                seed_memories=[snapshots[mid] for mid, *_ in
+                    _rrf(rows, k=int(get_settings().memory_rrf_k))[:get_settings().memory_graph_seed_memory_k]])
+        except Exception as exc:
+            graph = {"enabled": True, "candidates": [], "paths": [], "error": type(exc).__name__}
+            result.degraded.append("图召回不可用(" + type(exc).__name__ + ")")
+        if graph.get("budget_exhausted"):
+            result.degraded.append("图遍历达到预算上限，路径覆盖已受限")
+        result.counts["graph_raw"] = len(graph["candidates"])
     if graph["candidates"]:
         from app.memory import db, repo
         with db.session_scope() as session:

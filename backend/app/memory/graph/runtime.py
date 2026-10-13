@@ -331,7 +331,7 @@ def sync(*, user_id, scope):
     return data["digest"]
 
 
-def recall(*, user_id, scope, query):
+def recall(*, user_id, scope, query, seed_memories=()):
     if not switches().search:
         return {"enabled": False, "candidates": [], "paths": []}
     client = get_graph_client()
@@ -339,6 +339,11 @@ def recall(*, user_id, scope, query):
         raise RuntimeError("Neo4j 不可用")
     with db.session_scope() as session:
         data = snapshot(session, user_id=user_id, scope=scope, include_texts=True)
-    result = client.recall(data, query=query)
+    from app.memory.graph.ranking import candidate_entities
+    seed_memories = list(seed_memories)[:get_settings().memory_graph_seed_memory_k]
+    seeds = candidate_entities(data, seed_memories, max_memories=get_settings().memory_graph_seed_memory_k)
+    result = client.recall(data, query=query, seed_entity_ids=seeds) if seeds else client.recall(data, query=query)
+    result["seed_memory_ids"] = [m.id for m in seed_memories]
+    result["candidate_seed_entities"] = seeds
     result["versions"] = {m["id"]: m for m in data["memories"]}
     return result

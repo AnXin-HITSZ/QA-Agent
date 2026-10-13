@@ -248,7 +248,8 @@ class Settings(BaseSettings):
     memory_graph_max_paths: int = 20            # 单次查询最多返回几条路径
     memory_graph_fanout_limit: int = 25         # 单个实体最多展开几个邻居(超出截断并记诊断)
     memory_graph_candidate_k: int = 10          # 图通道进融合的候选条数(别把重排挤掉)
-    memory_graph_max_entities: int = 8          # 查询实体识别输出上限(一次提问最多几个实体)
+    memory_graph_max_entities: int = 8          # 两路图入口去重后的实体总上限
+    memory_graph_seed_memory_k: int = Field(default=3, ge=0, le=20)  # 混合召回种子记忆数；0仅使用问题实体入口
     # 后台图同步:每个空闲轮次最多投影多少条记忆的图元素(全量重建 / 回填走管理命令)。
     memory_graph_sync_batch: int = 50
 
