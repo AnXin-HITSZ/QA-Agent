@@ -5,7 +5,7 @@ from app.auth.deps import require_user, auth_ready
 from app.auth.service import Principal
 from app.config import get_settings
 from app.memory import db
-from app.matters import service, schemas
+from app.matters import service, schemas, proposals
 
 router=APIRouter(prefix=get_settings().api_prefix+'/matters',tags=['matters'],dependencies=[Depends(auth_ready)])
 
@@ -31,6 +31,18 @@ async def create(body:schemas.Create,user:Principal=Depends(require_user)):
 @router.post('/draft')
 async def draft(body:schemas.DraftInput,user:Principal=Depends(require_user)):
     return await call(service.draft,body.text)
+
+@router.get('/proposals')
+async def pending(thread_id:str=Query(min_length=1,max_length=160),user:Principal=Depends(require_user)):
+    return {'items':await call(proposals.listing,user.user_id,thread_id)}
+
+@router.post('/proposals/{pid}/confirm')
+async def confirm(pid:str,user:Principal=Depends(require_user)):
+    return await call(proposals.decide,user.user_id,pid,True)
+
+@router.post('/proposals/{pid}/reject')
+async def reject(pid:str,user:Principal=Depends(require_user)):
+    return await call(proposals.decide,user.user_id,pid,False)
 
 @router.get('/{mid}')
 async def detail(mid:str,user:Principal=Depends(require_user)):

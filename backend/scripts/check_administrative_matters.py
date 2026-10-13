@@ -15,13 +15,15 @@ def main():
             if args.apply_dev_migration:
                 if s.app_env!='dev' or name!='qa_agent_dev':raise RuntimeError('拒绝在开发库之外执行迁移')
                 existing=set(inspect(conn).get_table_names())
-                sql=(Path(__file__).resolve().parents[1]/'migrations/0011_administrative_matters.up.sql').read_text(encoding='utf-8')
-                sql='\n'.join(line for line in sql.splitlines() if not line.lstrip().startswith('--'))
-                for statement in sql.split(';'):
-                    if not statement.strip():continue
-                    table=statement.strip().split()[2]
-                    if table not in Base.metadata.tables:raise RuntimeError('迁移表不在事务模型中')
-                    if table not in existing:conn.execute(text(statement));conn.commit()
+                for filename in ('0011_administrative_matters.up.sql','0012_administrative_chat_proposals.up.sql'):
+                    sql=(Path(__file__).resolve().parents[1]/'migrations'/filename).read_text(encoding='utf-8')
+                    sql='\n'.join(line for line in sql.splitlines() if not line.lstrip().startswith('--'))
+                    for statement in sql.split(';'):
+                        if not statement.strip():continue
+                        table=statement.strip().split()[2]
+                        if table not in Base.metadata.tables:raise RuntimeError('迁移表不在事务模型中')
+                        if table not in existing:
+                            conn.execute(text(statement));conn.commit();existing.add(table)
             inspector=inspect(conn)
             for name,table in Base.metadata.tables.items():
                 actual={c['name'] for c in inspector.get_columns(name)}

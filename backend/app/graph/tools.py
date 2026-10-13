@@ -122,4 +122,45 @@ def get_administrative_matter(matter_id: str, config: RunnableConfig) -> str:
     except service.NotFound:return '未找到可访问的事项。'
     except Exception:return '事务服务暂不可用。'
 
-TOOLS = [list_sops, get_sop, read_sop_image, search_knowledge, list_administrative_matters, get_administrative_matter]
+@tool
+def list_administrative_change_proposals(config: RunnableConfig) -> str:
+    """查询当前聊天的事务提议及用户确认结果。用户说已确认/拒绝时先查这里，不根据文字自行假定写入成功。只读。"""
+    import json
+    from app.matters import proposals
+    cfg=config.get('configurable') or {}
+    if not cfg.get('authenticated_user_id') or not cfg.get('thread_id'):return '无法确认登录会话。'
+    try:return json.dumps({'items':proposals.listing(cfg['authenticated_user_id'],cfg['thread_id'])},ensure_ascii=False,default=str)
+    except Exception:return '事务提议服务暂不可用。'
+
+@tool
+def propose_administrative_change(operation: str, payload: dict, config: RunnableConfig,
+                                  matter_id: str = "", link_id: str = "") -> str:
+    """从对话整理事务变更并生成聊天中的待确认卡片，不直接保存事项或执行外部审批。
+
+    用户表达报销需求时先读适用SOP/检索知识库，询问缺失的名称、准确金额、用途，不猜字段。
+    create: payload={title,details:{amount,purpose,expense_date,project,handler,policy_ref,required_materials}}。
+    未确认或缺失的可选字段省略。required_materials必须来自本轮实际读取的制度，policy_ref注明来源。
+    edit:先get事项，payload可仅含变动title/details，后端合并旧字段并锁定版本。
+    event:payload={kind,description,source_ref}，kind为note/correct/submit/return/resubmit/approve/pay/cancel；
+    submit等仅记录用户明确报告已完成的状态，不是实际办理；审批支付必须有用户提供的来源。
+    link/edit_link:payload={kind,title,state,source_ref}，kind为material/task/project/person；
+    材料provided/verified需要位置或核验引用；不要将说“有发票”自动当作已核验。
+    delete/unlink:payload={}，必须先明确目标，unlink还需要link_id。更新删除先取得本人事项ID。
+    不接受user_id/revision/request_id。用户点击卡片确认后才写入；工具无法代替用户确认。
+    避免同轮重复提议；修改草稿重新调用即可替换同目标旧提议。
+    """
+    import json
+    from app.matters import proposals, service
+    cfg=config.get('configurable') or {}
+    if not cfg.get('authenticated_user_id') or not cfg.get('thread_id'):
+        return '无法确认登录会话，不能生成事务操作。'
+    try:
+        result=proposals.propose(cfg['authenticated_user_id'],cfg['thread_id'],operation,payload,matter_id,link_id)
+        return json.dumps(result,ensure_ascii=False,default=str)
+    except (service.Invalid,service.Conflict) as exc:return str(exc)
+    except service.NotFound:return '未找到可访问的事项或关联对象。'
+    except Exception:
+        logger.exception('事务提议失败')
+        return '事务服务暂不可用，尚未生成待确认操作。'
+
+TOOLS = [list_sops, get_sop, read_sop_image, search_knowledge, list_administrative_matters, get_administrative_matter, propose_administrative_change, list_administrative_change_proposals]

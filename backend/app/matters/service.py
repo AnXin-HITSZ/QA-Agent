@@ -1,4 +1,5 @@
 """Business transitions are deterministic; LLM output is a draft, never a commit."""
+from contextlib import nullcontext
 import hashlib
 import json
 import uuid
@@ -104,10 +105,10 @@ def create(uid,request):
             if replay:return replay
         raise Conflict('创建发生并发冲突，请刷新后重试') from None
 
-def _create(uid,request):
+def _create(uid,request, *, session=None):
     details=request.details.model_dump(mode='json');_requirements(details)
     fp=_fingerprint('', 'create',request)
-    with db.session_scope() as session:
+    with (nullcontext(session) if session is not None else db.session_scope()) as session:
         old=_replay(session,uid,request.request_id,fp)
         if old:return old
         row=Matter(id=uuid.uuid4().hex,user_id=uid,kind=request.kind,title=request.title.strip(),status='preparing',revision=1,
@@ -133,9 +134,9 @@ def _sync_material_tasks(session,row):
         if name not in _requirements(row.details):task.deleted=1;task.revision+=1
     session.flush()
 
-def edit_link(uid,mid,lid,request):
+def edit_link(uid,mid,lid,request, *, session=None):
     fp=_fingerprint(mid,'edit_link:'+lid,request)
-    with db.session_scope() as session:
+    with (nullcontext(session) if session is not None else db.session_scope()) as session:
         row=_row(session,uid,mid,lock=True)
         replay=_replay(session,uid,request.request_id,fp)
         if replay:return replay
@@ -152,9 +153,9 @@ def edit_link(uid,mid,lid,request):
         _event(session,row,request.request_id,'edit_link','修改关联对象：'+link.title,before,fingerprint=fp)
         return _view(row)
 
-def mutate(uid,mid,request,operation):
+def mutate(uid,mid,request,operation, *, session=None):
     fp=_fingerprint(mid,operation,request)
-    with db.session_scope() as session:
+    with (nullcontext(session) if session is not None else db.session_scope()) as session:
         row=_row(session,uid,mid,lock=True,include_deleted=True)
         replay=_replay(session,uid,request.request_id,fp)
         if replay:return replay
@@ -190,9 +191,9 @@ def mutate(uid,mid,request,operation):
         _event(session,row,request.request_id,operation,description,before,source,fingerprint=fp)
         return _view(row)
 
-def remove_link(uid,mid,lid,request):
+def remove_link(uid,mid,lid,request, *, session=None):
     fp=_fingerprint(mid,'unlink:'+lid,request)
-    with db.session_scope() as session:
+    with (nullcontext(session) if session is not None else db.session_scope()) as session:
         row=_row(session,uid,mid,lock=True)
         replay=_replay(session,uid,request.request_id,fp)
         if replay:return replay

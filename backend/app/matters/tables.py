@@ -59,3 +59,21 @@ class Projection(Base):
     attempts: Mapped[int] = mapped_column(Integer)
     last_error: Mapped[str] = mapped_column(String(100))
     updated_at: Mapped[datetime] = mapped_column(DT)
+
+
+class Proposal(Base):
+    __tablename__ = 'admin_matter_proposals'
+    __table_args__ = (Index('ix_admin_proposals_thread', 'user_id', 'thread_id', 'status'),
+        UniqueConstraint('user_id', 'dedupe_key', name='uq_admin_proposal_dedupe'))
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    thread_id: Mapped[str] = mapped_column(String(160))
+    matter_id: Mapped[str] = mapped_column(String(32))
+    operation: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict] = mapped_column(JSON)
+    before: Mapped[dict] = mapped_column('before_snapshot', JSON)
+    dedupe_key: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32))
+    result: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DT)
+    expires_at: Mapped[datetime] = mapped_column(DT)

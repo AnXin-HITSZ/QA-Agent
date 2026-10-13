@@ -249,3 +249,16 @@ mysql <应用数据库名> < backend/migrations/0011_administrative_matters.up.s
 回滚前导出四张表及办理审计；down会删除新增事务数据，旧个人记忆/认证/计量表不受影响。
 
 图初始化与存量撤回详见 [事务记忆与关联图技术方案](../../docs/事务记忆与关联图技术方案.md)。
+
+
+## 0012：聊天中的事务待确认操作
+
+新增 `admin_matter_proposals`；模型只提议，登录用户通过确认接口提交。提议与事务变更同事务落库，锁定目标版本，重复确认幂等。依赖0011；不会自动在启动时建表。
+
+```bash
+cd /root/qa-agent/backend
+mysql --default-character-set=utf8mb4 qa_agent_dev < migrations/0012_administrative_chat_proposals.up.sql
+mysql --default-character-set=utf8mb4 qa_agent_prod < migrations/0012_administrative_chat_proposals.up.sql
+```
+
+先执行迁移再重启新后端、构建新前端。回滚前停止聊天提议/确认请求并导出提议记录；down只删提议表，不回滚已确认事项与审计。既有.env配置无需新增或变更。本轮尚未执行真实数据库迁移。

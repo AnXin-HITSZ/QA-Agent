@@ -42,3 +42,12 @@ def test_administrative_schema_matches_numbered_migration():
     from tests import migrationkit as mig
     model=mig.model_tables('app.matters.tables');sql=mig.migration_tables()
     for name,table in model.items():mig.compare_tables(sql[name],table,label=name)
+
+def test_proposal_endpoints_are_authenticated_and_use_server_owner(client,monkeypatch):
+    seen=[]
+    monkeypatch.setattr(matters.proposals,'listing',lambda uid,tid:seen.append((uid,tid)) or [])
+    assert client.get('/api/v1/matters/proposals?thread_id=chat').json()=={'items':[]}
+    assert seen==[('trusted-owner','chat')]
+    monkeypatch.setattr(matters.proposals,'decide',lambda uid,pid,confirm:seen.append((uid,pid,confirm)) or {'status':'confirmed'})
+    assert client.post('/api/v1/matters/proposals/id/confirm').status_code==200
+    assert seen[-1]==('trusted-owner','id',True)
