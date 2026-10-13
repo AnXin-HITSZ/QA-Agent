@@ -9,9 +9,8 @@ import AnswerRecord from "./AnswerRecord.vue";
 import Composer from "./Composer.vue";
 import EmptyState from "./EmptyState.vue";
 import UserQuery from "./UserQuery.vue";
-import MatterProposals from "./MatterProposals.vue";
 
-const { messages, loading, error, send, stop, newConversation, threadId } = useChat();
+const { messages, loading, error, send, stop, newConversation } = useChat();
 // 会话工具胶囊(仅对话视图):边栏开合 / 搜索 / 新对话 / 待办。
 const { open: sidebarOpen, toggleDrawer, openSearch, closeDrawer } = useSidebar();
 // 右侧待办抽屉开关 + 未完成计数(徽标)。
@@ -190,8 +189,6 @@ onActivated(() => {
             :stopped="m.stopped"
           />
         </template>
-
-        <MatterProposals :thread-id="threadId" :loading="loading" />
 
         <div v-if="loading && !isStreaming" class="thinking" aria-live="polite">
           <span class="thinking__dot" />

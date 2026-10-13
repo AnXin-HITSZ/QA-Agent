@@ -442,6 +442,7 @@ def create_item(session, *, user_id: str, text: str, actor: str = ACTOR_LLM,
         new_context=row.fact_context,
     ))
     from app.memory.graph import runtime as graph_runtime
+    graph_runtime.enqueue(session, _item(row), now=now)
     return _item(row)
 
 
@@ -525,6 +526,7 @@ def update_item(session, *, user_id: str, memory_id: str, new_text: str, actor: 
     session.refresh(row)
     from app.memory.graph import runtime as graph_runtime
     graph_runtime.invalidate(session, _item(row), now=now)
+    graph_runtime.enqueue(session, _item(row), now=now)
     if actor == "user":
         from app.memory import episodes
         episodes.revoke(session, user_id=user_id, scope=row.scope, memory_id=memory_id)

@@ -1,4 +1,8 @@
-"""存量通用图的权威快照和可恢复撤回。没有抽取、维护或问答召回入口。"""
+"""Durable graph writes and authoritative graph snapshots.
+
+Graph jobs share the memory queue, leases and generation fence. Neo4j is a
+projection: every recall is checked against a fresh authoritative snapshot.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +13,7 @@ from sqlalchemy import select, delete, inspect
 from app.config import get_settings
 from app.memory import db, repo as memory_repo
 from app.memory.graph import resolve_switches, get_graph_client
-from app.memory.graph import repo
+from app.memory.graph import repo, extract
 from app.memory.graph.tables import (MemoryEntityRow, MemoryEntityAliasRow, MemoryEntityMentionRow,
     MemoryRelationRow, MemoryEventRow, MemoryEventParticipantRow, MemoryFactLinkRow)
 
@@ -24,6 +28,28 @@ def switches():
 
 def installed(session):
     return inspect(session.connection()).has_table("memory_entities")
+
+
+def enqueue(session, item, *, now, force=False):
+    if not switches().write:
+        return None
+    from app.memory.tables import MemoryJobRow
+    pending = session.scalars(select(MemoryJobRow).where(
+        MemoryJobRow.user_id == item.user_id, MemoryJobRow.scope == item.scope,
+        MemoryJobRow.kind == JOB_GRAPH, MemoryJobRow.status == "pending",
+        MemoryJobRow.thread_id == item.thread_id, MemoryJobRow.generation == item.generation)
+        .order_by(MemoryJobRow.created_at.desc()).limit(1)).first()
+    if pending and len((pending.payload or {}).get("memory_ids", [])) < 32:
+        pending.payload = {"memory_ids": list(dict.fromkeys(
+            [*(pending.payload or {}).get("memory_ids", []), item.id]))}
+        session.flush()
+        return pending.id
+    import uuid
+    suffix = ":" + uuid.uuid4().hex if force else ""
+    return memory_repo.enqueue_job(session, user_id=item.user_id, scope=item.scope,
+        kind=JOB_GRAPH, dedupe_key=f"{extract.PROTOCOL_VERSION}:{item.id}:{item.revision}:{item.meta_version}{suffix}",
+        thread_id=item.thread_id, payload={"memory_ids": [item.id]}, now=now,
+        max_attempts=get_settings().memory_job_max_attempts)
 
 
 def queue_sync(session, *, user_id, scope, generation, now):
@@ -70,6 +96,155 @@ def purge(session, *, user_id, scope, generation, now):
     repo.delete_graph_for_user(session, user_id, scope=scope)
     if has_data or has_cleanup:
         queue_sync(session, user_id=user_id, scope=scope, generation=generation, now=now)
+
+
+def _parse_date(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    try:
+        # Year/month precision remains in JSON; do not invent January 1st.
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def retry_input(session, job):
+    """Recover legacy failed graph jobs without restoring raw dialogue payloads."""
+    from sqlalchemy import select
+    from app.memory.tables import MemoryItemRow
+    memory_repo.assert_generation(session, job.user_id, job.generation,
+                                  scope=job.scope, now=db.utc_naive())
+    ids = list((job.payload or {}).get("memory_ids", []))
+    if not ids:
+        if not job.thread_id:
+            raise ValueError("图任务缺少可恢复的会话来源")
+        ids = list(session.scalars(select(MemoryItemRow.id).where(
+            MemoryItemRow.user_id == job.user_id, MemoryItemRow.scope == job.scope,
+            MemoryItemRow.generation == job.generation, MemoryItemRow.status == "active",
+            MemoryItemRow.thread_id == job.thread_id).order_by(MemoryItemRow.id).limit(501)))
+        if not ids or len(ids) > 500:
+            raise ValueError("图任务来源缺失或超过恢复上限，请分页重新登记图构建")
+    ids = [f.id for f in memory_repo.list_by_ids(session, ids)
+           if (f.user_id, f.scope, f.generation, f.status) ==
+              (job.user_id, job.scope, job.generation, "active")]
+    if not ids:
+        raise ValueError("图任务来源缺失，不能登记空输入重试")
+    return {"memory_ids": ids}
+
+
+def apply(session, *, user_id, scope, facts, report, turn_key, generation):
+    now = db.utc_naive()
+    memory_repo.assert_generation(session, user_id, generation, scope=scope, now=now)
+    current = {x.id: x for x in memory_repo.list_by_ids(session, [x.id for x in facts])}
+    for fact in facts:
+        row = current.get(fact.id)
+        if not row or (row.user_id, row.scope, row.revision, row.meta_version, row.generation) != (
+            user_id, scope, fact.revision, fact.meta_version, generation):
+            raise ValueError("图提取期间事实版本已变化")
+    identities = {}
+    for entity in report.entities:
+        evidence_facts = [facts[i] for i in entity.facts]
+        candidates = repo.find_entities_by_name(session, user_id=user_id, scope=scope, name=entity.name)
+        candidates = list({c.id: c for c in [*candidates,
+            *repo.find_entities_by_alias(session, user_id=user_id, scope=scope, alias=entity.name)]}.values())
+        # Name alone NEVER proves identity. Reuse a resolved mention tied to
+        # the cited source memory; unresolved identity remains pending.
+        known = {m.entity_id for f in evidence_facts for m in repo.mentions_for_memory(session, f.id)
+                 if m.status == "resolved" and repo.name_key(m.surface) == repo.name_key(entity.name)}
+        proven = [c for c in candidates if c.id in known]
+        proven = [c for c in proven if c.generation == generation
+                  and (c.kind == entity.kind or "unknown" in (c.kind, entity.kind))]
+        # Extending an existing identity to another fact needs corroboration,
+        # not merely a same-name old fact included in the model's input.
+        linked = {f.id for f in evidence_facts if any(
+            m.status == "resolved" and m.entity_id in known
+            and repo.name_key(m.surface) == repo.name_key(entity.name)
+            for m in repo.mentions_for_memory(session, f.id))}
+        if linked and len(linked) < len(evidence_facts):
+            from app.memory.graph.extract import _flatten, _grounded
+            quote = entity.identity_quote
+            distinctive = _flatten(quote).replace(_flatten(entity.name), "").strip()
+            if len(distinctive) < 8 or not all(_grounded(quote,
+                [q["quote"] for q in (f.fact_context or {}).get("structured_graph", {}).get("quotes", [])]
+                or [f.text]) for f in evidence_facts):
+                proven = []
+        # Two same-name refs in one report cannot reuse the same ID.
+        proven = [c for c in proven if c.id not in identities.values()]
+        if len(proven) == 1:
+            target = proven[0]
+        elif any(c.id not in identities.values() for c in candidates):
+            for f in evidence_facts:
+                repo.add_mention(session, user_id=user_id, scope=scope, surface=entity.name,
+                    memory_id=f.id, turn_key=turn_key + ":" + entity.ref, speaker=None, status="pending",
+                    entity_id=None, evidence={"candidates": [c.id for c in candidates]},
+                    generation=generation, now=now)
+            continue
+        else:
+            target = repo.create_entity(session, user_id=user_id, scope=scope,
+                name=entity.name, kind=entity.kind, generation=generation, now=now)
+        identities[entity.ref] = target.id
+        for alias in entity.aliases:
+            repo.add_alias(session, entity_id=target.id, user_id=user_id, scope=scope,
+                           alias=alias, origin="llm", now=now)
+        for f in evidence_facts:
+            repo.add_mention(session, user_id=user_id, scope=scope, surface=entity.name,
+                memory_id=f.id, turn_key=turn_key + ":" + entity.ref, speaker=None, entity_id=target.id,
+                status="resolved", evidence={"source": f.fact_context}, generation=generation, now=now)
+            # A later evidence-backed decision also resolves earlier pending
+            # mentions of this fact; confirmed identities are never overwritten.
+            for mention in repo.mentions_for_memory(session, f.id):
+                if (mention.status == "pending" and mention.generation == generation
+                        and repo.name_key(mention.surface) == repo.name_key(entity.name)):
+                    repo.resolve_mention(session, mention_id=mention.id, entity_id=target.id,
+                        status="resolved", evidence={"decision": "corroborated_fact",
+                                                     "identity_quote": entity.identity_quote})
+
+    def link(kind, fid, indices, quote=""):
+        for i in indices:
+            f = facts[i]
+            repo.link_fact(session, fact_kind=kind, fact_id=fid, memory_id=f.id,
+                memory_revision=f.revision, user_id=user_id, scope=scope, turn_key=turn_key,
+                generation=generation, now=now, quote=quote or f.text,
+                meta={"meta_version": f.meta_version, "sources": (f.fact_context or {}).get("sources", [])})
+
+    for rel in report.relations:
+        subject = identities.get(rel.subject)
+        obj = identities.get(rel.object_entity) if rel.object_entity else None
+        if not subject or (rel.object_entity and not obj):
+            continue
+        f = facts[rel.facts[0]]
+        existing = repo.find_relations(session, user_id=user_id, scope=scope,
+            subject_entity_id=subject, relation_type=rel.relation,
+            object_entity_id=obj, object_text=rel.object_text)
+        compatible = [x for x in existing if x.generation == generation
+                      and x.state == (f.fact_context or {}).get("state", "unknown")
+                      and x.event_time == f.event_time]
+        row = compatible[0] if compatible else repo.create_relation(session,
+            user_id=user_id, scope=scope, subject_entity_id=subject, relation_type=rel.relation,
+            object_entity_id=obj, object_text=rel.object_text, memory_id=f.id,
+            generation=generation, now=now, event_time=f.event_time,
+            state=(f.fact_context or {}).get("state", "unknown"))
+        link("relation", row.id, rel.facts, rel.quote)
+    for event in report.events:
+        f = facts[event.description_fact]
+        time = (f.fact_context or {}).get("time", {})
+        row = repo.find_duplicate_event(session, memory_id=f.id, description=f.text)
+        if row is None:
+            row = repo.create_event(session, user_id=user_id, scope=scope, kind=event.kind,
+                description=f.text, memory_id=f.id, generation=generation, now=now,
+                time_expression=time.get("raw", ""), anchor=_parse_date(time.get("anchor")),
+                start_at=_parse_date(time.get("start")), end_at=_parse_date(time.get("end")),
+                time_precision=time.get("precision", "unknown"),
+                status=(f.fact_context or {}).get("state", "unknown"),
+                attributes={**event.attributes, "_time": time})
+        for participant in event.participants:
+            repo.add_participant(session, event_id=row.id, user_id=user_id, scope=scope,
+                role=participant.role, name_text=participant.name,
+                entity_id=identities.get(participant.entity_ref), now=now)
+        link("event", row.id, event.facts)
+    queue_sync(session, user_id=user_id, scope=scope, generation=generation, now=now)
 
 
 def snapshot(session, *, user_id, scope, include_texts=False):
@@ -154,3 +329,16 @@ def sync(*, user_id, scope):
         data = snapshot(session, user_id=user_id, scope=scope)
         client.publish(data)
     return data["digest"]
+
+
+def recall(*, user_id, scope, query):
+    if not switches().search:
+        return {"enabled": False, "candidates": [], "paths": []}
+    client = get_graph_client()
+    if not client.connect():
+        raise RuntimeError("Neo4j 不可用")
+    with db.session_scope() as session:
+        data = snapshot(session, user_id=user_id, scope=scope, include_texts=True)
+    result = client.recall(data, query=query)
+    result["versions"] = {m["id"]: m for m in data["memories"]}
+    return result

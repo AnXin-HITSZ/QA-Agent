@@ -289,6 +289,11 @@ def apply_up(schema: dict[str, Table], sql: str, *, where: str) -> None:
             continue                       # 给存量行回填值的 UPDATE / 清理用的 DELETE:不改结构
         if alter_table(schema, stmt, where=where):
             continue
+        retired = _DROP_TABLE.match(stmt)
+        if retired:
+            assert retired.group(1), f"{where}: retirement DROP must use IF EXISTS"
+            assert schema.pop(retired.group(2), None) is not None, f"{where}: unknown retired table"
+            continue
         table = parse_table(stmt)          # 其余写法在这里显式报错(宁可炸,不要漏检)
         assert table.name not in schema, f"{where}: 重复建表:{table.name}"
         schema[table.name] = table
@@ -373,6 +378,11 @@ def apply_down(schema: dict[str, Table], sql: str, *, where: str) -> None:
         if _DATA_ONLY.match(stmt):
             continue
         if alter_table(schema, stmt, where=where):
+            continue
+        if stmt.upper().startswith('CREATE TABLE'):
+            table = parse_table(stmt)
+            assert table.name not in schema, f"{where}: duplicate restored table"
+            schema[table.name] = table
             continue
         m = _DROP_TABLE.match(stmt)
         assert m and m.group(1), (

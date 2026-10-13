@@ -21,6 +21,12 @@ def test_compact_selection_budgets_labels_and_keeps_whole_records(search_env,mon
     assert r.trace['selection']['dropped_for_budget']==['b']
 
 
+def test_preserves_missing_precision_and_relative_time(search_env):
+    h=hit('a','Alex reviewed a report',{'time':{'raw':'last week','anchor':'2024-06-04','precision':'week'},
+        'structured_graph':{'graph':{'entities':[{'ref':'a','name':'Alex'},{'ref':'b','name':'Blair'}],
+            'relations':[{'subject':'a','relation':'reviewed with','object_entity':'b'}]}}})
+    result=selection.render(h,1)
+    assert 'Blair' in result and 'reviewed with' in result and 'last week' in result and '2024-06-04' in result
 
 
 def test_source_merge_does_not_truncate_new_query_candidates_before_ranking():
@@ -78,6 +84,13 @@ def test_opt_in_search_exposes_more_candidates_than_final_limit(search_env,monke
     assert result.trace['selection']['body_chars']==len(search.format_evidence(result))
 
 
+def test_diagnostic_marks_incomplete_path_without_presenting_it_as_complete(search_env):
+    r=search.SearchResult(query='facts',candidates=[hit('a','one fact')],
+        trace={'graph':{'paths':[{'memory_ids':['a','missing']}]}})
+    selection.select_facts(r)
+    assert not r.trace['selection']['complete_paths']
+    assert not r.hits
+    assert r.trace['selection']['rejected_paths'][0]['reason']=='missing_validated_member'
 
 
 def test_supplemented_pool_revalidates_deletion_before_final_selection(sources,monkeypatch):

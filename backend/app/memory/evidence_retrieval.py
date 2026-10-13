@@ -47,7 +47,7 @@ def plan(query, evidence):
 
 def candidates(query, corpus):
     # Keep vocabulary scoring as a recall heuristic, not an answer or entailment check.
-    from app.memory.text import _STOP
+    from app.memory.graph.ranking import _STOP
     def terms_of(value):
         words=[]
         for token in text.tokenize(value):

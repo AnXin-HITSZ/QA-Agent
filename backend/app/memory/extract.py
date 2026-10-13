@@ -44,6 +44,9 @@ PROTOCOL_VERSION = "mem-extract/5"
 
 
 def protocol_version():
+    from app.memory.graph import resolve_switches
+    if resolve_switches(get_settings()).write:
+        return "mem-unified-extract/2"
     return PROTOCOL_VERSION
 
 # 高置信度的秘密模式(提示词已禁止输出,这里再拦一道;宁可少记一条,不落凭证)。
@@ -188,6 +191,9 @@ def extract_facts(messages: Sequence[dict], *, llm=None,
       MemoryExtractionError —— 明确失败,绝不静默当成「没有新事实」;
     - 空结果({"facts": []})是正常返回,不是错误。
     """
+    if protocol_version() == "mem-unified-extract/2":
+        from app.memory import unified_extract
+        return unified_extract.extract(messages, llm=llm, retries=retries, note=note)
     if llm is None:
         from app.memory.llm import get_memory_llm
         llm = get_memory_llm()

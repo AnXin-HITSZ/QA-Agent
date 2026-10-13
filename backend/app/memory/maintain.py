@@ -235,14 +235,17 @@ def visible_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
     return kept
 
 
-def build_messages(fact: str, candidates: Sequence[Candidate]) -> list:
+def build_messages(fact: str, candidates: Sequence[Candidate], *, precision: bool = False) -> list:
     """拼维护决策的提示词(候选按传入顺序,逐个截断;总量有字符预算)。"""
+    from app.memory.unified_extract import precise_label
     lines = [f"{c.memory_id} | {c.kind} | {clamp_text(c.text, CANDIDATE_CHARS)}"
              + context_label(c.fact_context)
+             + ("\n[已保存精确结构] " + precise_label(c.fact_context)
+                if c.fact_context.get("structured_graph") else "")
              for c in visible_candidates(candidates)]
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    return [SystemMessage(SYSTEM_PROMPT),
+    return [SystemMessage(SYSTEM_PROMPT + ("\n新事实带来源核验的结构时，也比较精确结构与旧记忆。若新增明确的参与者、角色、对象或限定，使用UPDATE保存补充，即使简短正文不变；完全相同才NONE。仍不得把过去事件当作当前状态覆盖，不以同名合并人物。" if precision else "")),
             HumanMessage(USER_TEMPLATE.format(candidates="\n".join(lines) or "(无)",
                                               fact=clamp_text(fact, MAX_FACT_CHARS)))]
 
@@ -251,7 +254,7 @@ def build_messages(fact: str, candidates: Sequence[Candidate]) -> list:
 
 
 def decide(fact: str, candidates: Sequence[Candidate], *, llm=None,
-           retries: int | None = None, max_events: int | None = None) -> MaintenanceDecision:
+           retries: int | None = None, max_events: int | None = None, precision: bool = False) -> MaintenanceDecision:
     """问模型该如何维护;只对「输出不合协议」做有限重试(与提取层同一套口径)。
 
     - 结构错误(不是 JSON / 外层不符 / 事件项不合法)与授权错误(引用没展示过的 id /
@@ -270,7 +273,7 @@ def decide(fact: str, candidates: Sequence[Candidate], *, llm=None,
     limit = int(get_settings().memory_max_text_chars)
     allowed = {c.memory_id for c in visible_candidates(candidates)}
 
-    prompt = build_messages(fact, candidates)
+    prompt = build_messages(fact, candidates, precision=precision)
     attempts = 0
     reason = ""
     while True:

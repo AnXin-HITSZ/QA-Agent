@@ -68,6 +68,7 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0010 | `0010_memory_episodes` | 已应用 | 已应用 |
 | 0011 | `0011_administrative_matters` | 已应用 | 已应用 |
 | 0012 | `0012_administrative_chat_proposals` | 已应用 | 已应用 |
+| 0013 | `0013_retire_administrative_matters` | 待执行 | 待执行 |
 
 > 2026-10-13：ECS 实际结构检查确认开发库此前已完成至0011、生产库此前已完成至0009；随后用户执行生产库0010/0011并贴出新增表检查结果。本次用户确认两个库全部迁移完成，故当前部署记录更新为均已完成至0012。0012完成状态依据用户确认，不代表已完成真实聊天模型端到端验收。已应用迁移不要重复执行。
 
@@ -238,7 +239,7 @@ up 使用 CREATE TABLE，非幂等；执行前核验目标库和表是否存在�
 离线模型与SQL对比由 test_memory_migration.py 覆盖；真实效果评测另行报告。
 
 0010 不单独指定 COLLATE，与既有记忆表一样使用 MySQL 的 utf8mb4 默认排序规则。首次开发库验证发现指定 unicode_ci 会与既有 0900_ai_ci 的 turn_id 关联发生错误1267；开发库已对齐。已有错误排序规则的安装应先查 information_schema.COLUMNS，确认全部关联字段及目标库，再用迁移权限对齐 memory_episodes，不能盲目修改既有权威表。只读真实检查入口为 test_memory_episodes_mysql.py；没有测试连接时明确跳过。
-## 0011：行政事务与办理经历
+## 0011：行政事务与办理经历（功能已撤回，迁移保留）
 
 新增 `admin_matters`、`admin_matter_events`、`admin_matter_links`、`admin_matter_projections`。
 字段、索引和唯一键由 `test_administrative_api.py` 与模型逐项核对。MySQL 是事务权威存储；Neo4j 是可重建索引。
@@ -253,10 +254,10 @@ mysql <应用数据库名> < backend/migrations/0011_administrative_matters.up.s
 
 回滚前导出四张表及办理审计；down会删除新增事务数据，旧个人记忆/认证/计量表不受影响。
 
-图初始化与存量撤回详见 [事务记忆与关联图技术方案](../../docs/事务记忆与关联图技术方案.md)。
+事务功能现已撤回；当前图记忆恢复与配置说明见 [通用图记忆恢复与验证说明](../../docs/通用图记忆恢复与验证说明.md)。
 
 
-## 0012：聊天中的事务待确认操作
+## 0012：聊天中的事务待确认操作（功能已撤回，迁移保留）
 
 新增 `admin_matter_proposals`；模型只提议，登录用户通过确认接口提交。提议与事务变更同事务落库，锁定目标版本，重复确认幂等。依赖0011；不会自动在启动时建表。
 
@@ -267,3 +268,28 @@ mysql --default-character-set=utf8mb4 qa_agent_prod < migrations/0012_administra
 ```
 
 先执行迁移再重启新后端、构建新前端。回滚前停止聊天提议/确认请求并导出提议记录；down只删提议表，不回滚已确认事项与审计。既有.env配置无需新增或变更。2026-10-13用户确认开发库与生产库均已完成0012，当前无需再次执行迁移；上述命令供尚未应用该版本的环境使用。
+
+
+## 2026-10-13：恢复通用图记忆
+
+当前代码恢复至事务改造前 `8e45336` 中的记忆实现（最后记忆提交 `340c9cc`），保留当前 RAG 和其他模块。事务管理 API、工具、页面、模型和后台投影已移除。
+
+0011/0012 已在开发库和生产库应用，作为历史迁移保留，不修改旧 SQL，不自动执行 down，也不删除已有事务数据。新运行代码不访问这些表。恢复通用图使用既有0009图表与0010来源表，无新增数据库迁移。
+
+MEMORY_GRAPH_ENABLED 恢复为通用图抽取、同步、召回总开关；恢复六项图预算/抽取重试参数，参见 `.env.example`。配置改变后重启。ECS配置、应用部署和任何数据库数据未由本次恢复操作修改。
+
+
+## 0013：删除已退役事务存储
+
+用户已授权删除事务功能数据。up只DROP五张admin_matter表，不影响0001–0010通用记忆、认证、计量或RAG数据；先停止所有旧事务写入者，并清理Neo4j事务投影，再执行。down仅恢复五张空表结构，不能恢复业务记录或审计；仅恢复表结构不等于恢复事务功能。
+
+```bash
+cd /root/qa-agent/backend
+~/miniconda3/envs/qa-agent/bin/python scripts/retire_administrative_graph.py
+# 停止旧后端和其他旧事务写入者后：
+~/miniconda3/envs/qa-agent/bin/python scripts/retire_administrative_graph.py --apply --writers-stopped --output data/eval/retirement/neo4j.json
+mysql --default-character-set=utf8mb4 qa_agent_dev < migrations/0013_retire_administrative_matters.up.sql
+mysql --default-character-set=utf8mb4 qa_agent_prod < migrations/0013_retire_administrative_matters.up.sql
+```
+
+CLI默认只读，执行时分页清理QAAdministrativeMatter/QAAdministrativeObject及关联关系，并删除三项经标签和属性核验的事务专用索引/约束。遇到混合通用图标签或跨边界关系直接拒绝；不会删除QAMemoryGraph。DDL非事务操作，部分执行失败可在排查后重跑IF EXISTS的up，不能自动恢复已删记录。

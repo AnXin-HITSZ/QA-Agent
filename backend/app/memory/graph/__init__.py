@@ -1,7 +1,33 @@
-"""存量通用图的撤回与清理基础设施。通用图抽取和问答召回已经删除。
-新事务图实现在 app.matters.projection，权威数据在 app.matters.tables。
-本包仅保留历史数据隔离、删除意图、对账和驱动生命周期，不能创建新图记忆。
-关闭总开关时不连接 Neo4j，清理意图由原台账保存，开启后继续执行。
+"""记忆图:Neo4j 只是**可重建投影**,事实源仍在 MySQL(§7;方案见 docs/记忆图索引技术方案.md)。
+
+定位:实体 / 别名 / 关系 / 事件在 MySQL 里保存(FK 不用,事实绑定来源与记忆版本),
+Neo4j 里放的只是「同一份事实的图形态」,用于遍历、事件链接与图候选召回;
+它任何时候都可以从 MySQL 重建(管理命令),不一致以 MySQL 为准。
+
+模块分工(自下而上,业务层不越级):
+    models.py       领域数据类 + 名称匹配键(name_key),不碰库、不碰 Neo4j
+    tables.py       七张 MySQL 表(SQLAlchemy 声明;迁移 0009 与之逐项一致)
+    repo.py         全部 SQL(读写都带 user_id + scope;幂等 / 版本 / 代次)
+    extract.py      图提取协议 mem-graph-extract/2:把已入库事实整理成图元素(带事实编号)
+    base.py         开关矩阵收敛(resolve_switches)与 GraphClient 接口契约
+
+统一的图组件接口(禁止散落 Neo4j 查询):
+    get_graph_client()            进程内单例(生产入口;lifespan 连接 / 收尾)
+    build_graph_client(settings)  按给定配置装配(测试 / 管理命令用)
+    DisabledGraphClient           总开关关闭时的默认实现:不 import 驱动、不连接
+    Neo4jGraphClient              懒加载官方驱动的实现(bolt)
+
+配置语义：唯一功能开关 MEMORY_GRAPH_ENABLED；修改后重启生效。
+- false：关闭图抽取、投影、召回与后台图同步，不连接 Neo4j。
+- true：开启图抽取、投影、召回与后台图同步。
+- 评测 CLI 的 --graph-recall disabled 仅禁用该实验的图召回，不启用被总开关关闭的图；
+  旧 WRITE/SEARCH/WORKER 子开关已移除，不作为生产设置。
+
+关键语义:
+- 「关闭」是配置状态,不是故障:health 明确说「未启用」而不是报连接错误;
+- 关闭期间**不丢失删除意图**:彻底清除 / 删除的图侧清理先登记在 MySQL 台账
+  (memory_ops,复用既有机制),重新启用后由 Worker 补做 —— 不在这一层;
+- 「无结果」「未同步」「失败」与「关闭」在诊断里分开说,不混为一谈(§12)。
 """
 
 from __future__ import annotations
