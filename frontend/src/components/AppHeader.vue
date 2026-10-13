@@ -17,6 +17,7 @@ const TABS: Array<{ name: AppRouteName; label: string }> = [
   { name: "knowledge", label: "知识库" },
   { name: "sops", label: "SOP 流程" },
   { name: "memory", label: "我的记忆" },
+  { name: "matters", label: "事务管理" },
   { name: "metering", label: "调用与费用" },
 ];
 

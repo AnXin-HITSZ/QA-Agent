@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 
 from app.rag.retrieve import format_hits
 from app.rag.retrieve import search_knowledge as _search_knowledge
@@ -95,4 +96,30 @@ def search_knowledge(query: str, top_k: int | None = None):
 
 
 # 供图绑定到 LLM(builder.ToolNode 执行 + nodes.bind_tools 绑定,均从此导入)。
-TOOLS = [list_sops, get_sop, read_sop_image, search_knowledge]
+@tool
+def list_administrative_matters(config: RunnableConfig, status: str = "") -> str:
+    """查看当前登录用户的报销事项及状态。只读，不创建或提交事项；金额与状态以事务数据为准。"""
+    import json
+    from app.matters import service
+    uid=(config.get('configurable') or {}).get('authenticated_user_id')
+    if not uid:return '无法确认登录身份，不能读取事务。'
+    try:return json.dumps({'items':service.list_matters(uid,status=status,limit=20),'limit':20},ensure_ascii=False,default=str)
+    except Exception:return '事务服务暂不可用，请到事务管理页面检查。'
+
+@tool
+def get_administrative_matter(matter_id: str, config: RunnableConfig) -> str:
+    """读取指定报销事项的材料、缺件、待办、办理历史和确认来源。ID先从事项列表取得；无权访问与不存在同样返回未找到。只读，不执行审批支付。"""
+    import json
+    from app.matters import service
+    uid=(config.get('configurable') or {}).get('authenticated_user_id')
+    if not uid:return '无法确认登录身份，不能读取事务。'
+    try:
+        data=service.get(uid,matter_id)
+        data['events_total']=len(data['events']);data['events']=data['events'][-20:]
+        data['links_total']=len(data['links']);data['links']=data['links'][:40]
+        data['note']='这里只返回最近20个事件和前40项关联，完整记录见事务详情；不能宣称已穷尽所有经历。'
+        return json.dumps(data,ensure_ascii=False,default=str)
+    except service.NotFound:return '未找到可访问的事项。'
+    except Exception:return '事务服务暂不可用。'
+
+TOOLS = [list_sops, get_sop, read_sop_image, search_knowledge, list_administrative_matters, get_administrative_matter]

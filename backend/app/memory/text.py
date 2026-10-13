@@ -164,3 +164,6 @@ def bm25_scores(query: str, docs: Iterable[tuple[str, str]], *, k1: float = K1,
             hits.append(Bm25Hit(doc_id=doc_id, score=total, matched=tuple(matched)))
     hits.sort(key=lambda h: (-h.score, h.doc_id))
     return hits
+
+
+_STOP = frozenset("a an the and or is are was were be been do does did what which who when where why how to of in on for from with it its his her their they he she have has had".split())

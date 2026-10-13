@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
-    admin_users, auth, chat, conversations, health, knowledge, memory, metering, sops, todos,
+    admin_users, auth, chat, conversations, health, knowledge, memory, metering, sops, todos, matters,
 )
 from app.config import get_settings
 from app.graph import build_graph
@@ -133,25 +133,21 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("长期记忆初始化失败(不影响启动与聊天):%s", exc)
 
-    # 长期记忆图(Neo4j 投影):总开关关闭时什么都不做(连驱动都不加载,见 app/memory/graph)。
-    # 打开时在 worker 线程里连接 + 探活(不阻塞事件循环),失败只告警:图是软依赖,
-    # 启动与聊天不受影响,图通道显式降级并在 /health 与诊断里看得到(§6/§18)。
-    graph_client = None
-    try:
-        from app.memory import graph as memory_graph
+    from app.matters import projection as administrative_projection
+    administrative_projection.start()
 
-        graph_client = memory_graph.get_graph_client()
-        await anyio.to_thread.run_sync(graph_client.connect)
-        st = graph_client.health()
-        if st.get("enabled"):
-            if st.get("available"):
-                logger.info("长期记忆图:Neo4j 已连接(%s)", st.get("uri"))
-            else:
-                logger.warning("长期记忆图:Neo4j 不可用(%s);图通道将显式降级。", st.get("reason"))
+    # 事务图是软依赖，关闭时零驱动，故障时保留MySQL事务与待同步意图。
+    from app.memory import graph as legacy_graph
+    graph_client = legacy_graph.get_graph_client()  # only close it if legacy withdrawal used it
+    try:
+        if settings.memory_graph_enabled:
+            client = administrative_projection.driver()
+            await anyio.to_thread.run_sync(client.verify_connectivity)
+            logger.info("事务关联图:Neo4j 已连接，后台同步已启动")
         else:
-            logger.info("长期记忆图:未启用(%s)", st.get("reason"))
+            logger.info("事务图投影未开启；事务管理与权威关联图仍可使用")
     except Exception as exc:
-        logger.warning("长期记忆图初始化失败(不影响启动与聊天):%s", exc)
+        logger.warning("事务图暂不可用(%s)，关联图回退MySQL", type(exc).__name__)
 
     try:
         yield
@@ -168,6 +164,7 @@ async def lifespan(app: FastAPI):
             memory_worker.stop()
         except Exception as exc:
             logger.warning("长期记忆线程收尾失败:%s", exc)
+        await anyio.to_thread.run_sync(administrative_projection.stop)
         if graph_client is not None:
             try:
                 await anyio.to_thread.run_sync(graph_client.close)
@@ -209,6 +206,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(knowledge.router)
     app.include_router(knowledge.admin_router)
+    app.include_router(matters.router)
     app.include_router(memory.router)            # 我的记忆(普通用户自管理,user_id 只来自 Principal)
     app.include_router(metering.router)          # 调用日志与费用统计(admin,见 §9 权限说明)
     app.include_router(sops.router)

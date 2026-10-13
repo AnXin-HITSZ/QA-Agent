@@ -56,15 +56,11 @@ def test_master_off_is_disabled_and_never_touches_driver(monkeypatch):
 
 
 def test_graph_master_controls_entire_graph_and_cli_ablation_is_scoped():
-    from app.memory.graph.base import evaluation_recall
     for master in (False,True):
         s=_settings(memory_graph_enabled=master)
         sw=resolve_switches(s)
-        assert (sw.master,sw.write,sw.search,sw.worker)==(master,master,master,master)
-        with evaluation_recall("disabled"):
-            sw=resolve_switches(s)
-            assert (sw.master,sw.write,sw.search,sw.worker)==(master,master,False,master)
-        assert resolve_switches(s).search==master
+        assert (sw.master,sw.write,sw.search,sw.worker)==(master,False,False,master)
+        assert resolve_switches(s).search is False
 
 
 

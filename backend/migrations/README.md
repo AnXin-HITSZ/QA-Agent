@@ -233,3 +233,19 @@ up 使用 CREATE TABLE，非幂等；执行前核验目标库和表是否存在�
 离线模型与SQL对比由 test_memory_migration.py 覆盖；真实效果评测另行报告。
 
 0010 不单独指定 COLLATE，与既有记忆表一样使用 MySQL 的 utf8mb4 默认排序规则。首次开发库验证发现指定 unicode_ci 会与既有 0900_ai_ci 的 turn_id 关联发生错误1267；开发库已对齐。已有错误排序规则的安装应先查 information_schema.COLUMNS，确认全部关联字段及目标库，再用迁移权限对齐 memory_episodes，不能盲目修改既有权威表。只读真实检查入口为 test_memory_episodes_mysql.py；没有测试连接时明确跳过。
+# 0011：行政事务与办理经历
+
+新增 `admin_matters`、`admin_matter_events`、`admin_matter_links`、`admin_matter_projections`。
+字段、索引和唯一键由 `test_administrative_api.py` 与模型逐项核对。MySQL 是事务权威存储；Neo4j 是可重建索引。
+
+使用具有 DDL 权限的账号，明确指定应用数据库执行：
+
+```bash
+mysql <应用数据库名> < backend/migrations/0011_administrative_matters.up.sql
+```
+
+应用启动不会自动建表。开发库已执行0011并通过真实服务验证；生产库本次未执行。开发应用账号若报1142，应使用管理账号执行迁移，不为此扩大应用账号权限。
+
+回滚前导出四张表及办理审计；down会删除新增事务数据，旧个人记忆/认证/计量表不受影响。
+
+图初始化与存量撤回详见 [事务记忆与关联图技术方案](../../docs/事务记忆与关联图技术方案.md)。

@@ -225,12 +225,8 @@ class Settings(BaseSettings):
     memory_rerank_instruct: str = ("Given a newly extracted fact, retrieve existing memories "
                                    "that state the same or conflicting information about the user")
 
-    # ---- 图记忆(Neo4j 只是可重建投影,事实源仍在 MySQL;方案见 docs/记忆图索引技术方案.md)----
-    # 开关矩阵(§6):**总开关关闭时(默认)** —— 不加载驱动、不建连接 / 不探活、不抽取图元素、
-    # 不投影、不召回;缺 NEO4J_* 配置也不影响启动,现有记忆功能一字不变。三个子开关都受总开关
-    # 约束(总开关关闭时一律无效),有效组合见 app/memory/graph/__init__.py 的模块注释。
-    # 切换方式 = 改环境变量 + 重启进程(应用与评测进程各自重启),没有运行时热切换 / 请求级旁路。
-    memory_graph_enabled: bool = False          # 总开关:图记忆全链路(写 + 投影 + 召回)
+    # ---- 事务关联图（权威数据在MySQL，Neo4j可重建；关闭不影响事务管理）----
+    memory_graph_enabled: bool = False          # 事务关联图投影与存量图清理；不参与个人记忆召回
     # Neo4j 连接(bolt)。服务端只在本机 / 内网监听,不要把 7687 暴露到公网;凭据只从环境变量读。
     neo4j_uri: str = "bolt://127.0.0.1:7687"
     neo4j_username: str = "neo4j"
@@ -240,16 +236,8 @@ class Settings(BaseSettings):
     memory_graph_connect_timeout_seconds: float = 5.0
     memory_graph_query_timeout_seconds: float = 15.0
     memory_graph_max_pool_size: int = 10
-    # 图提取与记忆提取走同一个聊天模型;只重试「输出格式不合法」,业务异常交给任务退避。
-    memory_graph_extract_retries: int = 1
-    # 遍历与候选预算(§12/§13:**有界**;高连接度实体不得把整个用户图扩进来):
-    memory_graph_max_hops: int = 2              # 图遍历最多几跳(一跳直接事实也要能召回)
-    memory_graph_max_nodes: int = 40            # 单次查询最多访问几个图节点
-    memory_graph_max_paths: int = 20            # 单次查询最多返回几条路径
-    memory_graph_fanout_limit: int = 25         # 单个实体最多展开几个邻居(超出截断并记诊断)
-    memory_graph_candidate_k: int = 10          # 图通道进融合的候选条数(别把重排挤掉)
-    memory_graph_max_entities: int = 8          # 查询实体识别输出上限(一次提问最多几个实体)
-    # 后台图同步:每个空闲轮次最多投影多少条记忆的图元素(全量重建 / 回填走管理命令)。
+    memory_graph_max_nodes: int = 40            # 前端单事项图展示对象上限
+    # 每轮后台事务同步上限，同时供存量清理投影分批写入使用。
     memory_graph_sync_batch: int = 50
 
     # ---- 认证 / 鉴权 / 用户管理(docs/认证鉴权与用户管理技术方案.md)----

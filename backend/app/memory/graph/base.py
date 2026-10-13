@@ -1,24 +1,9 @@
-"""图组件接口(§7):禁用实现与 Neo4j 实现共用的最小契约。
-
-这个文件只放**与实现无关**的东西:有效开关解析(GraphSwitches)、接口本身(GraphClient)。
-接口按「先生命周期,后能力」演进:投影(写)与召回(读)的方法在各自步骤加入,两个实现
-同时补齐 —— 禁用实现返回明确的「未启用」状态,不抛异常、不假装成功(§6:关闭是一种
-配置状态,不是故障)。
-
-约定:
-- **绝不抛**:connect / health / close 都不向调用方抛异常,失败折进 health 的
-  {available: False, reason: ...} —— 启动与聊天不因图故障受影响(§6/§18);
-- **懒加载**:Neo4j 实现只在 connect() 里 import 驱动;总开关关闭时连 import 都不发生,
-  「全关 ⇒ 零连接」由测试守卫(见 tests/test_memory_graph_switches.py);
-- **阻塞调用由调用方放进线程**(同步接口,经 anyio.to_thread 调),不阻塞事件循环(§7)。
-"""
+"""存量图清理的驱动接口与开关。write/search固定false；worker仅用于撤回投影。"""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from contextlib import contextmanager
-from contextvars import ContextVar
 
 from app.config import Settings
 
@@ -37,28 +22,13 @@ class GraphSwitches:
     worker: bool      # 有效后台(图同步 / 删除 / 对账由 Worker 执行)
 
 
-_evaluation_recall = ContextVar('evaluation_graph_recall',default=True)
-
-
-@contextmanager
-def evaluation_recall(mode='configured'):
-    """CLI-only ablation: never enables a graph disabled by production configuration."""
-    if mode not in ('configured','disabled'):
-        raise ValueError('invalid graph recall experiment mode')
-    token=_evaluation_recall.set(mode!='disabled')
-    try:
-        yield
-    finally:
-        _evaluation_recall.reset(token)
-
-
 def resolve_switches(settings: Settings) -> GraphSwitches:
     """把配置解析成有效开关(唯一的收敛点;纯函数,便于测试矩阵)。"""
     master = bool(settings.memory_graph_enabled)
     return GraphSwitches(
         master=master,
-        write=master,
-        search=master and _evaluation_recall.get(),
+        write=False,
+        search=False,
         worker=master,
     )
 
@@ -77,9 +47,6 @@ class GraphClient(ABC):
 
     def publish(self, data: dict) -> None:
         raise RuntimeError("图投影未启用")
-
-    def recall(self, data: dict, *, query: str) -> dict:
-        return {"enabled": False, "candidates": [], "paths": []}
 
     @abstractmethod
     def connect(self) -> bool:

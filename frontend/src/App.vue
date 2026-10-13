@@ -6,6 +6,7 @@ import ChatView from "./components/ChatView.vue";
 import HistorySidebar from "./components/HistorySidebar.vue";
 import KnowledgeView from "./components/KnowledgeView.vue";
 import MemoryView from "./components/MemoryView.vue";
+import MattersView from "./components/MattersView.vue";
 import MeteringView from "./components/MeteringView.vue";
 import SopView from "./components/SopView.vue";
 import TodoDrawer from "./components/TodoDrawer.vue";
@@ -81,6 +82,8 @@ const viewComponent = computed(() => {
       return MeteringView;
     case "memory":
       return MemoryView;
+    case "matters":
+      return MattersView;
     case "account":
       return AccountView;
     case "users":

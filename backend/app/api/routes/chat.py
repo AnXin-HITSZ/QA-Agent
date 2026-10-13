@@ -148,6 +148,7 @@ async def chat(req: ChatRequest, request: Request,
     """一次性返回完整回复;从 ReAct 轨迹回填本次引用的 SOP。thread_id 续接跨轮记忆。"""
     thread_id = await _resolve_thread(req, principal)
     config = {"configurable": {"thread_id": thread_id,
+                               "authenticated_user_id": principal.user_id,
                                "todos_prompt": await _todos_prompt(request),
                                "memory_prompt": await _memory_prompt(principal, req.message)}}
     # 登记在途生成:用户这时点「删除会话」,删除流程会先等这一次跑完再抹 Redis。
@@ -194,6 +195,7 @@ async def chat_stream(req: ChatRequest, request: Request,
     """
     thread_id = await _resolve_thread(req, principal)
     config = {"configurable": {"thread_id": thread_id,
+                               "authenticated_user_id": principal.user_id,
                                "todos_prompt": await _todos_prompt(request),
                                "memory_prompt": await _memory_prompt(principal, req.message)}}
     inputs = {"messages": [HumanMessage(content=req.message)]}

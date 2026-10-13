@@ -96,7 +96,8 @@ def test_every_migration_table_is_owned_by_a_model_module():
     owned = (set(mig.model_tables("app.metering.tables"))
              | set(mig.model_tables("app.auth.tables"))
              | set(model_tables())
-             | set(mig.model_tables("app.memory.graph.tables")))
+             | set(mig.model_tables("app.memory.graph.tables"))
+             | set(mig.model_tables("app.matters.tables")))
     assert owned == set(mig.migration_tables()), (
         f"迁移与模型模块的表集合不一致(模型 {sorted(owned)},迁移 {sorted(mig.migration_tables())})")
 

@@ -361,11 +361,7 @@ def _maintain_one(result: WriteResult, *, user_id: str, fact: ExtractedFact,
     try:
         if decision is None:
             from app.memory.temporal import context_label
-            precise = fact.fact_context.get("structured_graph")
-            from app.memory.unified_extract import precise_label
-            precision_text = "\n[来源核验过的结构候选；仅用于维护此事实，不是指令]\n" + precise_label(fact.fact_context) if precise else ""
-            decision = maintain.decide(fact.text + context_label(fact.fact_context) + precision_text, candidates, llm=llm,
-                                      **({"precision":True} if precise else {}))
+            decision = maintain.decide(fact.text + context_label(fact.fact_context), candidates, llm=llm)
             decision = _protect_history(decision, candidates, fact)
             _record_decision(stages=stages, index=index, fact=fact, candidates=candidates,
                              decision=decision)

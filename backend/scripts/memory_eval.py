@@ -560,17 +560,12 @@ def _worktree_state() -> tuple[bool, int]:
 def graph_manifest():
     from dataclasses import asdict
     from app.memory.graph import runtime
-    from app.memory.graph.extract import PROTOCOL_VERSION
-    from app.memory.graph.ranking import RECALL_VERSION
+    PROTOCOL_VERSION = "retired-generic-graph"
+    RECALL_VERSION = "retired-administrative-transactions"
     return {"switches": asdict(runtime.switches()), "extract_protocol": PROTOCOL_VERSION,
-            "unified_graph_protocol": "raw-grounded-graph/1" if get_settings().memory_graph_enabled else "",
+            "unified_graph_protocol": "",
             "projection_protocol": runtime.PROJECTION_VERSION, "recall_protocol": RECALL_VERSION,
-            "max_hops": get_settings().memory_graph_max_hops,
             "max_nodes": get_settings().memory_graph_max_nodes,
-            "candidate_k": get_settings().memory_graph_candidate_k,
-            "max_paths": get_settings().memory_graph_max_paths,
-            "max_entities": get_settings().memory_graph_max_entities,
-            "fanout_limit": get_settings().memory_graph_fanout_limit,
             "query_timeout_seconds": get_settings().memory_graph_query_timeout_seconds}
 
 
@@ -635,7 +630,7 @@ def _manifest(env: EvalEnv, dataset: dict | None, modes: list[str], context_char
             "source_budget": s.memory_source_context_chars,
             "episode_cap": s.memory_source_max_episodes, "scan_chars": s.memory_source_max_chars,
             "source_candidates": s.memory_source_candidate_k},
-        "unified_extract": bool(s.memory_graph_enabled),
+        "unified_extract": False,
         "modes": modes, "context_chars": context_chars,
         "answer_instruction_version": INSTRUCTION_VERSION,
         "answer_instruction": EVAL_ANSWER_INSTRUCTION,
@@ -1027,9 +1022,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    from app.memory.graph.base import evaluation_recall
-    with evaluation_recall(getattr(args,'graph_recall','configured')):
-        return _cmd_ask(args)
+    return _cmd_ask(args)
 
 
 def _cmd_ask(args: argparse.Namespace) -> int:
@@ -1215,8 +1208,6 @@ def main(argv: list[str] | None = None) -> int:
     a = sub.add_parser("ask", help="执行问题并导出回答 / 证据 / 耗时与 token")
     a.add_argument("--run-id", required=True)
     a.add_argument("--variant", default="", help="同一固定构建下的独立实验名称")
-    a.add_argument("--graph-recall", choices=['configured','disabled'], default='configured',
-                   help='仅评测命令：disabled复用固定图但禁用召回；不能开启环境中关闭的图')
     a.add_argument("--dataset", default="", help="缺省用 run 目录里留下的 dataset.json")
     a.add_argument("--modes", default=",".join(MODES))
     a.add_argument("--answer", action="store_true", help="真的调模型生成回答(会产生付费调用)")

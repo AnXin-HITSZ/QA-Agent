@@ -1,5 +1,5 @@
 from app.config import Settings
-from app.memory.graph.base import resolve_switches,evaluation_recall
+from app.memory.graph.base import resolve_switches
 from scripts import run_memory_eval as runner
 from types import SimpleNamespace
 
@@ -16,21 +16,17 @@ def test_legacy_subswitches_cannot_disable_graph_master():
     s=Settings(_env_file=None,memory_graph_enabled=True,memory_graph_write_enabled=False,
                memory_graph_search_enabled=False,memory_graph_worker_enabled=False)
     sw=resolve_switches(s)
-    assert sw.write and sw.search and sw.worker
+    assert not sw.write and not sw.search and sw.worker
 
 
 def test_cli_experiment_cannot_enable_disabled_graph_and_restores_state():
     off=Settings(_env_file=None,memory_graph_enabled=False)
     on=Settings(_env_file=None,memory_graph_enabled=True)
-    with evaluation_recall('disabled'):
-        assert not resolve_switches(on).search
-        assert resolve_switches(on).write and resolve_switches(on).worker
-    assert resolve_switches(on).search
-    with evaluation_recall('configured'):
-        assert not resolve_switches(off).search
+    assert not resolve_switches(on).search
+    assert not resolve_switches(off).search
 
 
 def test_runner_forwards_graph_ablation_without_environment_flags():
     args=SimpleNamespace(dataset='data.json',context_chars=100000,no_judge=True,variant='off',action='ask',graph_recall='disabled')
     commands=runner.plan(args,'run')
-    assert commands[0][commands[0].index('--graph-recall')+1]=='disabled'
+    assert '--graph-recall' not in commands[0]
