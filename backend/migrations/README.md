@@ -68,7 +68,7 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0010 | `0010_memory_episodes` | 已应用 | 已应用 |
 | 0011 | `0011_administrative_matters` | 已应用 | 已应用 |
 | 0012 | `0012_administrative_chat_proposals` | 已应用 | 已应用 |
-| 0013 | `0013_retire_administrative_matters` | 待执行 | 待执行 |
+| 0013 | `0013_retire_administrative_matters` | 已执行（2026-10-13） | 已执行（2026-10-13） |
 
 > 2026-10-13：ECS 实际结构检查确认开发库此前已完成至0011、生产库此前已完成至0009；随后用户执行生产库0010/0011并贴出新增表检查结果。本次用户确认两个库全部迁移完成，故当前部署记录更新为均已完成至0012。0012完成状态依据用户确认，不代表已完成真实聊天模型端到端验收。已应用迁移不要重复执行。
 
@@ -276,7 +276,7 @@ mysql --default-character-set=utf8mb4 qa_agent_prod < migrations/0012_administra
 
 0011/0012 已在开发库和生产库应用，作为历史迁移保留，不修改旧 SQL，不自动执行 down，也不删除已有事务数据。新运行代码不访问这些表。恢复通用图使用既有0009图表与0010来源表，无新增数据库迁移。
 
-MEMORY_GRAPH_ENABLED 恢复为通用图抽取、同步、召回总开关；恢复六项图预算/抽取重试参数，参见 `.env.example`。配置改变后重启。ECS配置、应用部署和任何数据库数据未由本次恢复操作修改。
+MEMORY_GRAPH_ENABLED 恢复为通用图抽取、同步、召回总开关；恢复六项图预算/抽取重试参数，参见 `.env.example`。配置改变后重启。初始恢复阶段未修改ECS；后续授权部署与0013退役操作已完成，核验结果见下文。
 
 
 ## 0013：删除已退役事务存储
@@ -293,3 +293,10 @@ mysql --default-character-set=utf8mb4 qa_agent_prod < migrations/0013_retire_adm
 ```
 
 CLI默认只读，执行时分页清理QAAdministrativeMatter/QAAdministrativeObject及关联关系，并删除三项经标签和属性核验的事务专用索引/约束。遇到混合通用图标签或跨边界关系直接拒绝；不会删除QAMemoryGraph。DDL非事务操作，部分执行失败可在排查后重跑IF EXISTS的up，不能自动恢复已删记录。
+
+
+### 0013 实际执行核验（2026-10-13 20:13，北京时间）
+
+ECS已拉取275c5d4，停止旧后端后执行事务图清理及两库0013，再重新构建发布前端并启动服务。两库五张退役表均已不存在，其余表结构与行数在停服前后核验一致。开发库删除2条事项、7条事件、5条关联及2条投影；提议表此前已不存在。生产库退役表原有记录均为0。Neo4j删除10个事务节点、9条关联及三项专用索引/约束，事务投影残留为0；通用图节点数保持不变。
+
+生产.env保留既有值与凭据，按示例150项的顺序和注释对齐，补回六项图参数。服务active，health正常，OpenAPI不再包含事务接口。完整核验文件：`/root/qa-agent/backend/data/eval/retirement-20261013/verification.json`。
