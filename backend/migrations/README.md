@@ -64,7 +64,12 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_dev
 | 0006 | `0006_memory_scope_state_history` | 已应用 | 已应用 |
 | 0007 | `0007_widen_provider_columns` | 已应用 | 已应用 |
 | 0008 | `0008_memory_fact_context` | 已应用 | 已应用 |
-| 0009 | `0009_memory_graph_tables` | 未应用 | 未应用 |
+| 0009 | `0009_memory_graph_tables` | 已应用 | 已应用 |
+| 0010 | `0010_memory_episodes` | 已应用 | 已应用 |
+| 0011 | `0011_administrative_matters` | 已应用 | 已应用 |
+| 0012 | `0012_administrative_chat_proposals` | 已应用 | 已应用 |
+
+> 2026-10-13：ECS 实际结构检查确认开发库此前已完成至0011、生产库此前已完成至0009；随后用户执行生产库0010/0011并贴出新增表检查结果。本次用户确认两个库全部迁移完成，故当前部署记录更新为均已完成至0012。0012完成状态依据用户确认，不代表已完成真实聊天模型端到端验收。已应用迁移不要重复执行。
 
 > 0007 / 0008 两行原为「未应用 / 待核实」（§0008 正文曾写「本轮尚未在真实 MySQL 执行」，
 > 与 2026-10-10 评测基线要求开发库有 0008 字段对不上）。2026-10-10 对两个库做了一次只读
@@ -226,14 +231,14 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -u qa_migrate -p qa_agent_pro
 
 ## 0010：可选原始用户来源片段
 
-新增 memory_episodes（模型 app/memory/tables.py）。需迁移后才能开启 MEMORY_SOURCE_STORE_ENABLED / MEMORY_SOURCE_SEARCH_ENABLED。默认关闭，应用启动不建表。仅开发库于2026-10-12实际执行；生产未迁移。
+新增 memory_episodes（模型 app/memory/tables.py）。需迁移后才能开启 MEMORY_SOURCE_STORE_ENABLED / MEMORY_SOURCE_SEARCH_ENABLED。默认关闭，应用启动不建表。开发库于2026-10-12执行；生产库于2026-10-13完成，两个库均已应用。
 
 up 使用 CREATE TABLE，非幂等；执行前核验目标库和表是否存在，使用迁移账号而非提升应用账号权限。down 删除全部来源片段，先关闭相关开关。普通记忆编辑/删除保守撤销来源轮次，purge 连同片段清除；限期保留与空正文幂等标识见 docs/来源回查与统一抽取技术方案及验证.md。
 
 离线模型与SQL对比由 test_memory_migration.py 覆盖；真实效果评测另行报告。
 
 0010 不单独指定 COLLATE，与既有记忆表一样使用 MySQL 的 utf8mb4 默认排序规则。首次开发库验证发现指定 unicode_ci 会与既有 0900_ai_ci 的 turn_id 关联发生错误1267；开发库已对齐。已有错误排序规则的安装应先查 information_schema.COLUMNS，确认全部关联字段及目标库，再用迁移权限对齐 memory_episodes，不能盲目修改既有权威表。只读真实检查入口为 test_memory_episodes_mysql.py；没有测试连接时明确跳过。
-# 0011：行政事务与办理经历
+## 0011：行政事务与办理经历
 
 新增 `admin_matters`、`admin_matter_events`、`admin_matter_links`、`admin_matter_projections`。
 字段、索引和唯一键由 `test_administrative_api.py` 与模型逐项核对。MySQL 是事务权威存储；Neo4j 是可重建索引。
@@ -244,7 +249,7 @@ up 使用 CREATE TABLE，非幂等；执行前核验目标库和表是否存在�
 mysql <应用数据库名> < backend/migrations/0011_administrative_matters.up.sql
 ```
 
-应用启动不会自动建表。开发库已执行0011并通过真实服务验证；生产库本次未执行。开发应用账号若报1142，应使用管理账号执行迁移，不为此扩大应用账号权限。
+应用启动不会自动建表。开发库已执行0011并通过真实服务验证；生产库于2026-10-13完成0011迁移。开发应用账号若报1142，应使用管理账号执行迁移，不为此扩大应用账号权限。
 
 回滚前导出四张表及办理审计；down会删除新增事务数据，旧个人记忆/认证/计量表不受影响。
 
@@ -261,4 +266,4 @@ mysql --default-character-set=utf8mb4 qa_agent_dev < migrations/0012_administrat
 mysql --default-character-set=utf8mb4 qa_agent_prod < migrations/0012_administrative_chat_proposals.up.sql
 ```
 
-先执行迁移再重启新后端、构建新前端。回滚前停止聊天提议/确认请求并导出提议记录；down只删提议表，不回滚已确认事项与审计。既有.env配置无需新增或变更。本轮尚未执行真实数据库迁移。
+先执行迁移再重启新后端、构建新前端。回滚前停止聊天提议/确认请求并导出提议记录；down只删提议表，不回滚已确认事项与审计。既有.env配置无需新增或变更。2026-10-13用户确认开发库与生产库均已完成0012，当前无需再次执行迁移；上述命令供尚未应用该版本的环境使用。
