@@ -1,0 +1,53 @@
+# Single-node private file index. Prepare certificates before starting.
+# Always use: docker compose -p qa-agent-files -f docker-compose.elasticsearch.yml ...
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5
+    container_name: qa-elasticsearch
+    hostname: es01
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9200:9200"
+    mem_limit: 2g
+    environment:
+      discovery.type: single-node
+      node.name: es01
+      cluster.name: qa-files
+      http.host: 0.0.0.0
+      transport.host: 127.0.0.1
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g"
+      bootstrap.memory_lock: "true"
+      xpack.ml.enabled: "false"
+      xpack.security.enabled: "true"
+      xpack.security.enrollment.enabled: "false"
+      xpack.security.http.ssl.enabled: "true"
+      xpack.security.http.ssl.key: certs/es01/es01.key
+      xpack.security.http.ssl.certificate: certs/es01/es01.crt
+      xpack.security.http.ssl.certificate_authorities: certs/ca.crt
+      xpack.security.transport.ssl.enabled: "true"
+      xpack.security.transport.ssl.verification_mode: full
+      xpack.security.transport.ssl.key: certs/es01/es01.key
+      xpack.security.transport.ssl.certificate: certs/es01/es01.crt
+      xpack.security.transport.ssl.certificate_authorities: certs/ca.crt
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - qa_files_es_data:/usr/share/elasticsearch/data
+      - ./deploy/elasticsearch/certs/es01:/usr/share/elasticsearch/config/certs/es01:ro
+      # The CA private key is deliberately not mounted in the running node.
+      - ./deploy/elasticsearch/certs/ca/ca.crt:/usr/share/elasticsearch/config/certs/ca.crt:ro
+    healthcheck:
+      # Endpoint/TLS/auth check, not a claim about cluster/index health.
+      test: ["CMD-SHELL", "code=$$(curl --max-time 5 -s --cacert config/certs/ca.crt -o /dev/null -w '%{http_code}' https://localhost:9200/); [ \"$${code}\" = 401 ] || [ \"$${code}\" = 200 ]"]
+      interval: 15s
+      timeout: 8s
+      retries: 8
+      start_period: 90s
+
+volumes:
+  qa_files_es_data:

@@ -1,0 +1,8 @@
+# Public certificate subjects only; generated material under certs/ is ignored.
+instances:
+  - name: es01
+    dns:
+      - localhost
+      - es01
+    ip:
+      - 127.0.0.1
