@@ -9,6 +9,22 @@ from app.skills import loader
 from app.skills.images import image_attachments
 
 
+def used_file_searches(messages: list) -> list[dict]:
+    start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            start = i
+            break
+    results = {}
+    for message in messages[start:]:
+        if isinstance(message, ToolMessage) and message.name in (
+                "search_files_literal", "search_files_semantic", "get_file_search_page"):
+            result = getattr(message, "artifact", None)
+            if isinstance(result, dict) and result.get("search_id"):
+                results[result["search_id"]] = result
+    return list(results.values())
+
+
 def used_images(messages: list) -> list[dict]:
     """本轮图片引用,流式 seen 无 HumanMessage 时全扫。"""
     start = 0

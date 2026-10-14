@@ -111,7 +111,9 @@ def _replay(messages: list) -> list[ConversationMessage]:
         elif mtype == "ai":
             # 工具调用前的铺垫不附图片;最终回答从本轮工具轨迹恢复旧引用。
             images = [] if getattr(m, "tool_calls", None) else image_attachments(turn)
-            out.append(ConversationMessage(role="assistant", content=text, images=images))
+            from app.graph.trace import used_file_searches
+            searches = [] if getattr(m, "tool_calls", None) else used_file_searches(turn)
+            out.append(ConversationMessage(role="assistant", content=text, images=images, file_searches=searches))
     return out
 
 

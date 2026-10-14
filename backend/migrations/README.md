@@ -300,3 +300,15 @@ CLI默认只读，执行时分页清理QAAdministrativeMatter/QAAdministrativeOb
 ECS已拉取275c5d4，停止旧后端后执行事务图清理及两库0013，再重新构建发布前端并启动服务。两库五张退役表均已不存在，其余表结构与行数在停服前后核验一致。开发库删除2条事项、7条事件、5条关联及2条投影；提议表此前已不存在。生产库退役表原有记录均为0。Neo4j删除10个事务节点、9条关联及三项专用索引/约束，事务投影残留为0；通用图节点数保持不变。
 
 生产.env保留既有值与凭据，按示例150项的顺序和注释对齐，补回六项图参数。服务active，health正常，OpenAPI不再包含事务接口。完整核验文件：`/root/qa-agent/backend/data/eval/retirement-20261013/verification.json`。
+
+
+## 0014：文件搜索与联合索引
+
+新增 rag_search_releases、rag_search_state、rag_file_search_sessions、rag_file_search_items 四表。
+MySQL 管理联合发布指针与用户分页结果，正文快照保存在 OSS，全文搜索使用 Elasticsearch。
+先提交推送并在 ECS 拉取代码，再对 qa_agent_dev、qa_agent_prod 应用 0014 up；已执行的 0001–0013 不重跑。
+新功能默认 FILE_SEARCH_ENABLED=false；仅加表不改变现有问答。Elasticsearch 配置完成后显式启用并全库索引。
+不自动运行迁移；down 会删除搜索结果和版本指针，执行前必须关闭新功能，不执行已应用迁移的无条件重跑。
+详细设计与验证见 docs/文件搜索与联合索引技术方案.md。
+
+应用状态：待本次提交、推送、ECS 拉取后执行并核验。

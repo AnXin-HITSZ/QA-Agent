@@ -124,6 +124,7 @@ class Prepared:
     pages_cached: int = 0
     failed_pages: list[int] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    text_units: list[dict] = field(default_factory=list)
 
     @property
     def pages(self) -> dict:
@@ -244,6 +245,8 @@ def prepare_file(kb, key: str, opts: Options) -> Prepared:
             prep.status, prep.reason = "failed", f"extract_failed:{type(exc).__name__}:{exc}"
             return prep
     prep.page_keys = [(p.page_number, p.ocr_cache_key, p.text_cache_key) for p in res.pages]
+    prep.text_units = [{"text": u.text, "page": u.page, "section": list(u.section), "kind": u.kind}
+                       for u in res.units if u.text]
 
     prep.method = ",".join(res.methods) or ("ocr" if opts.mode != NATIVE_ONLY else "native")
     prep.ext = res.ext or prep.ext
@@ -333,6 +336,29 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
     active = store.ensure_collection()          # 固定本次重建的旧版本
     previously_indexed = store.keys_in(active)
     version = store.create_staging()
+    from app.rag import fulltext, search_repo
+    search_index = None
+    search_files = {}
+    previous_release = None
+    if fulltext.enabled():
+        try:
+            previous_release = search_repo.current()
+            if previous_release and previous_release["id"] != active:
+                raise RuntimeError("准备期间生效版本已改变，请重新执行索引任务")
+            if not previous_release and (scope.kind != "prefix" or scope.prefix):
+                raise RuntimeError("首次启用文件搜索必须执行全库索引，不能从切块恢复完整正文")
+            search_index = fulltext.create_index(version)
+            if previous_release:
+                for doc in fulltext.scan(previous_release["es_index"]):
+                    if not scope.covers(doc["key"]) and kb.object_exists(doc["key"]):
+                        fulltext.put_document(search_index, doc)
+                        search_files[doc["key"]] = {k: doc[k] for k in (
+                            "key", "content_sha256", "snapshot_key", "source_size", "source_modified")}
+        except Exception:
+            store.abort_staging(version)
+            if search_index:
+                fulltext.remove_index(search_index)
+            raise
     record_id = job_id or version               # 清单阶段记录的标识
     logger.info("索引任务开始:范围 %s → 候选集合 %s(目标 %d 个文件,提取方式 %s)",
                 scope.as_dict(), version, len(targets), opts.mode)
@@ -395,6 +421,11 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
                     totals["indexed_files"] += 1
                     totals["chunks"] += len(texts)
                     totals["vectors"] += n
+                    if search_index:
+                        doc = fulltext.make_document(prep, f, opts)
+                        fulltext.put_document(search_index, doc)
+                        search_files[key] = {k: doc[k] for k in (
+                            "key", "content_sha256", "snapshot_key", "source_size", "source_modified")}
                     if prep.document_id:      # 命中缓存也要为当前文件生成清单(§7)
                         manifests[prep.document_id] = documents.build_manifest(
                             document_id=prep.document_id, oss_key=key,
@@ -442,11 +473,15 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
         summary["message"] = str(cache_failure)
         summary["cache"] = {"status": "failed", "message": str(cache_failure)}
         store.abort_staging(version)
+        if search_index:
+            fulltext.remove_index(search_index)
         return summary
 
     if totals["failed_files"]:
         summary["message"] = f"有 {totals['failed_files']} 个文件未能完成,本次不发布,旧索引继续可用"
         store.abort_staging(version)
+        if search_index:
+            fulltext.remove_index(search_index)
         logger.warning("索引任务未发布:%s", summary["message"])
         return summary
 
@@ -454,6 +489,8 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
     if changed:
         summary["message"] = ("准备期间源文件发生变化,本次不发布,请重新排队:" + "; ".join(changed[:5]))
         store.abort_staging(version)
+        if search_index:
+            fulltext.remove_index(search_index)
         logger.warning("索引任务未发布:%s", summary["message"])
         return summary
 
@@ -471,18 +508,30 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
     except OSError as exc:
         summary["message"] = f"待发布清单写入失败,本次不发布:{exc}"
         store.abort_staging(version)
+        if search_index:
+            fulltext.remove_index(search_index)
         logger.error("索引任务未发布:%s", summary["message"])
         return summary
 
     expected = summary["copied_out_of_scope"] + summary["vectors"]
     try:
+        if search_index:
+            # Copied files may have disappeared while this job was preparing.
+            for key in gone:
+                search_files.pop(key, None)
+                fulltext.request("DELETE", fulltext.index_path(search_index) + "/_doc/" + _sha256(key.encode()))
+            fulltext.refresh(search_index)
+            search_repo.prepare_release(version, search_index, list(search_files.values()))
+        publish_kwargs = {"search_expected": previous_release["id"] if previous_release else None} if search_index else {}
         store.publish(version, expected_count=expected,
-                      note=f"{scope.as_dict()} 提取方式={opts.extraction_mode}")
+                      note=f"{scope.as_dict()} 提取方式={opts.extraction_mode}", **publish_kwargs)
         summary["published"] = True
         summary["message"] = "已发布"
     except Exception as exc:   # 校验不过:候选集合删除,旧版本原样
         summary["message"] = f"发布校验未通过,已回滚到旧索引:{exc}"
         store.abort_staging(version)
+        if search_index:
+            fulltext.remove_index(search_index)
         logger.error("索引发布失败:%s", exc)
         return summary
 

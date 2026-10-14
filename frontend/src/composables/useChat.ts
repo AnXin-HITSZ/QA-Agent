@@ -12,6 +12,7 @@ import {
   type ConversationSummary,
   type Source,
   type SopImageReference,
+  type FileSearchResult,
 } from "../api";
 
 // 一次工具调用的活动项。
@@ -36,6 +37,7 @@ export interface Msg {
   steps?: Step[]; // 助手 ReAct 时间线,按 step 顺序
   skill?: string | null;
   sources?: Source[]; // 本次回答引用的知识库来源(done 事件回填)
+  fileSearches?: FileSearchResult[];
   streaming?: boolean;
   stopped?: boolean; // 用户点了「停止」而中断(与出错区分:不报错,只在答案末尾留一句说明)
 }
@@ -134,7 +136,8 @@ async function send(text: string): Promise<void> {
         onToken: (content, step) => {
           ensureStep(step).text += content;
         },
-        onDone: (skill, sources, images) => {
+        onDone: (skill, sources, images, fileSearches) => {
+          reply.fileSearches = fileSearches;
           reply.skill = skill;
           reply.sources = sources;
           reply.images = images;
@@ -189,6 +192,7 @@ async function openConversation(tid: string): Promise<void> {
             content: "",
             steps: [{ text: m.content, tools: [] }],
             images: m.images ?? [],
+            fileSearches: m.file_searches ?? [],
             skill: null,
             streaming: false,
           } as Msg),

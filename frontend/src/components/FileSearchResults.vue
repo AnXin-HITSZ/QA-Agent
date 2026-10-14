@@ -1,0 +1,77 @@
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from "vue";
+import { fileSearchPage, exportFileSearch, downloadKnowledgeFile, type FileSearchResult } from "../api";
+
+const props = defineProps<{ initial: FileSearchResult }>();
+const result = ref({ ...props.initial, items: [] } as FileSearchResult);
+const busy = ref(false);
+const error = ref("");
+watch(() => props.initial, value => { result.value = { ...value, items: [] }; void turn(value.offset); });
+onMounted(() => { void turn(props.initial.offset); });
+const literal = computed(() => result.value.items.filter(i => i.routes.includes("literal")));
+const supplement = computed(() => result.value.items.filter(i => !i.routes.includes("literal")));
+const labels: Record<string, string> = { literal: "字面匹配", fulltext: "全文相关", vector: "语义相关" };
+
+let requestSeq = 0;
+async function turn(offset: number) {
+  const seq = ++requestSeq;
+  busy.value = true; error.value = "";
+  try { const next = await fileSearchPage(result.value.search_id, offset, result.value.page_size); if (seq === requestSeq) result.value = next; }
+  catch (e) { if (seq === requestSeq) error.value = e instanceof Error ? e.message : String(e); }
+  finally { if (seq === requestSeq) busy.value = false; }
+}
+async function action(fn: () => Promise<void>) {
+  busy.value = true; error.value = "";
+  try { await fn(); } catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+  finally { busy.value = false; }
+}
+</script>
+
+<template>
+  <section class="fs-results" aria-label="文件搜索结果">
+    <header class="fs-results__head">
+      <div>
+        <h3>文件搜索结果</h3>
+        <p>字面匹配 {{ result.literal_total }} 个 · 相关性补充 {{ result.supplement_total }} 个</p>
+      </div>
+      <button type="button" :disabled="busy" @click="action(() => exportFileSearch(result.search_id))">导出清单</button>
+    </header>
+    <p class="fs-results__hint">{{ result.literal_terms.join(result.literal_operator === 'all' ? ' AND ' : ' OR ') }} · {{ result.prefix || '全部分类' }}</p>
+    <p class="fs-results__hint">正文可搜索 {{ result.coverage.body_indexed }}/{{ result.coverage.source_files }} 个；{{ result.coverage.body_uncovered }} 个正文尚未覆盖或版本已变化。{{ result.mode === 'semantic' ? '相关性补充不保证穷尽。' : '' }}</p>
+    <p v-for="note in result.notes" :key="note" class="fs-results__hint">{{ note }}</p>
+    <p v-if="error" role="alert" class="fs-results__error">{{ error }}</p>
+    <p v-if="result.unavailable_on_page" class="fs-results__hint">本页 {{ result.unavailable_on_page }} 个原件已删除或更新，未展示旧内容。</p>
+    <template v-for="group in [{ title: '字面匹配', items: literal }, { title: '相关性补充', items: supplement }]" :key="group.title">
+      <h4 v-if="group.items.length">{{ group.title }}</h4>
+      <ul v-if="group.items.length" class="fs-results__list">
+        <li v-for="item in group.items" :key="item.key">
+          <div class="fs-results__file">
+            <strong>{{ item.name }}</strong>
+            <button type="button" :disabled="busy" @click="action(() => downloadKnowledgeFile(item.key))">下载</button>
+          </div>
+          <p class="fs-results__path">{{ item.key }}</p>
+          <p class="fs-results__hint">{{ item.routes.map(r => labels[r] || r).join(' · ') }}<template v-if="item.matched_terms.length"> · {{ item.matched_terms.join('、') }}</template></p>
+          <p v-for="(e, i) in item.evidence" :key="i" class="fs-results__evidence"><span v-if="e.page">第 {{ e.page }} 页 · </span><span v-if="e.section.length">{{ e.section.join(' › ') }} · </span>{{ e.text }}</p>
+        </li>
+      </ul>
+    </template>
+    <p v-if="!result.total" class="fs-results__hint">当前搜索范围内没有匹配文件。</p>
+    <nav class="fs-results__pages" aria-label="搜索结果分页">
+      <button type="button" :disabled="busy || result.offset === 0" @click="turn(Math.max(0, result.offset - result.page_size))">上一页</button>
+      <span>共 {{ result.total }} 个 · 当前从第 {{ result.total ? result.offset + 1 : 0 }} 个开始</span>
+      <button type="button" :disabled="busy || result.next_offset === null" @click="turn(result.next_offset!)">下一页</button>
+    </nav>
+  </section>
+</template>
+
+<style scoped>
+.fs-results { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); }
+.fs-results__head, .fs-results__file, .fs-results__pages { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+h3, h4, p { margin: 0; } h3 { font-size: 16px; } h4 { margin-top: 16px; font-size: 14px; }
+.fs-results__head p, .fs-results__hint, .fs-results__path { color: var(--muted); font-size: 12px; margin-top: 7px; overflow-wrap: anywhere; }
+button { border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 6px 12px; background: var(--surface); color: var(--primary); cursor: pointer; font: inherit; font-size: 12px; }
+button:hover:not(:disabled) { background: var(--primary-tint); } button:disabled { opacity: .5; cursor: default; } button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.fs-results__list { list-style: none; padding: 0; margin: 8px 0 0; } li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.fs-results__file strong { font-size: 14px; overflow-wrap: anywhere; } .fs-results__evidence { font-size: 13px; margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.fs-results__pages { margin-top: 16px; font-size: 12px; color: var(--muted); } .fs-results__error { color: var(--seal); margin-top: 10px; }
+</style>

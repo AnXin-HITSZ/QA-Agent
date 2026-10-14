@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.conversations import inflight
 from app.conversations.store import MAX_TITLE_LENGTH
 from app.graph import get_graph
-from app.graph.trace import used_sop_id, used_sources, used_images
+from app.graph.trace import used_sop_id, used_sources, used_images, used_file_searches
 from app.memory import db as memory_db
 from app.rag import oss
 from app.schemas.chat import ChatRequest, ChatResponse, SourceCitation
@@ -150,6 +150,7 @@ async def chat(req: ChatRequest, request: Request,
     """一次性返回完整回复;从 ReAct 轨迹回填本次引用的 SOP。thread_id 续接跨轮记忆。"""
     thread_id = await _resolve_thread(req, principal)
     config = {"configurable": {"thread_id": thread_id,
+                               "user_id": principal.user_id,
                                "todos_prompt": await _todos_prompt(request),
                                "memory_prompt": await _memory_prompt(principal, req.message)}}
     # 登记在途生成:用户这时点「删除会话」,删除流程会先等这一次跑完再抹 Redis。
@@ -162,6 +163,7 @@ async def chat(req: ChatRequest, request: Request,
     # 完整回答已经拿到:登记提取任务(失败不影响这轮回答,见 _remember_exchange)。
     await _remember_exchange(principal, thread_id, req.message, content, source="chat")
     return ChatResponse(
+        file_searches=used_file_searches(messages),
         skill=used_sop_id(messages),
         content=content,
         thread_id=thread_id,
@@ -196,6 +198,7 @@ async def chat_stream(req: ChatRequest, request: Request,
     """
     thread_id = await _resolve_thread(req, principal)
     config = {"configurable": {"thread_id": thread_id,
+                               "user_id": principal.user_id,
                                "todos_prompt": await _todos_prompt(request),
                                "memory_prompt": await _memory_prompt(principal, req.message)}}
     inputs = {"messages": [HumanMessage(content=req.message)]}
@@ -244,7 +247,8 @@ async def chat_stream(req: ChatRequest, request: Request,
         # 登记提取任务(**在 done 之前** —— 前端收到 done 就可能关连接,留到后面可能登记不上)。
         await _remember_exchange(principal, thread_id, req.message, final, source="chat_stream")
         sources = [s.model_dump() for s in _sign_sources(used_sources(seen))]
-        yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen), "sources": sources, "images": used_images(seen)}, ensure_ascii=False)}
+        yield {"event": "done", "data": json.dumps({"skill": used_sop_id(seen), "sources": sources,
+            "images": used_images(seen), "file_searches": used_file_searches(seen)}, ensure_ascii=False)}
 
     return EventSourceResponse(_guarded(event_gen(), thread_id))
 

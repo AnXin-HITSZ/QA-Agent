@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 
-import type { Source, SopImageReference } from "../api";
+import type { Source, SopImageReference, FileSearchResult } from "../api";
+import FileSearchResults from "./FileSearchResults.vue";
 import type { Step, ToolActivity } from "../composables/useChat";
 import { useSops } from "../composables/useSops";
 import MarkdownView from "./MarkdownView.vue";
@@ -11,6 +12,7 @@ const props = defineProps<{
   steps?: Step[];
   skill?: string | null;
   sources?: Source[];
+  fileSearches?: FileSearchResult[];
   images?: SopImageReference[];
   streaming?: boolean;
   stopped?: boolean;
@@ -49,6 +51,9 @@ function actLabel(a: ToolActivity): string {
     return id ? `读取「${label(id)}」` : "读取 SOP";
   }
   if (a.name === "search_knowledge") return "检索知识库";
+  if (a.name === "search_files_literal") return "查找字面匹配文件";
+  if (a.name === "search_files_semantic") return "发现相关文件";
+  if (a.name === "get_file_search_page") return "读取文件结果分页";
   return a.name;
 }
 </script>
@@ -93,6 +98,7 @@ function actLabel(a: ToolActivity): string {
     </div>
 
     <SopImageGallery :images="images ?? []" />
+    <FileSearchResults v-for="result in fileSearches ?? []" :key="result.search_id" :initial="result" />
     <footer v-if="sources.length" class="ar__sources">
       <p class="ar__srchead">参考来源</p>
       <ul class="ar__srclist">

@@ -7,6 +7,45 @@
 
 import { apiFetch } from "./stores/auth";
 
+export interface FileSearchItem {
+  key: string; name: string; routes: string[]; matched_terms: string[];
+  evidence: { text: string; page: number | null; section: string[] }[];
+}
+export interface FileSearchResult {
+  search_id: string; mode: string; query: string; literal_terms: string[];
+  literal_operator: string; prefix: string; literal_total: number; supplement_total: number;
+  total: number; items: FileSearchItem[]; offset: number; next_offset: number | null;
+  page_size: number;
+  unavailable_on_page: number; notes: string[];
+  coverage: { source_files: number; body_indexed: number; body_uncovered: number };
+}
+async function fileSearchResponse(res: Response): Promise<FileSearchResult> {
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new Error(typeof data?.detail === 'string' ? data.detail : `文件搜索失败（HTTP ${res.status}）`);
+  }
+  return await res.json() as FileSearchResult;
+}
+export async function searchKnowledgeFiles(body: Record<string, unknown>): Promise<FileSearchResult> {
+  return fileSearchResponse(await apiFetch('/api/v1/knowledge/search', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }));
+}
+export async function fileSearchPage(id: string, offset: number, size = 20): Promise<FileSearchResult> {
+  return fileSearchResponse(await apiFetch(`/api/v1/knowledge/search/${encodeURIComponent(id)}?offset=${offset}&page_size=${size}`));
+}
+export async function exportFileSearch(id: string): Promise<void> {
+  const res = await apiFetch(`/api/v1/knowledge/search/${encodeURIComponent(id)}/export`);
+  if (!res.ok) { await fileSearchResponse(res); return; }
+  const url = URL.createObjectURL(await res.blob());
+  const link = document.createElement('a'); link.href = url; link.download = 'knowledge-files.csv'; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+export async function downloadKnowledgeFile(key: string): Promise<void> {
+  const url = await downloadFile(key);
+  const link = document.createElement('a'); link.href = url; link.rel = 'noopener'; link.click();
+}
+
 export interface ChatRequest {
   message: string;
   thread_id?: string | null;
@@ -35,6 +74,7 @@ export interface SopImageReference {
 }
 
 export interface ChatResponse {
+  file_searches?: FileSearchResult[];
   images: SopImageReference[];
   skill: string | null; // 命中的 Skill id;null 表示走通用问答
   content: string;
@@ -48,7 +88,7 @@ export interface StreamHandlers {
   onToolCall?: (name: string, args: Record<string, unknown>, step: number) => void;
   onToolResult?: (name: string | null, step: number) => void;
   onToken?: (content: string, step: number) => void;
-  onDone?: (skill: string | null, sources: Source[], images: SopImageReference[]) => void;
+  onDone?: (skill: string | null, sources: Source[], images: SopImageReference[], fileSearches: FileSearchResult[]) => void;
 }
 
 export async function chat(message: string, threadId?: string | null): Promise<ChatResponse> {
@@ -162,6 +202,7 @@ export async function chatStream(
           (payload?.skill as string) ?? null,
           (payload?.sources as Source[]) ?? [],
           (payload?.images as SopImageReference[]) ?? [],
+          (payload?.file_searches as FileSearchResult[]) ?? [],
         );
         break;
       case "error":
@@ -226,6 +267,7 @@ export interface ConversationList {
 }
 
 export interface ConversationMessage {
+  file_searches?: FileSearchResult[];
   images?: SopImageReference[];
   role: "user" | "assistant";
   content: string;

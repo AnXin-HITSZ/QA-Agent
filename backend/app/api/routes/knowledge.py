@@ -40,12 +40,71 @@ from app.schemas.knowledge import (
     UploadResult,
     UploadResultItem,
 )
+from app.schemas.file_search import FileSearchRequest
+from app.auth.service import Principal
+from app.rag import file_search
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix=get_settings().api_prefix + "/knowledge", tags=["knowledge"])
 admin_router = APIRouter(prefix=get_settings().api_prefix + "/admin/knowledge", tags=["knowledge-admin"],
                          dependencies=[Depends(auth_ready), Depends(require_admin)])
+
+
+def _search_error(exc):
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail="搜索结果不存在或已过期")
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
+    logger.warning("文件搜索失败: %s", type(exc).__name__)
+    return HTTPException(status_code=503, detail="文件搜索暂不可用，请联系管理员检查索引与服务配置")
+
+
+@router.post("/search", dependencies=[Depends(require_user)])
+def search_files(body: FileSearchRequest, principal: Principal = Depends(require_user)):
+    try:
+        return file_search.search(body, principal.user_id)
+    except Exception as exc:
+        raise _search_error(exc) from None
+
+
+@router.get("/search/{search_id}", dependencies=[Depends(require_user)])
+def search_page(search_id: str, offset: int = 0, page_size: int = 20,
+                principal: Principal = Depends(require_user)):
+    try:
+        return file_search.page(search_id, principal.user_id, offset, page_size)
+    except Exception as exc:
+        raise _search_error(exc) from None
+
+
+@router.get("/search/{search_id}/export", dependencies=[Depends(require_user)])
+def export_search(search_id: str, principal: Principal = Depends(require_user)):
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+    try:
+        first = file_search.page(search_id, principal.user_id, 0, 50)
+    except Exception as exc:
+        raise _search_error(exc) from None
+    def lines():
+        yield "\ufeff".encode()
+        def encode(values):
+            stream = io.StringIO()
+            # Spreadsheet formula injection protection for untrusted filenames.
+            safe = ["'" + v if v.lstrip().startswith(("=", "+", "-", "@")) else v for v in values]
+            csv.writer(stream).writerow(safe)
+            return stream.getvalue().encode()
+        yield encode(["文件路径", "命中方式", "匹配字面值", "证据"])
+        result = first
+        while True:
+            for row in result["items"]:
+                yield encode([row["key"], ",".join(row["routes"]), ",".join(row["matched_terms"]),
+                    "\n".join(e["text"] for e in row["evidence"])])
+            if result["next_offset"] is None:
+                break
+            result = file_search.page(search_id, principal.user_id, result["next_offset"], 50)
+    return StreamingResponse(lines(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="knowledge-files.csv"'})
 
 
 def _norm(prefix: str) -> str:

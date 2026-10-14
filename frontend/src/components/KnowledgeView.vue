@@ -7,6 +7,7 @@ import { isAdmin } from "../stores/auth";
 import KnowledgeBreadcrumb from "./KnowledgeBreadcrumb.vue";
 import KnowledgeToolbar from "./KnowledgeToolbar.vue";
 import ReindexBar from "./ReindexBar.vue";
+import FileSearchPanel from "./FileSearchPanel.vue";
 
 const {
   prefix,
@@ -140,6 +141,7 @@ function formatSize(n: number): string {
 
       <!-- 已接通:工具条 + 内容 + 索引任务与版本(后两者仅管理员可见) -->
       <template v-else>
+        <FileSearchPanel :prefix="prefix" />
         <KnowledgeToolbar v-if="canWrite" />
 
         <p v-if="opError" class="kv__opError" role="alert">{{ opError }}</p>

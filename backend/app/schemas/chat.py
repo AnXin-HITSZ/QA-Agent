@@ -24,6 +24,7 @@ class SourceCitation(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    file_searches: list[dict] = Field(default_factory=list)
     images: list[SopImageReference] = Field(default_factory=list)
     skill: str | None = Field(default=None, description="命中的 Skill id;None 表示走通用问答")
     content: str = Field(..., description="助手回复文本")

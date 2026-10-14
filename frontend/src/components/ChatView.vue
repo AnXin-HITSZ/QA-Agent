@@ -184,6 +184,7 @@ onActivated(() => {
             :steps="m.steps"
             :skill="m.skill"
             :sources="m.sources"
+            :file-searches="m.fileSearches"
             :images="m.images"
             :streaming="m.streaming"
             :stopped="m.stopped"

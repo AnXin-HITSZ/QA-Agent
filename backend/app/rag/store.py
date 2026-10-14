@@ -73,7 +73,13 @@ def manifest_path() -> Path:
 def read_manifest() -> dict:
     """读版本指针;不存在 / 损坏时返回 {}(= 尚未发布过版本,读写走配置里的物理名)。"""
     data = read_json(manifest_path(), default={})
-    return data if isinstance(data, dict) else {}
+    data = data if isinstance(data, dict) else {}
+    if get_settings().file_search_enabled:
+        from app.rag.search_repo import current
+        release = current()
+        if release:
+            data.update(active=release["id"], previous=release["previous"])
+    return data
 
 
 def _write_manifest(data: dict) -> None:
@@ -88,6 +94,11 @@ def base_name() -> str:
 
 def active_collection() -> str:
     """当前生效的物理集合名。所有读写都必须经这里取名字。"""
+    if get_settings().file_search_enabled:
+        from app.rag.search_repo import current
+        release = current()
+        if release:
+            return release["id"]
     m = read_manifest()
     name = m.get("active")
     return name if isinstance(name, str) and name else base_name()
@@ -141,6 +152,10 @@ def _create(name: str) -> str:
         collection_name=name,
         vectors_config=VectorParams(size=s.embeddings_dim, distance=Distance.COSINE),
     )
+    if get_settings().file_search_enabled:
+        from qdrant_client.models import PayloadSchemaType
+        get_client().create_payload_index(collection_name=name, field_name="oss_key",
+                                         field_schema=PayloadSchemaType.KEYWORD)
     return name
 
 
@@ -221,7 +236,8 @@ def copy_points(src: str, dst: str, keep) -> tuple[int, int]:
     return copied, dropped
 
 
-def publish(name: str, *, expected_count: int | None = None, note: str = "") -> dict:
+def publish(name: str, *, expected_count: int | None = None, note: str = "",
+            search_expected: str | None = None) -> dict:
     """校验候选集合并把指针切过去:active←name,previous←旧 active。返回新 manifest。
 
     校验不通过直接抛 RuntimeError,指针保持原样 —— 旧版本继续可检索,这是失败保护的核心。
@@ -243,6 +259,9 @@ def publish(name: str, *, expected_count: int | None = None, note: str = "") -> 
 
     m = read_manifest()
     old = active_collection()
+    if get_settings().file_search_enabled:
+        from app.rag import fulltext, search_repo
+        search_repo.activate(name, search_expected)
     m.update({
         "collection": base_name(),
         "active": name,
@@ -254,7 +273,15 @@ def publish(name: str, *, expected_count: int | None = None, note: str = "") -> 
     hist.append({"at": _now(), "action": "publish", "name": name, "replaced": old,
                  "points": got, "note": note})
     m["history"] = hist[-_HISTORY_CAP:]
-    _write_manifest(m)
+    if get_settings().file_search_enabled:
+        # MySQL is authoritative. Failure of the legacy recovery mirror must not
+        # turn a committed release into a failed job that deletes its live index.
+        try:
+            _write_manifest(m)
+        except OSError:
+            logger.exception("联合索引已发布，但旧版 manifest 镜像写入失败")
+    else:
+        _write_manifest(m)
     logger.info("索引已发布:%s(← %s),点数 %d", name, old, got)
     _cleanup_old(m)
     return m
@@ -262,6 +289,14 @@ def publish(name: str, *, expected_count: int | None = None, note: str = "") -> 
 
 def rollback() -> dict:
     """把指针切回上一个版本(previous)。没有可回退版本时抛 RuntimeError。"""
+    if get_settings().file_search_enabled:
+        from app.rag import fulltext, search_repo
+        # Validate before swapping the authoritative pointer.
+        previous_id, previous_es, expected = search_repo.rollback_target()
+        if not collection_exists(previous_id):
+            raise RuntimeError("上一版本向量集合不存在")
+        fulltext.request("GET", fulltext.index_path(previous_es))
+        return search_repo.rollback(expected)
     m = read_manifest()
     cur, prev = m.get("active"), m.get("previous")
     if not prev:
@@ -280,6 +315,10 @@ def rollback() -> dict:
 
 def _cleanup_old(m: dict) -> None:
     """删除两代之前的版本集合(不碰基础集合名,也不碰 active / previous / staging)。"""
+    if get_settings().file_search_enabled:
+        # Published generations are immutable and can be held by search sessions.
+        # Explicit retention cleanup is documented; never delete a pinned generation.
+        return
     keep = {base_name(), m.get("active"), m.get("previous"), m.get("staging")}
     try:
         names = [c.name for c in get_client().get_collections().collections]

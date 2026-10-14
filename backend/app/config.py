@@ -37,6 +37,25 @@ class Settings(BaseSettings):
     qdrant_api_key: str = ""
     qdrant_collection: str = "lab_knowledge"
 
+    # 文件搜索：显式启用后，全文与向量使用同一 MySQL 发布指针。
+    file_search_enabled: bool = False
+    elasticsearch_url: str = ""
+    elasticsearch_api_key: str = ""
+    elasticsearch_username: str = ""
+    elasticsearch_password: str = ""
+    elasticsearch_ca_certs: str = ""
+    elasticsearch_index_prefix: str = "qa-files"
+    elasticsearch_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    oss_text_prefix: str = "rag-text/"
+    file_search_fulltext_candidates: int = Field(default=50, ge=1, le=200)
+    file_search_vector_candidates: int = Field(default=50, ge=1, le=200)
+    file_search_rerank_candidates: int = Field(default=50, ge=1, le=100)
+    file_search_rerank_chars: int = Field(default=3000, ge=200, le=8000)
+    file_search_rerank_total_chars: int = Field(default=24000, ge=1000, le=200000)
+    file_search_vector_threshold: float = Field(default=0.2, ge=-1, le=1)
+    file_search_rerank_threshold: float = Field(default=0, ge=0, le=1)
+    file_search_session_seconds: int = Field(default=3600, ge=60, le=86400)
+
     # RAG 切块预算包含来源与章节前缀；token 使用 UTF-8 字节保守上界，避免依赖模型分词器。
     rag_chunk_chars: int = Field(default=1000, ge=128, le=16000)
     rag_chunk_tokens: int = Field(default=2048, ge=128, le=32768)
@@ -62,6 +81,15 @@ class Settings(BaseSettings):
     def validate_rag_strategy(self):
         if self.rag_chunk_overlap >= min(self.rag_chunk_chars, self.rag_table_chunk_chars, self.rag_code_chunk_chars):
             raise ValueError("RAG_CHUNK_OVERLAP 必须小于各类切块字符预算")
+        if self.file_search_enabled:
+            import re
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,60}", self.elasticsearch_index_prefix):
+                raise ValueError("ELASTICSEARCH_INDEX_PREFIX 须为小写字母、数字、连字符或下划线")
+            text_prefix = self.oss_text_prefix.strip("/") + "/"
+            for root in (self.oss_prefix, self.oss_sops_prefix):
+                root = root.strip("/") + "/"
+                if text_prefix.startswith(root) or root.startswith(text_prefix):
+                    raise ValueError("OSS_TEXT_PREFIX 必须与原件和 SOP 前缀分离，不能互相嵌套")
         return self
 
     # ---- 阿里云 OSS(RAG 原件仓库:存原始文档 blob,私有桶)----

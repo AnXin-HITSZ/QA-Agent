@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 
 from app.rag.retrieve import format_hits
 from app.rag.retrieve import search_knowledge as _search_knowledge
@@ -95,4 +96,72 @@ def search_knowledge(query: str, top_k: int | None = None):
 
 
 # 供图绑定到 LLM(builder.ToolNode 执行 + nodes.bind_tools 绑定,均从此导入)。
-TOOLS = [list_sops, get_sop, read_sop_image, search_knowledge]
+def _file_search_result(config, request):
+    import json
+    from app.rag import file_search
+    user_id = (config.get("configurable") or {}).get("user_id")
+    if not user_id:
+        return "文件搜索需要已认证用户，当前无法执行。", {}
+    try:
+        result = file_search.search(request, user_id)
+        return json.dumps(result, ensure_ascii=False), result
+    except Exception as exc:
+        logger.warning("文件搜索失败: %s", type(exc).__name__)
+        return "文件搜索暂不可用，不能据此声称没有匹配文件。", {}
+
+
+@tool(response_format="content_and_artifact")
+def search_files_literal(literal_terms: list[str], config: RunnableConfig,
+                         literal_operator: str = "all", fields: list[str] | None = None,
+                         prefix: str = "", page_size: int = 20):
+    """查找包含指定字面值的全部文件，完整匹配集合分页返回，不按相关性截成 top_k。
+
+    适用：找出包含‘聚餐’的全部文件。literal_terms=['聚餐']。
+    all 表示每个词都出现（AND）；any 表示任一词出现（OR）。连续短语传单个完整值。
+    用户指定文字必须原样执行，不自动扩展同义词。fields 可选 name/path/body，默认 name+body。
+    返回总数、未覆盖正文数量、search_id 和 next_offset；不要把首页说成完整清单。
+    """
+    from app.schemas.file_search import FileSearchRequest
+    return _file_search_result(config, FileSearchRequest(literal_terms=literal_terms,
+        literal_operator=literal_operator, fields=fields or ["name", "body"], prefix=prefix, page_size=page_size))
+
+
+@tool(response_format="content_and_artifact")
+def search_files_semantic(query: str, literal_terms: list[str], config: RunnableConfig,
+                          literal_operator: str = "all", prefix: str = "", page_size: int = 20,
+                          candidate_limit: int | None = None):
+    """查找主题相关文件：完整字面集合 + 全文/向量补充；仅补充结果精排，无独立判定 LLM。
+
+    query 传完整主题；literal_terms 必须明确。组合主题默认 all，扩大任一主题时用 any。
+    例：发票报销 → query='发票报销', literal_terms=['发票','报销'], literal_operator='all'。
+    用户明确 AND/OR/短语时优先遵守。candidate_limit 仅限制两路补充候选，不能限制字面集合。
+    返回字面总数和补充总数、依据与分页。只承诺字面查全，不能宣称语义相关全部穷尽。
+    问‘流程是什么’仍用 search_knowledge，不能用文件清单代替问答证据。
+    """
+    from app.schemas.file_search import FileSearchRequest
+    return _file_search_result(config, FileSearchRequest(mode="semantic", query=query,
+        literal_terms=literal_terms, literal_operator=literal_operator, prefix=prefix,
+        page_size=page_size, candidate_limit=candidate_limit))
+
+
+@tool(response_format="content_and_artifact")
+def get_file_search_page(search_id: str, config: RunnableConfig, offset: int = 0, page_size: int = 20):
+    """按搜索返回的 next_offset 获取后续文件页；search_id 必须来自本用户的搜索。
+
+    大量结果建议用户使用结果卡片翻页或导出，而不是连续调用把全部正文填入聊天上下文。
+    """
+    import json
+    from app.rag import file_search
+    user_id = (config.get("configurable") or {}).get("user_id")
+    if not user_id:
+        return "文件搜索需要已认证用户。", {}
+    try:
+        result = file_search.page(search_id, user_id, offset, page_size)
+        return json.dumps(result, ensure_ascii=False), result
+    except Exception as exc:
+        logger.warning("文件搜索分页失败: %s", type(exc).__name__)
+        return "搜索结果不存在、过期或暂不可用。", {}
+
+
+TOOLS = [list_sops, get_sop, read_sop_image, search_knowledge,
+         search_files_literal, search_files_semantic, get_file_search_page]
