@@ -320,3 +320,6 @@ MySQL 管理联合发布指针与用户分页结果，正文快照保存在 OSS�
 随后运行scripts/import_index_history.py --apply导入各环境仍保留的任务JSON/JSONL，幂等、不覆盖SQL、不删除旧文件。
 导入历史不重建索引、不调用OCR/Embedding。已被旧策略删除的任务无法恢复。
 down会删除永久历史及版本策略，生产升级不执行。具体行为见docs/索引历史与按原方式重建.md。
+
+应用状态：2026-10-14，先提交/推送e336782并由ECS拉取，再对两库应用0015；三表列类型核验通过，旧表行数未变化。
+结构备份和核验报告位于ECS backend/data/file-search-deployment/。生产已导入36个任务、53条逐文件结果，开发无留存任务。
