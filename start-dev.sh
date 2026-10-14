@@ -87,7 +87,7 @@ echo "NO_PROXY=$NO_PROXY"
 cleanup() {
   echo
   echo ">> 正在停止隧道 / 前后端 ..."
-  kill "${BACK:-}" "${FRONT:-}" "${TUNNEL:-}" "${NEO4J_TUNNEL:-}" 2>/dev/null || true
+  kill "${BACK:-}" "${FRONT:-}" "${TUNNEL:-}" "${NEO4J_TUNNEL:-}" "${ES_TUNNEL:-}" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
 
@@ -159,6 +159,35 @@ fi
 
 if [ "$NEO4J_STATE" = enabled ]; then
   "$PY" backend/scripts/neo4j_setup.py check
+fi
+
+# 文件搜索启用时，通过 SSH 访问 ECS Elasticsearch，HTTPS 仍严格验证 CA。
+ES_CONFIG="$("$PY" backend/scripts/elasticsearch_setup.py inspect)"
+IFS=$'\t' read -r ES_STATE ES_HOST ES_PORT <<< "$ES_CONFIG"
+if [ "$ES_STATE" = disabled ]; then
+  echo ">> 文件搜索关闭，跳过 Elasticsearch 隧道。"
+elif [ "$ES_HOST" != "127.0.0.1" ] && [ "$ES_HOST" != localhost ]; then
+  echo ">> Elasticsearch 使用远程地址，直接连接。"
+elif port_in_use "$ES_PORT"; then
+  echo ">> 本机 ${ES_PORT} 已在监听：复用 Elasticsearch 连接，退出不关闭它。"
+else
+  echo ">> Elasticsearch 隧道 127.0.0.1:${ES_PORT} → ${SSH_ALIAS}:127.0.0.1:9200"
+  ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+    -L "127.0.0.1:${ES_PORT}:127.0.0.1:9200" "$SSH_ALIAS" &
+  ES_TUNNEL=$!
+  ES_UP=0
+  for _ in $(seq 1 50); do
+    if ! kill -0 "$ES_TUNNEL" 2>/dev/null; then break; fi
+    if port_open "$ES_PORT"; then ES_UP=1; break; fi
+    sleep 0.2
+  done
+  if [ "$ES_UP" != 1 ]; then
+    echo "✗ Elasticsearch 隧道未就绪，请检查 SSH 连接和 ECS 服务。"
+    exit 1
+  fi
+fi
+if [ "$ES_STATE" = enabled ]; then
+  "$PY" backend/scripts/elasticsearch_setup.py check
 fi
 
 echo ">> 启动后端  http://127.0.0.1:${BACK_PORT}  (--reload 热重载,读 backend/.env)"
