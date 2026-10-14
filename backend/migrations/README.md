@@ -312,3 +312,11 @@ MySQL 管理联合发布指针与用户分页结果，正文快照保存在 OSS�
 详细设计与验证见 docs/文件搜索与联合索引技术方案.md。
 
 应用状态：2026-10-14，先提交/推送 986d63a，ECS fast-forward 拉取后，qa_agent_dev 与 qa_agent_prod 均应用 0014。四张新表、列类型/可空性及应用账号读取已核验，旧表未删除，新表均为 0 行。结构备份与核验位于 ECS backend/data/file-search-deployment/。
+
+## 0015：永久索引历史与版本逐文件配置
+
+新增rag_index_jobs、rag_index_job_files、rag_index_version_files三表。按知识库namespace隔离，不在MySQL保存正文。
+必须先提交/推送并在ECS拉取，再应用qa_agent_dev与qa_agent_prod的up；0014及以前不重跑。
+随后运行scripts/import_index_history.py --apply导入各环境仍保留的任务JSON/JSONL，幂等、不覆盖SQL、不删除旧文件。
+导入历史不重建索引、不调用OCR/Embedding。已被旧策略删除的任务无法恢复。
+down会删除永久历史及版本策略，生产升级不执行。具体行为见docs/索引历史与按原方式重建.md。

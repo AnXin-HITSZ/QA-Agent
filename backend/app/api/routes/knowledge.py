@@ -33,6 +33,8 @@ from app.schemas.knowledge import (
     IndexJobFiles,
     IndexJobRequest,
     IndexJobStatus,
+    IndexScope,
+    RebuildRequest,
     IndexManifestInfo,
     IndexVersionInfo,
     KnowledgeFile,
@@ -377,6 +379,55 @@ def get_current_job() -> IndexJobStatus | None:
     """正在跑的任务(没有则返回最近一个任务),供前端进入页面时恢复进度显示。"""
     job = ocr_jobs.current_job()
     return IndexJobStatus(**job) if job else None
+
+
+@admin_router.get("/index-jobs")
+def index_job_history(offset: int = 0, limit: int = 20, job_status: str | None = None):
+    from app.rag import job_repo
+    if offset < 0 or not 1 <= limit <= 100 or job_status not in (None, "queued", "running", "published", "failed"):
+        raise HTTPException(400, "历史查询参数非法")
+    with _dep_503():
+        if not job_repo.configured():
+            raise RuntimeError("任务历史查询需要 MySQL")
+        page = job_repo.list_page(offset, limit, job_status)
+        page["items"] = [IndexJobStatus(**j).model_dump() for j in page["items"]]
+        return page
+
+
+def _rebuild_scope(body):
+    return ingest.Scope(kind=body.kind, prefix=_norm(body.prefix) if body.kind == "prefix" else "",
+                        keys=tuple(k.strip().lstrip("/") for k in body.keys))
+
+
+@admin_router.post("/rebuild-plan")
+def rebuild_plan(body: IndexScope):
+    from app.rag import rebuild, job_repo
+    with _dep_503():
+        if not job_repo.configured():
+            raise RuntimeError("按原方式重建需要 MySQL")
+        return rebuild.plan(_rebuild_scope(body))
+
+
+@admin_router.post("/rebuild-jobs", response_model=IndexJobStatus, status_code=202)
+def create_rebuild_job(body: RebuildRequest):
+    from app.rag import rebuild, job_repo
+    with _dep_503():
+        if not job_repo.configured():
+            raise RuntimeError("按原方式重建需要 MySQL")
+        scope = _rebuild_scope(body.scope)
+        preview = rebuild.plan(scope)
+        if preview["token"] != body.token:
+            raise HTTPException(409, "文件或索引版本已变化，请重新生成重建计划")
+        try:
+            selected = rebuild.resolve(preview, body.overrides)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        try:
+            job = ocr_jobs.new_job(scope, ingest.Options(), plan=preview, file_options=selected)
+        except ocr_jobs.JobBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+    ocr_jobs.start_job(job)
+    return IndexJobStatus(**job)
 
 
 @admin_router.get("/index-jobs/{job_id}", response_model=IndexJobStatus)

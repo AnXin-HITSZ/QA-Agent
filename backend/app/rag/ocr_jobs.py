@@ -1,4 +1,4 @@
-"""索引任务:持久化状态 + 单工作者执行 + 重启对账(本地 JSON,不引入数据库)。
+"""索引任务:MySQL 永久历史 + 单工作者执行 + 重启对账。
 
 目录(`{INDEX_STATE_DIR}/jobs/`):
   <job_id>.json         任务状态与进度(每处理完一个文件原子重写一次)
@@ -24,17 +24,18 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import contextmanager
 
 from app.config import get_settings
 from app.metering.context import PURPOSE_INDEX, bind as bind_context
-from app.rag import documents, ingest, oss, store
+from app.rag import documents, ingest, oss, store, job_repo
 from app.rag.ingest import Options, Scope
 from app.rag.localfs import atomic_write_json, read_json
 
 logger = logging.getLogger(__name__)
 
 LOCK_STALE_SECONDS = 30 * 60    # 心跳超过这个时长才算陈旧(单文件最长耗时远小于它)
-JOB_KEEP = 50                   # 任务文件保留个数
+JOB_KEEP = 50                   # 仅未配置 MySQL 的兼容模式使用
 _RUNNING = ("queued", "running")
 
 
@@ -71,6 +72,30 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+@contextmanager
+def _lock_guard():
+    """Serialize lock read/check/write across workers; atomic rename alone is insufficient."""
+    jobs_dir().mkdir(parents=True, exist_ok=True)
+    with (jobs_dir() / "worker.guard").open("a+b") as guard:
+        if os.name == "nt":
+            import msvcrt
+            if guard.tell() == 0:
+                guard.write(b"0"); guard.flush()
+            guard.seek(0)
+            msvcrt.locking(guard.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                guard.seek(0)
+                msvcrt.locking(guard.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_UN)
+
+
 # ---- 工作者锁 ----
 
 def lock_owner() -> dict | None:
@@ -94,6 +119,11 @@ def job_running() -> dict | None:
 
 
 def _take_lock(job_id: str) -> tuple[bool, dict | None]:
+    with _lock_guard():
+        return _take_lock_guarded(job_id)
+
+
+def _take_lock_guarded(job_id: str) -> tuple[bool, dict | None]:
     """尝试占锁。返回 (是否拿到, 现有归属)。陈旧锁可接管,新鲜锁一律拒绝。"""
     lock = lock_owner()
     if lock and lock.get("job_id") != job_id and _is_fresh(lock):
@@ -106,10 +136,15 @@ def _take_lock(job_id: str) -> tuple[bool, dict | None]:
 
 
 def touch_lock(job_id: str) -> None:
+    with _lock_guard():
+        _touch_lock_guarded(job_id)
+
+
+def _touch_lock_guarded(job_id: str) -> None:
     """刷新心跳(每个文件刷一次);锁已被别人接管则抛 JobSuperseded。"""
     lock = lock_owner()
-    if lock and lock.get("job_id") != job_id:
-        raise JobSuperseded(f"锁已被 {lock.get('job_id')} 接管")
+    if not lock or lock.get("job_id") != job_id:
+        raise JobSuperseded("工作者锁已丢失或被接管")
     atomic_write_json(_lock_path(), {
         "job_id": job_id, "pid": os.getpid(), "started_at": (lock or {}).get("started_at") or _now(),
         "heartbeat": datetime.now(timezone.utc).timestamp(),
@@ -117,6 +152,11 @@ def touch_lock(job_id: str) -> None:
 
 
 def release_lock(job_id: str) -> None:
+    with _lock_guard():
+        _release_lock_guarded(job_id)
+
+
+def _release_lock_guarded(job_id: str) -> None:
     """释放锁(只释放自己的);任务结束后调用。"""
     lock = lock_owner()
     if lock and lock.get("job_id") == job_id:
@@ -128,7 +168,7 @@ def release_lock(job_id: str) -> None:
 
 # ---- 任务读写 ----
 
-def new_job(scope: Scope, options: Options) -> dict:
+def new_job(scope: Scope, options: Options, *, plan: dict | None = None, file_options: dict | None = None) -> dict:
     """建任务并占锁;已有任务在跑抛 JobBusy(接口转 409)。"""
     job_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
     ok, owner = _take_lock(job_id)
@@ -138,7 +178,7 @@ def new_job(scope: Scope, options: Options) -> dict:
         "job_id": job_id,
         "status": "queued",
         "scope": scope.as_dict(),
-        "options": options.as_dict(),
+        "options": {"per_file": True, "refresh_ocr": False} if plan is not None else options.as_dict(),
         "created_at": _now(),
         "started_at": None,
         "finished_at": None,
@@ -146,17 +186,28 @@ def new_job(scope: Scope, options: Options) -> dict:
         "published": None,
         "error": None,
         "summary": None,
+        "strategy": "reuse" if plan is not None else "manual",
+        "plan": plan,
+        "file_options": file_options,
     }
-    _write(job)
+    try:
+        _write(job)
+    except Exception:
+        release_lock(job_id)
+        raise
     return job
 
 
 def get_job(job_id: str) -> dict | None:
+    if job_repo.configured():
+        return job_repo.get(job_id)
     data = read_json(job_path(job_id), default=None)
     return data if isinstance(data, dict) else None
 
 
 def list_jobs(limit: int = 20) -> list[dict]:
+    if job_repo.configured():
+        return job_repo.list_page(0, limit)["items"]
     """最近的任务(新的在前),只读状态,不含文件明细。"""
     d = jobs_dir()
     if not d.is_dir():
@@ -171,6 +222,8 @@ def list_jobs(limit: int = 20) -> list[dict]:
 
 
 def files_page(job_id: str, offset: int = 0, limit: int = 100) -> dict:
+    if job_repo.configured():
+        return job_repo.files(job_id, max(0, offset), max(1, min(limit, 500)))
     """文件明细分页读取(明细在 JSONL 里,不在任务 JSON 里)。"""
     path = files_path(job_id)
     rows: list[dict] = []
@@ -192,10 +245,16 @@ def files_page(job_id: str, offset: int = 0, limit: int = 100) -> dict:
 
 
 def _write(job: dict) -> None:
+    if job_repo.configured():
+        job_repo.write(job)
+        return
     atomic_write_json(job_path(job["job_id"]), job)
 
 
 def _append_file_detail(job_id: str, detail: dict) -> None:
+    if job_repo.configured():
+        job_repo.append(job_id, detail)
+        return
     """追加一行文件明细;追加写单个小 JSON,不需要原子替换。"""
     path = files_path(job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,6 +263,15 @@ def _append_file_detail(job_id: str, detail: dict) -> None:
 
 
 def _prune() -> None:
+    if job_repo.configured():
+        # Business history is permanent. Only completed operational recovery
+        # records older than 90 days are eligible; pending records never expire.
+        import time
+        folder = documents.publish_record_path("placeholder").parent
+        for path in folder.glob("*.json"):
+            if time.time() - path.stat().st_mtime > 90 * 86400:
+                documents.drop_publish_record(path.stem)
+        return
     """只保留最近 JOB_KEEP 个任务(json + jsonl),避免目录无限增长。"""
     d = jobs_dir()
     if not d.is_dir():
@@ -249,7 +317,9 @@ def _run(job_id: str, scope_dict: dict, options_dict: dict) -> None:
         # 调用日志归属:本任务线程内所有 OCR / 向量化调用都记在这个任务名下(§3)
         with bind_context(purpose=PURPOSE_INDEX, job_id=job_id):
             summary = ingest.run_index_job(oss.knowledge_store(), scope, opts, progress=progress,
-                                           job_id=job_id)
+                                           job_id=job_id, file_options=job.get("file_options"),
+                                           expected_active=(job.get("plan") or {}).get("active"),
+                                           expected_sources=(job.get("plan") or {}).get("files"))
         files = summary.pop("files", [])
         for d in files[_read_details_count(job_id):]:   # 兜底:回调漏记的明细补上
             _append_file_detail(job_id, d)
@@ -266,12 +336,16 @@ def _run(job_id: str, scope_dict: dict, options_dict: dict) -> None:
         job.update({"status": "failed", "finished_at": _now(), "published": False,
                     "error": f"{type(exc).__name__}:{exc}"})
     finally:
-        _write(job)
-        release_lock(job_id)
+        try:
+            _write(job)
+        finally:
+            release_lock(job_id)
         _prune()
 
 
 def _read_details_count(job_id: str) -> int:
+    if job_repo.configured():
+        return job_repo.files(job_id, 0, 1)["total"]
     try:
         with files_path(job_id).open("r", encoding="utf-8") as f:
             return sum(1 for line in f if line.strip())
@@ -289,8 +363,35 @@ def reconcile() -> int:
     重新排队时命中两层 OCR 缓存。
     """
     n = 0
+    if job_repo.configured():
+        for status in _RUNNING:
+            pending = []
+            offset = 0
+            while True:
+                page = job_repo.list_page(offset, 100, status)
+                pending.extend(page["items"])
+                offset += len(page["items"])
+                if offset >= page["total"]:
+                    break
+            for data in pending:
+                record = read_json(documents.publish_record_path(data['job_id']), default={}) or {}
+                committed = record.get('status') == 'applied' or (
+                    record.get('status') in ('prepared', 'publishing') and
+                    record.get('index_version') == store.active_collection())
+                with _lock_guard():
+                    lock = lock_owner()
+                    if lock and lock.get("job_id") == data["job_id"] and _is_fresh(lock) and _other_worker_alive(lock):
+                        continue
+                    data.update({"status":"published" if committed else "failed", "finished_at":_now(),
+                                 "published":bool(committed),
+                                 "error":None if committed else "服务重启中断，可重新排队；已识别页面保留在缓存中"})
+                    if committed:
+                        data['summary'] = {**(data.get('summary') or {}), 'index_version':record.get('index_version'),
+                                           'published':True, 'message':'发布已完成，重启恢复任务状态'}
+                    _write(data)
+                    n += 1
     d = jobs_dir()
-    if d.is_dir():
+    if d.is_dir() and not job_repo.configured():
         for p in d.glob("*.json"):
             data = read_json(p, default=None)
             if not isinstance(data, dict) or data.get("status") not in _RUNNING:
@@ -318,6 +419,29 @@ def reconcile() -> int:
     except Exception as exc:   # noqa: BLE001 —— Qdrant / Redis 未接通都算,记录后继续启动
         logger.warning("启动对账:缓存清单 / 删除清理重试跳过(%s)", exc)
     return n
+
+
+def _other_worker_alive(lock):
+    pid = int(lock.get("pid") or 0)
+    if pid <= 0 or pid == os.getpid():
+        return False
+    if os.name == "nt":
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() == 5  # denied is not proof of death
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def current_job() -> dict | None:

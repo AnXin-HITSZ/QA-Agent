@@ -479,6 +479,16 @@ async function resumeJob(): Promise<void> {
   }
 }
 
+async function trackJob(created: IndexJobStatus): Promise<void> {
+  stopPoll();
+  watchedRows.clear();
+  job.value = created;
+  jobFiles.value = [];
+  jobFilesTotal.value = 0;
+  jobError.value = "";
+  pollTimer = setTimeout(() => void pollOnce(created.job_id), 300);
+}
+
 // 当前生效版本与可回退版本(面板展示用)。失败保持旧值。
 async function refreshManifest(): Promise<void> {
   try {
@@ -561,6 +571,7 @@ export function useKnowledge() {
     startJob,
     retryJobFile,
     resumeJob,
+    trackJob,
     refreshManifest,
     rollbackToPrevious,
     // 浏览导航

@@ -112,6 +112,17 @@ class IndexJobRequest(BaseModel):
     options: IndexOptions = Field(..., description="提取选项(必传,提取方式必须显式选择)")
 
 
+class RebuildOverride(BaseModel):
+    key: str = Field(min_length=1)
+    options: IndexOptions
+
+
+class RebuildRequest(BaseModel):
+    scope: IndexScope
+    token: str = Field(min_length=64, max_length=64)
+    overrides: list[RebuildOverride] = Field(default_factory=list)
+
+
 class IndexJobProgress(BaseModel):
     done: int = Field(default=0, description="已处理文件数")
     total: int = Field(default=0, description="本次目标文件总数")
@@ -130,6 +141,7 @@ class IndexJobStatus(BaseModel):
     published: bool | None = Field(default=None, description="是否已发布;None = 尚未结束")
     error: str | None = Field(default=None, description="失败原因(未发布时)")
     summary: dict | None = Field(default=None, description="结束后的汇总(计数、页面统计、跳过明细)")
+    strategy: str = "manual"
 
 
 class IndexJobFiles(BaseModel):

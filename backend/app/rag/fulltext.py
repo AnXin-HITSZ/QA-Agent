@@ -64,6 +64,7 @@ def create_index(collection):
             "content_sha256": {"type": "keyword"}, "snapshot_key": {"type": "keyword"},
             "units": {"type": "object", "enabled": False},
             "source_size": {"type": "long"}, "source_modified": {"type": "long"},
+            "document_id": {"type": "keyword"}, "extraction_options": {"type": "object", "enabled": False},
         }}})
     return name
 
@@ -134,4 +135,6 @@ def make_document(prepared, source_info, options):
         "name": prepared.key.rsplit("/", 1)[-1], "body": text, "body_literal": text,
         "name_literal": prepared.key.rsplit("/", 1)[-1], "key_literal": prepared.key,
         "content_sha256": prepared.content_sha256, "snapshot_key": key, "units": units,
+        "document_id": prepared.document_id,
+        "extraction_options": {"extraction_mode": options.extraction_mode, "mixed_invoice": options.mixed_invoice},
         "source_size": source_info.get("size", 0), "source_modified": source_info.get("last_modified")}

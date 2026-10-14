@@ -313,7 +313,8 @@ def source_changed(kb, expected: list[dict]) -> list[str]:
 # ---- 主编排 ----
 
 def run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: int | None = None,
-                  job_id: str | None = None) -> dict:
+                  job_id: str | None = None, file_options: dict | None = None,
+                  expected_active: str | None = None, expected_sources: list | None = None) -> dict:
     """一次索引任务:准备 → 写入候选集合 → 校验 → 发布 → 更新清单并清理旧缓存。
 
     progress(done, total, detail) 每处理完一个文件回调一次;detail 为该文件的结果。
@@ -325,16 +326,30 @@ def run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: in
     # purpose=document_index + 本次 job_id 下。上层任务线程已绑定同样的值,这里再兜一层 ——
     # 本函数是对外唯一的索引入口,归属不该依赖调用方记得先绑定。
     with bind_context(purpose=PURPOSE_INDEX, job_id=job_id):
-        return _run_index_job(kb, scope, opts, progress=progress, retries=retries, job_id=job_id)
+        return _run_index_job(kb, scope, opts, progress=progress, retries=retries, job_id=job_id,
+                              file_options=file_options, expected_active=expected_active, expected_sources=expected_sources)
 
 
 def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: int | None = None,
-                   job_id: str | None = None) -> dict:
+                   job_id: str | None = None, file_options: dict | None = None,
+                   expected_active: str | None = None, expected_sources: list | None = None) -> dict:
     targets, missing = scope_files(kb, scope)   # 先验 OSS 通 + 固定清单
+    if expected_sources is not None and ({(f['key'], f.get('size'), f.get('last_modified')) for f in targets} !=
+            {(f['key'], f.get('size'), f.get('last_modified')) for f in expected_sources}):
+        raise RuntimeError("重建计划中的原件已变化，请重新生成计划")
+    if expected_active is not None and store.active_collection() != expected_active:
+        raise RuntimeError("重建计划对应的生效版本已变化，请重新生成计划")
     embeddings = get_embeddings()               # 先验 embeddings 已配(fail-fast)
     ensure_available()                          # 再验缓存可用(fail-fast,§9)
     active = store.ensure_collection()          # 固定本次重建的旧版本
     previously_indexed = store.keys_in(active)
+    from app.rag import job_repo, rebuild
+    version_files = {}
+    if job_repo.configured():
+        version_files = rebuild.active_policies(active)
+        if not version_files:
+            version_files = rebuild.legacy_policies(active)
+        version_files = {k: v for k, v in version_files.items() if not scope.covers(k) and kb.object_exists(k)}
     version = store.create_staging()
     from app.rag import fulltext, search_repo
     search_index = None
@@ -353,7 +368,8 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
                     if not scope.covers(doc["key"]) and kb.object_exists(doc["key"]):
                         fulltext.put_document(search_index, doc)
                         search_files[doc["key"]] = {k: doc[k] for k in (
-                            "key", "content_sha256", "snapshot_key", "source_size", "source_modified")}
+                            "key", "content_sha256", "snapshot_key", "source_size", "source_modified",
+                            "document_id", "extraction_options") if k in doc}
         except Exception:
             store.abort_staging(version)
             if search_index:
@@ -361,7 +377,7 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
             raise
     record_id = job_id or version               # 清单阶段记录的标识
     logger.info("索引任务开始:范围 %s → 候选集合 %s(目标 %d 个文件,提取方式 %s)",
-                scope.as_dict(), version, len(targets), opts.mode)
+                scope.as_dict(), version, len(targets), "逐文件配置" if file_options is not None else opts.mode)
 
     copied_keys: set[str] = set()
     manifests: dict[str, dict] = {}             # 待发布清单:document_id → 清单(§7)
@@ -389,17 +405,26 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
     cache_failure: CacheError | None = None
     for i, f in enumerate(targets, 1):
         key = f["key"]
+        current_options = Options(**file_options[key]) if file_options is not None else opts
         try:
-            prep = prepare_file(kb, key, opts)
+            prep = prepare_file(kb, key, current_options)
             # 瞬时故障(超时 / 限流 / 5xx):整份文件再试一轮;OCR 内部已有单页重试,这里只兜底。
             if prep.status == "failed" and wait > 0 and any(m in (prep.reason or "") for m in _TRANSIENT_MARKERS):
                 logger.warning("文件 %s 遇到瞬时故障(%s),%d 秒后重试", key, prep.reason, 2)
                 time.sleep(2)
-                prep = prepare_file(kb, key, opts)
+                prep = prepare_file(kb, key, current_options)
 
             if prep.status == "skipped" and key in previously_indexed:
                 prep.status = "failed"
                 prep.reason = "existing_index_preserved:已有索引文件本次无法提取，拒绝发布；" + (prep.reason or "")
+
+            policy = {"key": key, "document_id": prep.document_id,
+                      "content_sha256": prep.content_sha256,
+                      "source_size": f.get("size"), "source_modified": f.get("last_modified"),
+                      "extraction_options": {"extraction_mode": current_options.extraction_mode,
+                                             "mixed_invoice": current_options.mixed_invoice}}
+            if prep.status in ("indexed", "skipped") and prep.document_id:
+                version_files[key] = policy
 
             for k in ("total", "ok", "blank", "failed", "cached"):
                 pages[k] += prep.pages[k]
@@ -421,16 +446,17 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
                     totals["indexed_files"] += 1
                     totals["chunks"] += len(texts)
                     totals["vectors"] += n
+                    version_files[key] = policy
                     if search_index:
-                        doc = fulltext.make_document(prep, f, opts)
+                        doc = fulltext.make_document(prep, f, current_options)
                         fulltext.put_document(search_index, doc)
-                        search_files[key] = {k: doc[k] for k in (
-                            "key", "content_sha256", "snapshot_key", "source_size", "source_modified")}
+                        search_files[key] = {**policy, "snapshot_key": doc["snapshot_key"]}
+                        version_files[key] = search_files[key]
                     if prep.document_id:      # 命中缓存也要为当前文件生成清单(§7)
                         manifests[prep.document_id] = documents.build_manifest(
                             document_id=prep.document_id, oss_key=key,
                             content_sha256=prep.content_sha256,
-                            extraction_mode=opts.extraction_mode, mixed_invoice=opts.mixed_invoice,
+                            extraction_mode=current_options.extraction_mode, mixed_invoice=current_options.mixed_invoice,
                             index_version=version, pages=prep.page_keys,
                             embedding_keys=[embedding_cache.cache_key(t) for t in texts],
                         )
@@ -443,7 +469,9 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
                 totals["failed_files"] += 1
             elif prep.status == "skipped":
                 totals["skipped_files"] += 1
-            details.append(prep.detail())
+            details.append({**prep.detail(), "document_id": prep.document_id,
+                            "content_sha256": prep.content_sha256,
+                            "extraction_options": current_options.as_dict()})
             if progress:
                 progress(i, len(targets), details[-1])
         except CacheError as exc:
@@ -454,7 +482,7 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
 
     summary = {
         "scope": scope.as_dict(),
-        "options": opts.as_dict(),
+        "options": {"per_file": True} if file_options is not None else opts.as_dict(),
         "index_version": version,
         "previous": store.active_collection(),
         "published": False,
@@ -522,9 +550,11 @@ def _run_index_job(kb, scope: Scope, opts: Options, *, progress=None, retries: i
                 fulltext.request("DELETE", fulltext.index_path(search_index) + "/_doc/" + _sha256(key.encode()))
             fulltext.refresh(search_index)
             search_repo.prepare_release(version, search_index, list(search_files.values()))
+        if job_repo.configured():
+            job_repo.save_policies(version, [v for k, v in version_files.items() if k not in gone])
         publish_kwargs = {"search_expected": previous_release["id"] if previous_release else None} if search_index else {}
         store.publish(version, expected_count=expected,
-                      note=f"{scope.as_dict()} 提取方式={opts.extraction_mode}", **publish_kwargs)
+                      note=f"{scope.as_dict()} 提取方式={'逐文件配置' if file_options is not None else opts.extraction_mode}", **publish_kwargs)
         summary["published"] = True
         summary["message"] = "已发布"
     except Exception as exc:   # 校验不过:候选集合删除,旧版本原样

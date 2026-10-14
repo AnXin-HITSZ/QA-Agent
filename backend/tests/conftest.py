@@ -177,6 +177,19 @@ def kb_env(cache_env, monkeypatch, tmp_path):
 
     from app.config import get_settings
     from app.rag import ingest, oss, store
+    from app.rag import job_repo
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from contextlib import contextmanager
+    history_engine = create_engine("sqlite:///" + str(tmp_path / "history.sqlite"))
+    job_repo.Base.metadata.create_all(history_engine)
+    history_factory = sessionmaker(history_engine, expire_on_commit=False)
+    @contextmanager
+    def history_session():
+        with history_factory.begin() as session:
+            yield session
+    monkeypatch.setattr(job_repo, "session_scope", history_session)
+    monkeypatch.setattr(job_repo, "configured", lambda: True)
 
     s = get_settings()
     monkeypatch.setattr(s, "index_state_dir", str(tmp_path / "ocr"))

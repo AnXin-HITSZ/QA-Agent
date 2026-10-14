@@ -8,6 +8,7 @@ import { computed, ref, watch } from "vue";
 import type { IndexJobFileRow, JobPageStats } from "../api";
 import { useKnowledge } from "../composables/useKnowledge";
 import { errorText, formatStampFull } from "../lib/format";
+import RebuildHistory from "./RebuildHistory.vue";
 
 const {
   job,
@@ -113,10 +114,10 @@ const counts = computed(() => {
 });
 
 // 行内「方式」:原生文本层 / OCR(附本次任务的提取方式)。
-function methodText(m: string): string {
+function methodText(m: string, row?: IndexJobFileRow): string {
   if (!m) return "—";
   if (m.includes("ocr")) {
-    const mode = job.value?.options?.extraction_mode;
+    const mode = row?.extraction_options?.extraction_mode ?? job.value?.options?.extraction_mode;
     return mode && mode !== "native_only" ? `OCR · ${modeLabel(mode)}` : "OCR";
   }
   return "原生文本";
@@ -166,6 +167,7 @@ function toggle(): void {
     </button>
 
     <div v-if="open" class="rb__body">
+      <RebuildHistory />
       <p v-if="jobError" class="rb__err" role="alert">{{ jobError }}</p>
 
       <!-- 任务进度与结果 -->
@@ -180,7 +182,7 @@ function toggle(): void {
         </div>
 
         <p class="rb__line">
-          提取方式:{{ modeLabel(job.options?.extraction_mode) }}
+          提取方式:{{ job.strategy === 'reuse' ? '逐文件复用原配置' : modeLabel(job.options?.extraction_mode) }}
           <template v-if="job.options?.mixed_invoice">· 混贴票据页</template>
           <template v-if="job.options?.refresh_ocr">· 忽略缓存重新识别</template>
         </p>
@@ -240,7 +242,7 @@ function toggle(): void {
               <tr v-for="r in shownRows" :key="r.key">
                 <td class="rb__key" :title="r.key">{{ r.key }}</td>
                 <td :class="'is-' + statusOf(r).tone">{{ statusOf(r).text }}</td>
-                <td>{{ methodText(r.method) }}</td>
+                <td>{{ methodText(r.method, r) }}</td>
                 <td class="rb__pages">
                   <template v-if="r.pages?.total">
                     {{ r.pages.ok }}/{{ r.pages.total }}

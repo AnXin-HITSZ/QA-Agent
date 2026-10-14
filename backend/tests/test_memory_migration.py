@@ -99,6 +99,7 @@ def test_every_migration_table_is_owned_by_a_model_module():
              | set(mig.model_tables("app.memory.graph.tables")))
     # 0013 retires the five administrative tables; active schema exactly matches models.
     owned |= set(mig.model_tables("app.rag.search_repo"))
+    owned |= set(mig.model_tables("app.rag.job_repo"))
     assert owned == set(mig.migration_tables()), (
         f"迁移与模型模块的表集合不一致(模型 {sorted(owned)},迁移 {sorted(mig.migration_tables())})")
 

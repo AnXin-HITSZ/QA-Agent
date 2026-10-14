@@ -42,6 +42,38 @@ def _wait(client: TestClient, job_id: str, timeout: float = 15.0) -> dict:
     raise AssertionError(f"任务 {job_id} 超时未结束")
 
 
+def test_rebuild_preview_requires_unknown_choice_and_reports_history(client, kb_env):
+    kb_env.kb.put_object('new.md',b'# Rules\n\nApproval required.')
+    scope={'kind':'prefix','prefix':''}
+    preview=client.post(f'{ADMIN}/rebuild-plan',json=scope)
+    assert preview.status_code==200
+    plan=preview.json()
+    assert plan['unknown']==1
+    request={'scope':scope,'token':plan['token']}
+    assert client.post(f'{ADMIN}/rebuild-jobs',json=request).status_code==400
+    request['overrides']=[{'key':'new.md','options':{'extraction_mode':'native_only'}}]
+    created=client.post(f'{ADMIN}/rebuild-jobs',json=request)
+    assert created.status_code==202
+    done=_wait(client,created.json()['job_id'])
+    assert done['published'] and done['strategy']=='reuse'
+    history=client.get(f'{ADMIN}/index-jobs?job_status=published').json()
+    assert history['total']==1 and history['items'][0]['job_id']==done['job_id']
+    assert 'file_options' not in history['items'][0]
+    row=client.get(f'{ADMIN}/index-jobs/{done["job_id"]}/files').json()['items'][0]
+    assert row['extraction_options']['extraction_mode']=='native_only'
+    assert client.post(f'{ADMIN}/rebuild-jobs',json=request).status_code==409
+
+
+def test_rebuild_preview_rejects_changed_source(client,kb_env):
+    kb_env.kb.put_object('new.md',b'old')
+    scope={'kind':'prefix','prefix':''}
+    plan=client.post(f'{ADMIN}/rebuild-plan',json=scope).json()
+    kb_env.kb.put_object('new.md',b'changed file')
+    response=client.post(f'{ADMIN}/rebuild-jobs',json={'scope':scope,'token':plan['token'],
+        'overrides':[{'key':'new.md','options':{'extraction_mode':'native_only'}}]})
+    assert response.status_code==409
+
+
 def test_create_job_runs_and_reports_progress(client, kb_env):
     kb_env.kb.files["01_报告/a.pdf"] = make_pdf(pages=[{"text": "report body"}])
     r = client.post(f"{ADMIN}/index-jobs",

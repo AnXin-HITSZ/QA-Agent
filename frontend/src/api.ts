@@ -404,6 +404,7 @@ export interface IndexJobFileRow {
   pages: JobPageStats;
   failed_pages: number[];
   warnings: string[];
+  extraction_options?: IndexOptions;
 }
 
 export interface IndexJobFiles {
@@ -436,7 +437,7 @@ export interface IndexJobStatus {
   job_id: string;
   status: "queued" | "running" | "published" | "failed";
   scope: { kind?: string; prefix?: string; keys?: string[] };
-  options: IndexOptions;
+  options: Partial<IndexOptions>;
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
@@ -444,6 +445,32 @@ export interface IndexJobStatus {
   published: boolean | null; // null = 尚未结束
   error: string | null; // 未发布时的原因
   summary: IndexJobSummary | null;
+  strategy?: "manual" | "reuse";
+}
+
+export interface RebuildPlan {
+  active: string;
+  scope: IndexJobScope;
+  token: string;
+  total: number;
+  unknown: number;
+  unsupported: number;
+  groups: Record<string, number>;
+  files: { key: string; status: "known" | "unknown" | "unsupported" | "missing";
+    extraction_options: IndexOptions | null; policy_source?: string }[];
+}
+
+export function getRebuildPlan(scope: IndexJobScope): Promise<RebuildPlan> {
+  return kfetchJson(`/api/v1/admin/knowledge/rebuild-plan`, {method:"POST",body:JSON.stringify(scope)});
+}
+
+export function createRebuildJob(plan: RebuildPlan, overrides: {key:string;options:IndexOptions}[]): Promise<IndexJobStatus> {
+  return kfetchJson(`/api/v1/admin/knowledge/rebuild-jobs`, {method:"POST",
+    body:JSON.stringify({scope:plan.scope,token:plan.token,overrides})});
+}
+
+export function getIndexJobHistory(offset=0, limit=20, status=""): Promise<{total:number;items:IndexJobStatus[]}> {
+  return kfetchJson(`/api/v1/admin/knowledge/index-jobs?offset=${offset}&limit=${limit}${status ? `&job_status=${encodeURIComponent(status)}` : ""}`);
 }
 
 export interface IndexVersionInfo {
