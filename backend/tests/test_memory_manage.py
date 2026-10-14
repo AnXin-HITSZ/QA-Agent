@@ -103,34 +103,24 @@ def test_plain_list_never_calls_the_retrieval_path(env):
     assert result["degraded"] == [] and result["error"] == ""
 
 
-def test_search_list_uses_retrieval_and_validates_in_mysql(env):
-    """带 query 的列表走检索,且**召回层给什么都不信**:别人的行与已删的行都进不来。"""
+def test_management_search_never_uses_semantic_candidates(env):
     a, b, _ = _seed(env, TEXT_A, TEXT_B, TEXT_C)
-    _seed(env, "别人的事实", user_id=U2)
-    with env.db.session_scope() as session:
-        foreign = repo.list_items(session, U2, limit=1)[0].id
-    service.delete_item(user_id=U1, memory_id=b)     # 已删的行:Qdrant 里可能还有残留点
-
-    env.dense.ids = [foreign, b, a]                  # 替身「返回」了别人的 id 和一个旧 id
-
-    result = service.list_items(user_id=U1, query=NOMATCH)
-
-    assert _ids(result) == [a]
-    assert env.dense.calls[-1]["user_id"] == U1      # 召回本身就是按用户查的
-    assert result["counts"]["filtered_foreign"] == 1
-    assert result["counts"]["filtered_missing"] == 1
+    _seed(env, TEXT_A, user_id=U2)
+    service.delete_item(user_id=U1, memory_id=b)
+    env.dense.ids = [b, a]
+    env.dense.calls.clear()
+    assert service.list_items(user_id=U1, query=NOMATCH)["items"] == []
+    result = service.list_items(user_id=U1, query=TEXT_A)
+    assert _ids(result) == [a] and result["total"] == 1
+    assert env.dense.calls == []
 
 
-def test_search_list_reports_degradation_without_failing(env):
-    """向量一路挂了:如实记降级,不抛错、也不假装「你没有相关记忆」。"""
+def test_management_search_is_independent_of_vector_availability(env):
     _seed(env, TEXT_A, TEXT_B)
-    env.dense.fail = RuntimeError("qdrant 不可达")
-
-    result = service.list_items(user_id=U1, query=NOMATCH)
-
-    assert result["items"] == []
-    assert result["error"] == ""                     # 关键词一路还在,不算整体不可用
-    assert any("向量" in note for note in result["degraded"])
+    env.dense.fail = RuntimeError("qdrant offline")
+    result = service.list_items(user_id=U1, query=TEXT_A)
+    assert len(result["items"]) == 1
+    assert result["degraded"] == [] and result["error"] == ""
 
 
 # ---- 手添 ----

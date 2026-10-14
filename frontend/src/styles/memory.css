@@ -409,3 +409,16 @@
   .mcard, .mem__panelHead { padding: 16px; }
   .mem__pager { flex-wrap: wrap; justify-content: center; }
 }
+
+/* Text actions retain their compact labels and gain rectangular feedback. */
+.mem__btn--link { padding: 4px 7px; border-radius: 5px; }
+.mem__btn--link:hover:not(:disabled) { background: var(--primary-tint); }
+.mem__btn--link.mem__btn--danger:hover:not(:disabled) { background: var(--seal-tint); color: var(--seal); }
+.mem__btn--link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.mem__searchBox { position: relative; flex: 1; min-width: 0; }
+.mem__searchBox .mem__input { width: 100%; padding-right: 42px; box-sizing: border-box; }
+.mem__clear { position: absolute; right: 7px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.mem__clear svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.mem__clear:hover { background: var(--primary-tint); color: var(--primary); }
+.mem__clear:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.mcard__text mark { background: var(--primary-tint); color: inherit; border-radius: 2px; }

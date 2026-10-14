@@ -13,9 +13,9 @@ user_id 过滤 —— 这里的模型**不接受**任何 user_id 字段，前端
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # 请求体上限：正文超过配置的 memory_max_text_chars 由服务层截断（配置是运维口径），
 # 这里只拦「明显不是一句记忆」的超大请求体，避免把 body 当传送带。
@@ -23,7 +23,17 @@ MAX_REQUEST_TEXT_CHARS = 4000
 MAX_QUERY_CHARS = 200
 
 
-class MemoryItemView(BaseModel):
+class UTCResponse(BaseModel):
+    """MySQL DATETIME values are UTC; serialize with an explicit timezone."""
+    @field_validator("*", mode="after")
+    @classmethod
+    def utc_datetime(cls, value):
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+        return value
+
+
+class MemoryItemView(UTCResponse):
     """一条记忆（正文 + 必要的来源与状态；不含 user_id —— 都是调用者自己的）。"""
 
     id: str = Field(..., description="记忆 id")
@@ -41,11 +51,11 @@ class MemoryItemView(BaseModel):
 
 
 class MemoryListResponse(BaseModel):
-    """列表 / 检索结果。带 query 时走检索（结果按相关性排序），否则按更新时间倒序分页。"""
+    """列表 / 检索结果。带 query 时按正文词项全部包含过滤，两种模式均按更新时间倒序分页。"""
 
     enabled: bool = Field(..., description="记忆功能是否可用（未配 MySQL 时 false）")
     items: list[MemoryItemView] = Field(default_factory=list, description="这一页的记忆")
-    total: int = Field(default=0, description="有效记忆总数（检索模式下 = 本次返回条数）")
+    total: int = Field(default=0, description="有效记忆总数（搜索模式下 = 匹配总数）")
     index_pending: int = Field(default=0, description="待补索引的条数（后台会自愈，不影响记忆本身）")
     query: str = Field(default="", description="本次的检索词（空 = 普通列表）")
     degraded: list[str] = Field(default_factory=list, description="本次没做到最好的地方（如实说明）")
@@ -62,7 +72,7 @@ class MemoryEditRequest(BaseModel):
                       description="改写后的内容（版本在读取与写入之间变过则不覆盖，返回 409）")
 
 
-class MemoryHistoryItem(BaseModel):
+class MemoryHistoryItem(UTCResponse):
     """一条变更审计（正文在「彻底清除」时已脱敏为 null）。"""
 
     id: int = Field(..., description="审计行 id（自增，越大越新）")

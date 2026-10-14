@@ -864,30 +864,15 @@ def enqueue_extraction(*, user_id: str, messages: list[dict], thread_id: str | N
 
 def list_items(*, user_id: str, query: str = "", limit: int = 50, offset: int = 0,
                scope: str = SCOPE_FORMAL) -> dict:
-    """列出 / 检索自己在该作用域内的有效记忆(分页,默认正式数据)。
-
-    `query` 非空时走检索(向量 + BM25),空时按更新时间倒序 —— 不为了「有搜索框」就
-    每次列表都跑一次向量化(那是付费调用,而且列表本身不需要相关性排序)。
-    """
+    """Management content search, paginated and separate from answer recall."""
     from app.memory import db
-
-    from app.memory.search import TASK_ANSWER, search as memory_search
-
+    query = (query or "").strip()
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
-    if (query or "").strip():
-        result = memory_search(user_id, query, task=TASK_ANSWER, top_k=limit, scope=scope)
-        items = []
-        for hit in result.hits:
-            item = _get_owned(user_id, hit.memory_id)
-            if item is not None:
-                items.append(item)
-        return {"items": items, "total": len(items), "query": query,
-                "degraded": result.degraded, "error": result.error, "counts": result.counts}
     with db.session_scope() as session:
-        items = repo.list_items(session, user_id, limit=limit, offset=offset, scope=scope)
-        total = repo.count_items_in_scope(session, scope=scope, user_id=user_id)
-    return {"items": items, "total": total, "query": "", "degraded": [], "error": "",
+        items, total = repo.browse_items(session, user_id, query=query, scope=scope,
+                                        limit=limit, offset=offset)
+    return {"items": items, "total": total, "query": query, "degraded": [], "error": "",
             "counts": {"total": total}}
 
 

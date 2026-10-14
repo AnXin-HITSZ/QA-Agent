@@ -1311,3 +1311,15 @@ def purge_user(session, user_id: str, *, now: datetime,
     ).rowcount)
     return PurgeResult(item_ids=item_ids, items=items, jobs=jobs, history=history,
                        generation=generation, sources=sources, ops=ops, episodes=episodes_removed)
+
+
+def browse_items(session, user_id, *, query="", scope=SCOPE_FORMAL, limit=50, offset=0):
+    """Literal content search for the management UI; no model/index calls."""
+    conditions = [MemoryItemRow.user_id == user_id, MemoryItemRow.scope == scope,
+                  MemoryItemRow.status == STATUS_ACTIVE]
+    for term in query.split():
+        conditions.append(func.lower(MemoryItemRow.text).contains(term.lower(), autoescape=True))
+    total = int(session.scalar(select(func.count()).select_from(MemoryItemRow).where(*conditions)))
+    rows = session.scalars(select(MemoryItemRow).where(*conditions)
+        .order_by(MemoryItemRow.updated_at.desc(), MemoryItemRow.id.desc()).limit(limit).offset(offset)).all()
+    return [_item(row) for row in rows], total

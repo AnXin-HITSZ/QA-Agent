@@ -11,6 +11,7 @@ import { onActivated, onMounted, ref } from "vue";
 import "../styles/memory.css";
 import { useMemory } from "../composables/useMemory";
 import { formatStamp, formatStampFull } from "../lib/format";
+import { highlightSegments } from "../lib/highlight";
 import type { MemoryItem } from "../api";
 
 const {
@@ -158,18 +159,22 @@ function threadHint(item: MemoryItem): string {
       <!-- 检索 + 手添 -->
       <div class="mem__tools">
         <form class="mem__field mem__field--search" @submit.prevent="search">
-          <label class="mem__label" for="memory-search">检索记忆</label>
+          <label class="mem__label" for="memory-search">搜索记忆</label>
+          <div class="mem__searchBox">
           <input
             id="memory-search"
             v-model="draft"
             class="mem__input"
-            type="search"
+            type="text"
             maxlength="200"
-            placeholder="检索我的记忆，例如「报销」「发票」"
-            aria-label="检索我的记忆"
+            placeholder="搜索记忆正文，例如「报销」「发票」"
+            aria-label="搜索我的记忆"
           />
-          <button class="mem__btn mem__btn--primary" type="submit" :disabled="loading">检索</button>
-          <button v-if="searching" class="mem__btn" type="button" @click="clearSearch">回到列表</button>
+          <button v-if="draft" class="mem__clear" type="button" aria-label="清除记忆搜索" @click="clearSearch">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+          </button>
+          </div>
+          <button class="mem__btn mem__btn--primary" type="submit" :disabled="loading">搜索</button>
         </form>
 
         <form class="mem__field" @submit.prevent="add">
@@ -202,7 +207,7 @@ function threadHint(item: MemoryItem): string {
       </div>
       <div v-else-if="!items.length" class="mem__state">
         <template v-if="searching">
-          没有检索到和「{{ query }}」相关的记忆。换个说法试试，或回到列表看看全部。
+          没有包含「{{ query }}」的记忆。清除搜索内容即可查看全部。
         </template>
         <template v-else>
           还没有记忆。对话里提到的事实会被自动记下来（回答完整结束后由后台提取），也可以在上面手动记一条。
@@ -211,7 +216,7 @@ function threadHint(item: MemoryItem): string {
 
       <template v-else>
         <p v-if="searching" class="mem__sub">
-          按相关性找到 {{ items.length }} 条（检索不做分页，只给最相关的若干条）。
+          正文中找到 {{ total }} 条匹配记忆，按更新时间排序。
         </p>
         <p v-if="degraded.length" class="mem__note">
           本次检索有降级：{{ degraded.join("；") }}
@@ -248,7 +253,7 @@ function threadHint(item: MemoryItem): string {
               </template>
 
               <template v-else>
-                <p class="mcard__text">{{ item.text }}</p>
+                <p class="mcard__text"><template v-for="(part, i) in highlightSegments(item.text, query)" :key="i"><mark v-if="part.hit">{{ part.t }}</mark><template v-else>{{ part.t }}</template></template></p>
                 <div class="mcard__meta">
                   <span class="badge">{{ originText(item.origin) }}</span>
                   <span class="badge" :title="`入库 ${formatStampFull(item.created_at)}`">
@@ -310,7 +315,7 @@ function threadHint(item: MemoryItem): string {
         </ul>
         </section>
 
-        <nav v-if="!searching && total > items.length" class="mem__pager" aria-label="分页">
+        <nav v-if="total > items.length" class="mem__pager" aria-label="分页">
           <button class="mem__btn" type="button" :disabled="!hasPrev || loading" @click="goPage(-1)">上一页</button>
           <span class="mem__pagerTxt">第 {{ firstIndex }}–{{ lastIndex }} 条，共 {{ total }} 条</span>
           <button class="mem__btn" type="button" :disabled="!hasNext || loading" @click="goPage(1)">下一页</button>

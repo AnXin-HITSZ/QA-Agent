@@ -83,14 +83,35 @@ def test_list_pages(env):
     assert env.client.get(API, params={"limit": 0}).status_code == 422      # 越界参数明确拒绝
 
 
-def test_search_uses_retrieval_and_echoes_the_query(env):
+def test_search_filters_content_without_paid_retrieval(env):
     a, b = _seed(env, TEXT_A, TEXT_B)
     env.dense.ids = [b]
+    env.dense.calls.clear()
+    assert env.client.get(API, params={"q": "zzz"}).json()["items"] == []
+    body = env.client.get(API, params={"q": "中文"}).json()
+    assert [i["id"] for i in body["items"]] == [a]
+    assert body["query"] == "中文" and body["total"] == 1
+    assert env.dense.calls == []
 
-    body = env.client.get(API, params={"q": "zzz"}).json()      # 与正文无共同词项 → 只走向量那一路
 
-    assert [i["id"] for i in body["items"]] == [b]
-    assert body["query"] == "zzz"
+def test_memory_timestamps_are_explicit_utc(env):
+    _seed(env, TEXT_A)
+    item = env.client.get(API).json()["items"][0]
+    for field in ("created_at", "updated_at", "indexed_at"):
+        assert item[field].endswith(("Z", "+00:00"))
+        assert datetime.fromisoformat(item[field].replace("Z", "+00:00")).utcoffset().total_seconds() == 0
+    history = env.client.get(f"{API}/history").json()["items"]
+    assert all(row["created_at"].endswith(("Z", "+00:00")) for row in history)
+
+
+def test_content_search_paginates_and_escapes_sql_wildcards(env):
+    _seed(env, "费用 100% 完成", "费用 10_20", "费用 300", "费用 400")
+    _seed(env, "别人的费用 100%", user_id=OTHER)
+    page = env.client.get(API, params={"q": "费用", "limit": 2, "offset": 2}).json()
+    assert page["total"] == 4 and len(page["items"]) == 2
+    assert len(env.client.get(API, params={"q": "%"}).json()["items"]) == 1
+    assert len(env.client.get(API, params={"q": "_"}).json()["items"]) == 1
+    assert len(env.client.get(API, params={"q": "费用 100%"}).json()["items"]) == 1
 
 
 def test_a_pending_index_is_visible_but_the_memory_is_still_listed(env):

@@ -996,3 +996,18 @@
 @media (max-width: 900px) { .mt__cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .mt__dateTrigger { margin-right: 0; } .mt__panels { grid-template-columns: 1fr; } }
 @media (max-width: 540px) { .mt { padding: 20px 12px 32px; } .mt__filters { gap: 12px; padding: 14px; } .mt__dateTrigger { width: 100%; } .mt .card { padding: 16px; } .mt .card__v { font-size: 26px; } .mt .card__v--small { font-size: 16px; } .mt__cards { gap: 10px; } .dt { max-width: 100vw; width: 100%; } }
 @media (prefers-reduced-motion: reduce) { .dt { animation: none; } .is-loading { transition: none; } }
+
+/* Stable dimensions prevent filter changes from moving the rest of the page. */
+.mt .card { height: 184px; min-height: 184px; overflow-y: auto; }
+.mt__panels > .panel { height: 300px; display: flex; flex-direction: column; }
+.mt__panels .panel__hd { flex: 0 0 auto; }
+.mt__panels .panel__body { min-height: 0; flex: 1; overflow: auto; }
+.mt__statsTable { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.6; }
+.mt__statsTable th, .mt__statsTable td { padding: 10px 6px; border-bottom: 1px dashed var(--line); text-align: left; vertical-align: top; }
+.mt__statsTable thead th { color: var(--muted); font-weight: 500; }
+.mt__statsTable tbody th { font-weight: 500; }
+.mt__statsTable td { font-variant-numeric: tabular-nums; }
+.mt__statsTable td small { display: block; }
+.mt__footnote { margin: 16px 0; padding: 0 4px; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.mt__footnote p { margin: 5px 0; }
+@media (max-width: 540px) { .mt .card { height: 184px; } .mt__panels > .panel { height: 300px; } }

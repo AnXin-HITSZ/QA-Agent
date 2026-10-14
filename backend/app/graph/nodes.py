@@ -7,6 +7,7 @@ system prompt 只立行为护栏(何时检索、严格依据 SOP、不编造),�
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone, timedelta
 
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -29,6 +30,21 @@ SYSTEM_PROMPT = (
 )
 
 
+def runtime_context() -> str:
+    from app.memory import db
+    now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    clock = f"\n当前北京时间（UTC+08:00）：{now.isoformat(timespec='seconds')}。解释今天、去年等相对时间时使用此时间；历史表达使用其原始消息日期。"
+    if db.enabled():
+        return clock + (
+            "\n平台具有跨会话长期记忆：完整回答结束后，后台自动从用户消息提取值得保留的事实与偏好，保存并建立索引。"
+            "自动保存不依赖你调用写入工具；不得因为没有写入工具就声称无法记住或下次一定忘记。"
+            "本轮尚未完成保存，不得声称已写入成功；可说明后台稍后处理，用户可在‘我的记忆’查看、编辑和删除。"
+            "并非每句话都会保存，提取或索引可能失败。检索参考为空不代表没有记忆功能。"
+            "记忆不是日历或提醒服务，不能承诺定时提醒；记忆能力提问无需查询SOP。"
+        )
+    return clock + "\n当前未配置长期记忆存储，不能承诺跨会话保存；不要把当前会话上下文当作已持久化记忆。"
+
+
 async def agent(state: ChatState, config: RunnableConfig) -> dict:
     """一步推理:产出最终回答,或产出对工具的调用请求(交给 tools 节点执行)。
 
@@ -42,7 +58,7 @@ async def agent(state: ChatState, config: RunnableConfig) -> dict:
     configurable = config.get("configurable") or {}
     todos_prompt = configurable.get("todos_prompt") or ""
     memory_prompt = configurable.get("memory_prompt") or ""
-    system = SYSTEM_PROMPT + memory_prompt + todos_prompt
+    system = SYSTEM_PROMPT + runtime_context() + memory_prompt + todos_prompt
     prepared = await asyncio.to_thread(prepare_image_messages, state["messages"])
     messages = [SystemMessage(content=system), *prepared]
     ai = await model.ainvoke(messages)

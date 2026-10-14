@@ -258,7 +258,7 @@ def test_a_complete_answer_is_registered_exactly_once(env, monkeypatch):
     assert job["thread_id"] == thread_id                          # 来源线程对得上
     assert [{"role": m["role"], "content": m["content"]} for m in job["payload"]["messages"]] == [{"role": "user", "content": QUESTION},
                                           {"role": "assistant", "content": ANSWER}]
-    assert all(m["message_id"] and m["recorded_at"] for m in job["payload"]["messages"])
+    assert all(m["message_id"] and m["recorded_at"].endswith("+08:00") for m in job["payload"]["messages"])
     assert job["payload"]["source"] == "chat"
 
 

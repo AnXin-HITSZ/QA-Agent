@@ -1014,7 +1014,7 @@ export interface MemoryItem {
 export interface MemoryList {
   enabled: boolean;
   items: MemoryItem[];
-  total: number; // 普通列表 = 总数;检索模式 = 本次返回条数
+  total: number; // 普通列表总数；正文搜索时为匹配总数
   index_pending: number;
   query: string;
   degraded: string[]; // 本次没做到最好的地方(如实展示,不静默)
@@ -1091,7 +1091,7 @@ export interface MemoryClearResult {
   degraded: string[];
 }
 
-// 列出 / 检索自己的记忆。带 q 走混合检索(相关性排序),不带 q 按更新时间倒序分页。
+// 列出 / 搜索自己的记忆。带q按正文词项全部包含过滤；均按更新时间倒序分页，无付费检索。
 // 未配库 / 功能关闭 → ApiError(503),文案由后端给(「已存记忆不受影响」)。
 export async function listMemory(q = "", limit = 20, offset = 0): Promise<MemoryList> {
   const p = new URLSearchParams({ limit: String(limit), offset: String(offset) });

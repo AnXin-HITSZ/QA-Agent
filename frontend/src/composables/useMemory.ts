@@ -7,9 +7,8 @@
 // - 「暂停」≠「删除」:write_enabled / search_enabled / maintenance_enabled 为 false 只是
 //   对应那一路行为停下来,已存记忆在这里照常看得见、改得动;
 // - index_state=pending 是「向量待补」:记忆已经保存,后台会自愈,绝不写成「没保存」;
-// - 检索模式没有分页:后端一次给前 N 条(top_k),total 表示本次返回条数 —— 因此检索时
-//   藏起页码,别拿它当总数。
-import { computed, ref } from "vue";
+// - 搜索按正文包含内容过滤并分页；total是匹配总数，与聊天自动召回分开。
+import { computed, ref, watch } from "vue";
 
 import {
   addMemory,
@@ -28,7 +27,7 @@ import { errorText } from "../lib/format";
 const PAGE_SIZE = 20;
 
 const items = ref<MemoryItem[]>([]);
-const total = ref(0); // 普通列表 = 库里的总数;检索模式 = 本次返回条数
+const total = ref(0); // 普通列表总数或正文搜索匹配总数
 const query = ref(""); // 已提交的检索词(空 = 普通列表)
 const draft = ref(""); // 输入框里的字
 const offset = ref(0);
@@ -81,12 +80,16 @@ const paused = computed(() => {
 
 // ── 读 ──
 
+let loadSequence = 0;
+
 async function load(opts: { keepPage?: boolean } = {}): Promise<void> {
   if (!opts.keepPage) offset.value = 0;
+  const sequence = ++loadSequence;
   loading.value = true;
   error.value = "";
   try {
     const res = await listMemory(query.value, PAGE_SIZE, offset.value);
+    if (sequence !== loadSequence) return;
     items.value = res.items;
     total.value = res.total;
     degraded.value = res.degraded;
@@ -95,13 +98,14 @@ async function load(opts: { keepPage?: boolean } = {}): Promise<void> {
     error.value = res.error;
     loaded.value = true;
   } catch (e) {
+    if (sequence !== loadSequence) return;
     // 未配库 / 功能关闭是 503,后端给的说明本身就是给人看的,直接采用
     error.value = errorText(e);
     items.value = [];
     total.value = 0;
     degraded.value = [];
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
 
@@ -132,6 +136,19 @@ function clearSearch(): void {
   offset.value = 0;
   void load();
 }
+
+// Management search is local SQL filtering, not paid semantic retrieval.
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+watch(draft, (value) => {
+  clearTimeout(searchTimer);
+  if (!value.trim()) {
+    if (query.value) clearSearch();
+    return;
+  }
+  searchTimer = setTimeout(() => {
+    if (value.trim() !== query.value) search();
+  }, 220);
+});
 
 function goPage(delta: number): void {
   const start = offset.value + delta * PAGE_SIZE;
@@ -285,6 +302,8 @@ async function reindex(): Promise<void> {
 
 // 登出 / 换账号:清空本模块的全部状态(否则下一个账号会看到上一个账号的记忆)。
 function reset(): void {
+  ++loadSequence;
+  clearTimeout(searchTimer);
   items.value = [];
   total.value = 0;
   query.value = "";

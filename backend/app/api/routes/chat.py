@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone, timedelta
 from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -81,9 +82,10 @@ async def _remember_exchange(principal: Principal, thread_id: str, question: str
     try:
         from app.memory import service as memory_service
 
+        recorded_at = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).isoformat()
         await memory_db.run(memory_service.enqueue_extraction, user_id=principal.user_id,
-                     messages=[{"role": "user", "content": question},
-                               {"role": "assistant", "content": answer}],
+                     messages=[{"role": "user", "content": question, "recorded_at": recorded_at},
+                               {"role": "assistant", "content": answer, "recorded_at": recorded_at}],
                      thread_id=thread_id, source=source)
     except Exception as exc:  # noqa: BLE001 —— 登记失败不影响这轮回答
         logger.warning("长期记忆登记失败(%s),本轮未登记提取任务", type(exc).__name__)

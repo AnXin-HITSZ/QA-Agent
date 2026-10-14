@@ -84,11 +84,14 @@ function when(iso: string | null): string {
         <input
           ref="searchRef"
           v-model="searchText"
-          type="search"
+          type="text"
           class="side__search-in"
           placeholder="搜索对话内容"
           aria-label="搜索对话内容"
         />
+        <button v-if="searchText" class="side__clear" type="button" aria-label="清除对话搜索" @click="searchText = ''; setSearch('')">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+        </button>
         <span v-if="searching" class="side__spin" aria-hidden="true" />
       </div>
       <button class="side__new" type="button" :disabled="loading" @click="onNew">
@@ -444,4 +447,8 @@ function when(iso: string | null): string {
     animation: none;
   }
 }
+.side__clear { flex: 0 0 24px; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.side__clear svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.6; fill: none; }
+.side__clear:hover { color: var(--primary); background: var(--primary-tint); }
+.side__clear:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 </style>

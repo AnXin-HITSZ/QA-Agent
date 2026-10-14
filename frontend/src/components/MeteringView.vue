@@ -145,6 +145,17 @@ const persistence = computed(() => summary.value?.persistence ?? null);
 const serviceRows = computed(() => summary.value?.by_service ?? []);
 const usageRows = computed(() => summary.value?.usage_by_service_unit ?? []);
 const costRows = computed(() => summary.value?.cost_by_service_currency ?? []);
+// Join by service without inventing a currency/unit correspondence.
+const usageCostRows = computed(() => [...new Set([
+  ...serviceRows.value.map(row => row.service), ...usageRows.value.map(row => row.service),
+  ...costRows.value.map(row => row.service),
+])].sort().map(service => ({
+  service, usage: usageRows.value.filter(row => row.service === service),
+  cost: costRows.value.filter(row => row.service === service),
+  unknown: serviceRows.value.find(row => row.service === service)?.unknown_cost ?? 0,
+  unknownUsage: serviceRows.value.find(row => row.service === service)?.unknown_usage ?? 0,
+})));
+const CACHE_NAMES: Record<string, string> = { ocr_raw: "OCR 原始结果", ocr_text: "OCR 文本转换", embedding: "Embedding 向量" };
 const cacheRows = computed(() => summary.value?.cache ?? []);
 // 只有缓存记录的那个服务 / 时间窗里才谈得上「命中」 —— 命中数直接由后端分列给出。
 const cacheHits = computed(() => cacheRows.value.reduce((n, c) => n + c.hit, 0));
@@ -165,12 +176,6 @@ const dayRows = computed(() => {
 });
 const dayMax = computed(() => Math.max(1, ...dayRows.value.map((d) => d.calls)));
 
-// 缓存三层的含义必须写清楚:OCR 原始命中不产生外部调用,文本转换是本地的,不省钱可谈。
-const LAYER_TEXT: Record<string, string> = {
-  ocr_raw: "OCR 原始结果(按页):命中即不再发起识别请求",
-  ocr_text: "OCR 文本转换(本地):命中不重跑转换,也不涉及外部调用",
-  embedding: "embedding 向量(按文本条数):只有未命中才会真的去调供应商",
-};
 // 服务 / 用途的中文名:后端新增一类调用时同步补在这里(缺失时各图表退化为显示原始 key,
 // 不会空白 —— 但别指望它,新增就在这边加一行)。
 const SERVICE_TEXT: Record<string, string> = {
@@ -478,18 +483,12 @@ async function onRemovePrice(id: number | null): Promise<void> {
             <h3 class="panel__t">按服务</h3>
             <span class="panel__hint">记录数 / 失败 / 真实请求</span>
           </div>
-          <div class="panel__body">
+          <div class="panel__body" tabindex="0">
             <p v-if="!serviceRows.length" class="panel__none">该窗口内没有调用记录。</p>
-            <div v-for="s in serviceRows" :key="s.service" class="mt__kv">
-              <span class="mt__kvK">
-                {{ s.service }}
-                <small>{{ SERVICE_TEXT[s.service] ?? "" }}</small>
-              </span>
-              <span class="mt__kvV">
-                {{ s.calls }} / {{ s.failure }} / {{ s.http_attempts }}
-                <span v-if="s.unknown_cost" class="mt__unknown">({{ s.unknown_cost }} 未知费用)</span>
-              </span>
-            </div>
+            <table v-if="serviceRows.length" class="mt__statsTable" aria-label="按服务统计调用">
+              <thead><tr><th>服务</th><th>记录数</th><th>失败数</th><th>真实请求</th></tr></thead>
+              <tbody><tr v-for="s in serviceRows" :key="s.service"><th scope="row">{{ SERVICE_TEXT[s.service] ?? s.service }}</th><td>{{ s.calls }}</td><td>{{ s.failure }}</td><td>{{ s.http_attempts }}</td></tr></tbody>
+            </table>
           </div>
         </section>
 
@@ -498,43 +497,30 @@ async function onRemovePrice(id: number | null): Promise<void> {
             <h3 class="panel__t">用量与估算费用</h3>
             <span class="panel__hint">不同单位 / 币种不合并</span>
           </div>
-          <div class="panel__body">
-            <p v-if="!usageRows.length && !costRows.length" class="panel__none">
-              没有可汇总的用量或金额。
-            </p>
-            <div v-for="u in usageRows" :key="u.service + u.unit" class="mt__kv">
-              <span class="mt__kvK">
-                {{ SERVICE_TEXT[u.service] ?? u.service }}
-                <small>用量</small>
-              </span>
-              <span class="mt__kvV">{{ trimDecimal(u.quantity, 0) }} {{ u.unit }}</span>
-            </div>
-            <div v-for="c in costRows" :key="c.service + c.currency" class="mt__kv">
-              <span class="mt__kvK">
-                {{ SERVICE_TEXT[c.service] ?? c.service }}
-                <small>估算费用</small>
-              </span>
-              <span class="mt__kvV">{{ c.currency }} {{ trimDecimal(c.amount) }}</span>
-            </div>
+          <div class="panel__body" tabindex="0">
+            <p v-if="!usageCostRows.length" class="panel__none">没有可汇总的用量或金额。</p>
+            <table v-else class="mt__statsTable" aria-label="服务用量与估算费用">
+              <thead><tr><th>服务</th><th>已知用量</th><th>估算费用</th></tr></thead>
+              <tbody><tr v-for="row in usageCostRows" :key="row.service">
+                <th scope="row">{{ SERVICE_TEXT[row.service] ?? row.service }}</th>
+                <td><div v-for="u in row.usage" :key="u.unit">{{ trimDecimal(u.quantity, 0) }} {{ u.unit }}</div><span v-if="!row.usage.length" class="mt__dim">未报告</span><small v-if="row.unknownUsage" class="mt__unknown">{{ row.unknownUsage }} 条用量未知</small></td>
+                <td><div v-for="c in row.cost" :key="c.currency">{{ c.currency }} {{ trimDecimal(c.amount) }}</div><span v-if="!row.cost.length" class="mt__dim">无法估算</span><small v-if="row.unknown" class="mt__unknown">{{ row.unknown }} 条费用未知</small></td>
+              </tr></tbody>
+            </table>
           </div>
         </section>
 
         <section class="panel">
           <div class="panel__hd">
-            <h3 class="panel__t">缓存(三层分开)</h3>
-            <span class="panel__hint">命中 / 未命中 / 复用 / 去重</span>
+            <h3 class="panel__t">计算缓存（按层统计）</h3>
+            <span class="panel__hint">命中 / 未命中 / 等待复用 / 同批去重</span>
           </div>
-          <div class="panel__body">
+          <div class="panel__body" tabindex="0">
             <p v-if="!cacheRows.length" class="panel__none">该窗口内没有缓存统计记录。</p>
-            <div v-for="c in cacheRows" :key="c.layer" class="mt__kv">
-              <span class="mt__kvK">
-                {{ c.layer }}
-                <small>{{ LAYER_TEXT[c.layer] ?? "" }}</small>
-              </span>
-              <span class="mt__kvV">
-                {{ c.hit }} / {{ c.miss }} / {{ c.shared }} / {{ c.skipped }}
-              </span>
-            </div>
+            <table v-if="cacheRows.length" class="mt__statsTable" aria-label="计算缓存分层统计">
+              <thead><tr><th>缓存层</th><th>命中</th><th>未命中</th><th>等待复用</th><th>同批去重</th></tr></thead>
+              <tbody><tr v-for="c in cacheRows" :key="c.layer + c.unit"><th scope="row">{{ CACHE_NAMES[c.layer] ?? c.layer }}<small class="mt__dim">（{{ c.unit }}）</small></th><td>{{ c.hit }}</td><td>{{ c.miss }}</td><td>{{ c.shared }}</td><td>{{ c.skipped }}</td></tr></tbody>
+            </table>
             <p class="panel__none">
               命中只说明少了一次外部调用或一次本地转换;不换算成「省了多少钱」(价格与命中粒度对不上)。
             </p>
@@ -546,7 +532,7 @@ async function onRemovePrice(id: number | null): Promise<void> {
             <h3 class="panel__t">按天(UTC 日期)</h3>
             <span class="panel__hint">最近 {{ Math.min(DAYS_SHOWN, dayRows.length) }} 天</span>
           </div>
-          <div class="panel__body">
+          <div class="panel__body" tabindex="0">
             <p v-if="!dayRows.length" class="panel__none">该窗口内没有调用记录。</p>
             <div v-for="d in dayRows" :key="d.day" class="bar">
               <span class="bar__day">{{ d.day.slice(5) }}</span>
@@ -694,7 +680,12 @@ async function onRemovePrice(id: number | null): Promise<void> {
         </template>
       </section>
 
-      <details class="mt__details mt__help"><summary>统计说明</summary><div class="mt__detailsBody"><p class="mt__sub">仅统计 Embedding 与 OCR，不含聊天 LLM。金额按调用时的价格快照估算，不是官方账单，不扣减免费额度或折扣；不同币种不合并。缓存命中包含外部结果复用和本地文本转换，不等同于节省的请求数。日期筛选使用本地时间，按天分组使用 UTC 日期。</p></div></details>
+      <footer class="mt__footnote" aria-label="统计口径">
+        <p>统计范围：Embedding、OCR、长期记忆提取/维护/检索中的 LLM 与重排序；不含聊天主链路 LLM。按当前筛选汇总实际调用记录，SDK 内部重试计入真实请求数。</p>
+        <p>费用按调用时的价格快照估算，非官方账单，不扣免费额度或折扣；未知用量/价格不计为零，不同单位和币种分别列出。</p>
+        <p>缓存是 OCR 原始结果、OCR 文本转换、Embedding 向量的计算缓存，按页或文本计数；不包含模型供应商的 Prompt Cache 或对话记忆命中。等待复用与同批去重另列，命中次数不等于节省的 HTTP 请求数或费用。</p>
+        <p>时间筛选采用浏览器本地时间，按天分组采用 UTC 日期；柱条表示每天实际调用记录数，红色表示该日有失败，长度不是费用。</p>
+      </footer>
       <!-- 价目依据(估算的解释权在配置里;只增 + 删,改价 = 追加更晚生效的规则) -->
       <details class="mt__details">
         <summary>估算依据:当前价目表({{ prices.length }} 条)</summary>

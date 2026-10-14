@@ -102,13 +102,13 @@ def _view(item) -> MemoryItemView:
 def list_memory(
     q: str = Query(default="", max_length=200, description="检索词;留空 = 按更新时间倒序的普通列表"),
     limit: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE, description="每页条数"),
-    offset: int = Query(default=0, ge=0, description="偏移(普通列表分页用)"),
+    offset: int = Query(default=0, ge=0, description="偏移(列表与正文搜索分页)"),
     principal: Principal = Depends(require_user),
 ) -> MemoryListResponse:
     """列出 / 检索**自己的**记忆。
 
-    带 `q` 时走混合检索(向量 + 中文 BM25 → RRF → 重排序),相关性排序;
-    不带时直接分页 —— 列表不需要相关性排序,也就不必为它花一次向量化调用。
+    带 `q` 时按正文包含内容过滤，按更新时间倒序分页，不调用付费检索服务。
+    聊天自动召回仍使用向量、关键词和图关联检索。
     """
     _require_usable()
     with _translated():
