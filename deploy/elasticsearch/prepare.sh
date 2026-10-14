@@ -43,4 +43,6 @@ chmod 644 "$CERT_DIR/es01/es01.crt" "$CERT_DIR/ca/ca.crt"
 # Signing key and archives stay private to the host administrator.
 chown root:root "$CERT_DIR/ca/ca.key" "$CERT_DIR/ca.zip" "$CERT_DIR/es01.zip"
 chmod 600 "$CERT_DIR/ca/ca.key" "$CERT_DIR/ca.zip" "$CERT_DIR/es01.zip"
+chown root:root "$CERT_DIR" "$CERT_DIR/ca"
+chmod 750 "$CERT_DIR" "$CERT_DIR/ca"
 echo 'TLS material prepared. No Elasticsearch user password was set.'
