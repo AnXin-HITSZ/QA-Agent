@@ -474,7 +474,8 @@
 .is-active .users-status__count { background: var(--primary-tint); color: var(--primary-strong); }
 .users-searchbar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 24px; padding: 20px 24px; }
 .users-search { display: flex; align-items: center; gap: 10px; width: min(100%, 560px); }
-.users-search .auth__input { flex: 1; width: 320px; min-width: 0; }
+.users-search__field { position: relative; flex: 1; min-width: 0; }
+.users-search__field .auth__input { width: 100%; min-width: 0; padding-right: 42px; box-sizing: border-box; }
 .users-help { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
 .users-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .users-list { min-height: 240px; }
@@ -495,7 +496,7 @@
   .users-status { gap: 2px 14px; padding: 10px 16px 0; }
   .users-searchbar { padding: 16px; }
   .users-search { flex-wrap: wrap; }
-  .users-search .auth__input { flex: 1 0 100%; width: 100%; }
+  .users-search__field { flex: 1 0 100%; width: 100%; }
   .users-list__head { flex-wrap: wrap; gap: 4px; }
   .pane .kv { grid-template-columns: 84px minmax(0, 1fr); }
 }

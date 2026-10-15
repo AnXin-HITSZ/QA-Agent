@@ -6,6 +6,7 @@
 import { computed, onMounted, ref } from "vue";
 
 import { formatStamp, formatStampFull } from "../../lib/format";
+import SearchClearButton from "../SearchClearButton.vue";
 import {
   AuthError,
   authState,
@@ -50,6 +51,7 @@ const meId = computed(() => authState.user?.id ?? "");
 // ── 列表 ──
 const status = ref("");
 const q = ref("");
+const searchInput = ref<HTMLInputElement | null>(null);
 const appliedQuery = ref("");
 const loaded = ref(false);
 let loadRevision = 0;
@@ -100,6 +102,12 @@ function search(): void {
   appliedQuery.value = q.value.trim();
   offset.value = 0;
   void load();
+}
+
+function clearSearch(): void {
+  q.value = "";
+  search();
+  searchInput.value?.focus({preventScroll:true});
 }
 
 function go(delta: number): void {
@@ -206,7 +214,10 @@ onMounted(() => void load());
         <div class="users-searchbar">
           <form class="users-search" role="search" @submit.prevent="search">
             <label class="users-sr" for="user-q">搜索邮箱或昵称</label>
-            <input id="user-q" v-model="q" class="auth__input" type="search" placeholder="搜索邮箱或昵称" />
+            <div class="users-search__field">
+              <input id="user-q" ref="searchInput" v-model="q" class="auth__input" type="text" placeholder="搜索邮箱或昵称" />
+              <SearchClearButton v-if="q" label="清除用户搜索" @clear="clearSearch" />
+            </div>
             <button class="mini mini--primary" type="submit" :disabled="loading">搜索</button>
             <button class="mini" type="button" :disabled="!status && !q && !appliedQuery" @click="resetFilters">重置</button>
           </form>
