@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { searchKnowledgeFiles, type FileSearchResult } from "../api";
 import SelectField from "./SelectField.vue";
 import FileSearchResults from "./FileSearchResults.vue";
+import ResizableTextarea from "./ResizableTextarea.vue";
 
 const mode = ref<'literal' | 'semantic'>('literal');
 const operator = ref<'all' | 'any'>('all');
@@ -34,7 +35,7 @@ async function run() {
         <SelectField v-model="scope" :options="scopes" label="范围" />
       </div>
       <label v-if="mode === 'semantic'" class="fs-panel__field">查询主题<input v-model="query" required maxlength="500" placeholder="例如：发票报销" /></label>
-      <label class="fs-panel__field">字面关键词<textarea v-model="terms" required rows="2" placeholder="每行一个词；连续短语写在同一行，例如：聚餐" /></label>
+      <label class="fs-panel__field">字面关键词<ResizableTextarea v-model="terms" label="字面关键词" required placeholder="每行一个词；连续短语写在同一行，例如：聚餐" /></label>
       <div class="fs-panel__foot"><p>字面结果完整保留；相关文件发现补充全文与语义结果。</p><button type="submit" :disabled="busy">{{ busy ? '搜索中…' : '搜索文件' }}</button></div>
     </form>
     <p v-if="error" class="fs-panel__error" role="alert">{{ error }}</p>

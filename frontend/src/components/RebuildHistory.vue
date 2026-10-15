@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { createRebuildJob, getRebuildPlan, getIndexJobHistory, getIndexJobFiles,
-  type RebuildPlan, type IndexOptions, type ExtractionMode, type IndexJobStatus, type IndexJobFileRow } from "../api";
+import { createRebuildJob, getRebuildPlan, getIndexJobHistory,
+  type RebuildPlan, type IndexOptions, type ExtractionMode, type IndexJobStatus } from "../api";
 import { useKnowledge, EXTRACTION_MODES, modeLabel } from "../composables/useKnowledge";
 import { errorText, formatStampFull } from "../lib/format";
 import SelectField from "./SelectField.vue";
+import IndexJobDetail from "./IndexJobDetail.vue";
 
 const { prefix, jobRunning, trackJob } = useKnowledge();
 const plan = ref<RebuildPlan | null>(null);
@@ -16,7 +17,7 @@ const ready = computed(() => plan.value && !plan.value.files.some(f => f.status 
   unknown.value.every(f => overrides.value[f.key]?.extraction_mode));
 const modeOptions = [{value:"",label:"请选择提取方式"},...EXTRACTION_MODES];
 let generation = 0;
-watch(prefix, () => {generation++;plan.value=null;overrides.value={};});
+watch(prefix, () => {generation++;busy.value=false;plan.value=null;overrides.value={};});
 async function preview(all: boolean) {
   const request = ++generation;
   busy.value=true;error.value="";plan.value=null;overrides.value={};
@@ -24,7 +25,7 @@ async function preview(all: boolean) {
     const result = await getRebuildPlan({kind:"prefix",prefix:all ? "" : prefix.value});
     if (request === generation) plan.value=result;
   } catch(e) {if (request === generation) error.value=errorText(e);}
-  finally {busy.value=false;}
+  finally {if(request===generation) busy.value=false;}
 }
 function choose(key:string, mode:string) {
   if (!mode) {delete overrides.value[key];return;}
@@ -49,27 +50,17 @@ const filter = ref("");
 const historyBusy = ref(false);
 const historyError = ref("");
 const selected = ref<IndexJobStatus | null>(null);
-const details = ref<IndexJobFileRow[]>([]);
-const detailsTotal = ref(0);
-const detailsOffset = ref(0);
-const detailsBusy = ref(false);
-let historyGeneration=0, detailGeneration=0;
+const pageSize=10;
+let historyGeneration=0;
 async function loadHistory(start=0) {
   const request=++historyGeneration;historyBusy.value=true;historyError.value="";
   try {
-    const page=await getIndexJobHistory(start,20,filter.value);
+    const page=await getIndexJobHistory(start,pageSize,filter.value);
     if(request===historyGeneration) {history.value=page.items;total.value=page.total;offset.value=start;}
   } catch(e) {if(request===historyGeneration) historyError.value=errorText(e);}
   finally {if(request===historyGeneration) historyBusy.value=false;}
 }
-async function showDetails(item:IndexJobStatus, start=0) {
-  const request=++detailGeneration;selected.value=item;details.value=[];detailsBusy.value=true;
-  try {
-    const page=await getIndexJobFiles(item.job_id,start,20);
-    if(request===detailGeneration) {details.value=page.items;detailsTotal.value=page.total;detailsOffset.value=start;}
-  } catch(e) {if(request===detailGeneration) historyError.value=errorText(e);}
-  finally {if(request===detailGeneration) detailsBusy.value=false;}
-}
+function showDetails(item:IndexJobStatus) {selected.value=item;}
 const labels:Record<string,string>={queued:"排队中",running:"进行中",published:"已发布",failed:"未发布"};
 watch(filter,()=>void loadHistory());
 onMounted(()=>void loadHistory());
@@ -77,7 +68,9 @@ onMounted(()=>void loadHistory());
 
 <template>
   <div class="maintenance">
-    <h3>按原方式重建</h3>
+    <section class="maintenance__section">
+    <header class="section-header"><h3>按原方式重建</h3><span class="note">先查看计划，再确认执行</span></header>
+    <div class="section-body">
     <p class="note">复用当前生效版本中各文件的提取方式，使用当前切块策略。默认复用有效缓存，整批完成后统一发布。</p>
     <div class="actions">
       <button :disabled="busy || jobRunning" @click="preview(true)">查看整库重建计划</button>
@@ -104,43 +97,56 @@ onMounted(()=>void loadHistory());
       <p class="note">重建可能产生 OCR／Embedding 调用费用。未支持的文件不纳入正文索引，覆盖范围会如实显示。</p>
       <button class="primary" :disabled="busy || jobRunning || !ready || !plan.total" @click="run">确认计划并开始重建</button>
     </div>
+    </div>
+    </section>
 
-    <h3>索引任务历史</h3>
-    <div class="actions">
+    <section class="maintenance__section">
+    <header class="section-header"><h3>索引任务历史 <span class="count">{{ total }}</span></h3><span class="note">按时间倒序 · 点击记录查看详情</span></header>
+    <div class="history-filters">
       <SelectField v-model="filter" :options="[{value:'',label:'全部状态'},{value:'published',label:'已发布'},{value:'failed',label:'未发布'},{value:'running',label:'进行中'},{value:'queued',label:'排队中'}]" />
-      <button :disabled="historyBusy" @click="loadHistory(offset)">刷新</button><span class="note">共 {{ total }} 个任务</span>
+      <button :disabled="historyBusy" @click="loadHistory(offset)">刷新</button><span v-if="historyBusy" class="note" role="status">载入中…</span>
     </div>
     <p v-if="historyError" class="error" role="alert">{{ historyError }}</p>
     <p v-if="!history.length && !historyBusy" class="note">暂无索引任务记录。</p>
-    <div v-else class="scroll"><table><thead><tr><th>时间／任务</th><th>范围与方式</th><th>结果</th><th></th></tr></thead>
-      <tbody><tr v-for="item in history" :key="item.job_id">
+    <div v-else class="history-scroll"><table class="history-table"><thead><tr><th>时间／任务</th><th>范围与方式</th><th>状态／处理进度</th><th aria-label="操作"></th></tr></thead>
+      <tbody><tr v-for="item in history" :key="item.job_id" :class="{'is-selected':selected?.job_id===item.job_id}" @click="showDetails(item)">
         <td>{{ item.created_at ? formatStampFull(item.created_at) : '—' }}<br/><span class="note">{{ item.job_id }}</span></td>
         <td>{{ item.scope.kind==='keys' ? `${item.scope.keys?.length || 0} 个选定文件` : item.scope.prefix || '整库' }}<br/><span class="note">{{ item.strategy==='reuse' ? '逐文件复用原配置' : modeLabel(item.options.extraction_mode) }}</span></td>
-        <td>{{ labels[item.status] }} · {{ item.summary?.indexed_files ?? item.progress.done }}/{{ item.summary?.total_files ?? item.progress.total }}</td>
-        <td><button @click="showDetails(item)">明细</button></td>
+        <td><span class="status" :class="{'status--bad':item.status==='failed','status--muted':item.status==='queued'}">{{ labels[item.status] }}</span><span class="history-count">{{ item.progress.done }}/{{ item.summary?.total_files ?? item.progress.total }}</span></td>
+        <td><button :aria-label="`查看任务 ${item.job_id} 的明细`" @click.stop="showDetails(item)">明细 <span aria-hidden="true">↗</span></button></td>
       </tr></tbody></table></div>
-    <div class="actions"><button :disabled="historyBusy || offset===0" @click="loadHistory(Math.max(0,offset-20))">上一页</button><button :disabled="historyBusy || offset+20>=total" @click="loadHistory(offset+20)">下一页</button></div>
-    <div v-if="selected" class="plan">
-      <div class="actions"><strong>{{ selected.job_id }} · {{ labels[selected.status] }}</strong><button @click="selected=null;detailGeneration++">收起</button></div>
-      <p v-if="selected.error" class="error">{{ selected.error }}</p>
-      <p class="note">发布版本：{{ selected.summary?.index_version || '—' }} · 共 {{ detailsTotal }} 个文件</p>
-      <div class="scroll"><table><thead><tr><th>文件</th><th>提取方式</th><th>结果／说明</th></tr></thead><tbody>
-        <tr v-for="row in details" :key="row.key"><td class="path">{{ row.key }}</td><td>{{ modeLabel(row.extraction_options?.extraction_mode || selected.options.extraction_mode) }}{{ row.extraction_options?.mixed_invoice ? ' · 混贴票据' : '' }}</td><td>{{ row.status==='indexed' ? `候选写入 ${row.chunks} 块` : row.status==='failed' ? '失败' : '跳过' }}<br/><span class="note">{{ row.reason }}</span></td></tr>
-      </tbody></table></div>
-      <div class="actions"><button :disabled="detailsBusy || detailsOffset===0" @click="showDetails(selected,Math.max(0,detailsOffset-20))">上一页</button><button :disabled="detailsBusy || detailsOffset+20>=detailsTotal" @click="showDetails(selected,detailsOffset+20)">下一页</button></div>
-    </div>
+    <div class="history-pagination"><span class="note">{{ total ? `${offset+1}–${Math.min(offset+pageSize,total)} / ${total}` : '0 个任务' }}</span><div class="actions"><button :disabled="historyBusy || offset===0" @click="loadHistory(Math.max(0,offset-pageSize))">上一页</button><button :disabled="historyBusy || offset+pageSize>=total" @click="loadHistory(offset+pageSize)">下一页</button></div></div>
+    </section>
+    <IndexJobDetail v-if="selected" :key="selected.job_id" :job="selected" @close="selected=null" />
   </div>
 </template>
 
 <style scoped>
-.maintenance {margin-bottom:20px;color:var(--ink);font-size:13px;}
-h3 {font-size:14px;margin:16px 0 8px;}
+.maintenance {display:grid;gap:16px;color:var(--ink);font-size:13px;min-width:0;}
+.maintenance__section {min-width:0;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);}
+.section-header {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--line);}
+.section-header h3 {display:flex;align-items:center;gap:8px;font-size:14px;margin:0;font-weight:600;}
+.section-body {padding:4px 18px 16px;}
+.count {font-size:11px;font-weight:400;color:var(--primary-strong);background:var(--primary-tint);padding:1px 6px;border-radius:5px;}
+.history-filters {display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 18px;}
+.history-scroll {overflow-x:auto;}
+.history-table {min-width:580px;}
+.history-table th {background:var(--surface-2);font-size:12px;padding:11px 16px;white-space:nowrap;}
+.history-table td {padding:13px 16px;font-size:12px;line-height:1.7;}
+.history-table tbody tr {cursor:pointer;}.history-table tbody tr:hover,.history-table tbody tr.is-selected {background:var(--primary-tint);}
+.history-table tbody tr:last-child td {border-bottom:0;}
+.history-table td:last-child {width:64px;white-space:nowrap;}
+.history-count {margin-left:8px;color:var(--muted);white-space:nowrap;}
+.status {display:inline-block;padding:1px 7px;border-radius:99px;color:var(--primary-strong);background:var(--primary-tint);font-size:11px;white-space:nowrap;}.status--bad {background:var(--seal-tint);color:var(--seal);}.status--muted {background:var(--surface-2);color:var(--muted);}
+.history-pagination {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-top:1px solid var(--line);}.history-pagination .actions {margin:0;}
+.maintenance__section>p {padding:0 18px;}
 .note {color:var(--muted);font-size:12px;line-height:1.7;overflow-wrap:anywhere;}
 .actions,.groups {display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;}
 .groups span {padding:3px 8px;border-radius:999px;background:var(--primary-tint);color:var(--primary-strong);font-size:12px;}
 button {font:inherit;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--surface);color:var(--ink);cursor:pointer;}
 button:hover {background:var(--primary-tint);}
 button:disabled {opacity:.5;cursor:not-allowed;}
+button:focus-visible {outline:2px solid var(--focus);outline-offset:2px;}
 .primary {background:var(--primary-tint);color:var(--primary-strong);}
 .plan {border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;}
 .scroll {overflow:auto;max-height:360px;}
@@ -150,4 +156,5 @@ th {font-weight:500;color:var(--muted);font-size:12px;}
 .path {overflow-wrap:anywhere;min-width:150px;}
 .error {color:var(--seal);overflow-wrap:anywhere;}
 label {display:flex;align-items:center;gap:4px;margin-top:6px;}
+@media(max-width:640px) {.section-header {padding:14px;}.section-body {padding:4px 14px 14px;}.history-filters,.history-pagination {padding:12px 14px;}.section-header>.note {font-size:11px;}}
 </style>
