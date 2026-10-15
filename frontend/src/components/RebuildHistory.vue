@@ -108,12 +108,11 @@ onMounted(()=>void loadHistory());
     </div>
     <p v-if="historyError" class="error" role="alert">{{ historyError }}</p>
     <p v-if="!history.length && !historyBusy" class="note">暂无索引任务记录。</p>
-    <div v-else class="history-scroll"><table class="history-table"><thead><tr><th>时间／任务</th><th>范围与方式</th><th>状态／处理进度</th><th aria-label="操作"></th></tr></thead>
-      <tbody><tr v-for="item in history" :key="item.job_id" :class="{'is-selected':selected?.job_id===item.job_id}" @click="showDetails(item)">
+    <div v-else class="history-scroll"><table class="history-table"><thead><tr><th>时间／任务</th><th>范围与方式</th><th>状态／处理进度</th></tr></thead>
+      <tbody><tr v-for="item in history" :key="item.job_id" :class="{'is-selected':selected?.job_id===item.job_id}" tabindex="0" aria-haspopup="dialog" :aria-label="`查看任务 ${item.job_id} 的详情`" @click="showDetails(item)" @keydown.enter.prevent="showDetails(item)" @keydown.space.prevent="showDetails(item)">
         <td>{{ item.created_at ? formatStampFull(item.created_at) : '—' }}<br/><span class="note">{{ item.job_id }}</span></td>
         <td>{{ item.scope.kind==='keys' ? `${item.scope.keys?.length || 0} 个选定文件` : item.scope.prefix || '整库' }}<br/><span class="note">{{ item.strategy==='reuse' ? '逐文件复用原配置' : modeLabel(item.options.extraction_mode) }}</span></td>
         <td><span class="status" :class="{'status--bad':item.status==='failed','status--muted':item.status==='queued'}">{{ labels[item.status] }}</span><span class="history-count">{{ item.progress.done }}/{{ item.summary?.total_files ?? item.progress.total }}</span></td>
-        <td><button :aria-label="`查看任务 ${item.job_id} 的明细`" @click.stop="showDetails(item)">明细 <span aria-hidden="true">↗</span></button></td>
       </tr></tbody></table></div>
     <div class="history-pagination"><span class="note">{{ total ? `${offset+1}–${Math.min(offset+pageSize,total)} / ${total}` : '0 个任务' }}</span><div class="actions"><button :disabled="historyBusy || offset===0" @click="loadHistory(Math.max(0,offset-pageSize))">上一页</button><button :disabled="historyBusy || offset+pageSize>=total" @click="loadHistory(offset+pageSize)">下一页</button></div></div>
     </section>
@@ -134,8 +133,9 @@ onMounted(()=>void loadHistory());
 .history-table th {background:var(--surface-2);font-size:12px;padding:11px 16px;white-space:nowrap;}
 .history-table td {padding:13px 16px;font-size:12px;line-height:1.7;}
 .history-table tbody tr {cursor:pointer;}.history-table tbody tr:hover,.history-table tbody tr.is-selected {background:var(--primary-tint);}
+.history-table tbody tr:focus-visible {outline:2px solid var(--focus);outline-offset:-2px;background:var(--primary-tint);}
 .history-table tbody tr:last-child td {border-bottom:0;}
-.history-table td:last-child {width:64px;white-space:nowrap;}
+.history-table td:last-child {white-space:nowrap;}
 .history-count {margin-left:8px;color:var(--muted);white-space:nowrap;}
 .status {display:inline-block;padding:1px 7px;border-radius:99px;color:var(--primary-strong);background:var(--primary-tint);font-size:11px;white-space:nowrap;}.status--bad {background:var(--seal-tint);color:var(--seal);}.status--muted {background:var(--surface-2);color:var(--muted);}
 .history-pagination {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 18px;border-top:1px solid var(--line);}.history-pagination .actions {margin:0;}
