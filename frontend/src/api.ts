@@ -461,11 +461,13 @@ export interface RebuildPlan {
 }
 
 export function getRebuildPlan(scope: IndexJobScope): Promise<RebuildPlan> {
-  return kfetchJson(`/api/v1/admin/knowledge/rebuild-plan`, {method:"POST",body:JSON.stringify(scope)});
+  return kfetchJson(`/api/v1/admin/knowledge/rebuild-plan`, {method:"POST",
+    headers: { "Content-Type": "application/json" }, body:JSON.stringify(scope)});
 }
 
 export function createRebuildJob(plan: RebuildPlan, overrides: {key:string;options:IndexOptions}[]): Promise<IndexJobStatus> {
   return kfetchJson(`/api/v1/admin/knowledge/rebuild-jobs`, {method:"POST",
+    headers: { "Content-Type": "application/json" },
     body:JSON.stringify({scope:plan.scope,token:plan.token,overrides})});
 }
 

@@ -16,7 +16,8 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' >/dev/null 2>&1"]
       interval: 30s
-      timeout: 10s
+      # cypher-shell 冷启动实测约 7 秒，构建前端时需要给 JVM 启动留余量。
+      timeout: 30s
       retries: 5
       start_period: 30s
 
