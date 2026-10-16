@@ -10,8 +10,6 @@ import IndexJobDetail from "./IndexJobDetail.vue";
 const { prefix, jobRunning, trackJob } = useKnowledge();
 const plan = ref<RebuildPlan | null>(null);
 const planOpen = ref(false);
-const allPlanButton = ref<HTMLButtonElement | null>(null);
-const categoryPlanButton = ref<HTMLButtonElement | null>(null);
 const allPlanOpen = computed(() => planOpen.value && !!plan.value && !plan.value.scope.prefix);
 const categoryPlanOpen = computed(() => planOpen.value && !!plan.value?.scope.prefix);
 const busy = ref(false);
@@ -29,10 +27,6 @@ function togglePlan(all: boolean) {
     return;
   }
   void preview(all);
-}
-function collapsePlan() {
-  planOpen.value = false;
-  (plan.value?.scope.prefix ? categoryPlanButton.value : allPlanButton.value)?.focus();
 }
 async function preview(all: boolean) {
   const request = ++generation;
@@ -89,12 +83,12 @@ onMounted(()=>void loadHistory());
     <div class="section-body">
     <p class="note">复用当前生效版本中各文件的提取方式，使用当前切块策略。默认复用有效缓存，整批完成后统一发布。</p>
     <div class="actions">
-      <button ref="allPlanButton" :class="{'is-active':allPlanOpen}" :aria-expanded="allPlanOpen" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning" @click="togglePlan(true)">{{ allPlanOpen ? '收起整库重建计划' : '查看整库重建计划' }}</button>
-      <button ref="categoryPlanButton" :class="{'is-active':categoryPlanOpen}" :aria-expanded="categoryPlanOpen" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning || !prefix" @click="togglePlan(false)">{{ categoryPlanOpen ? '收起当前分类重建计划' : '查看当前分类重建计划' }}</button>
+      <button :class="{'is-active':allPlanOpen}" :aria-expanded="allPlanOpen" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning" @click="togglePlan(true)">{{ allPlanOpen ? '收起整库重建计划' : '查看整库重建计划' }}</button>
+      <button :class="{'is-active':categoryPlanOpen}" :aria-expanded="categoryPlanOpen" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning || !prefix" @click="togglePlan(false)">{{ categoryPlanOpen ? '收起当前分类重建计划' : '查看当前分类重建计划' }}</button>
     </div>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <section v-if="plan" v-show="planOpen" id="rebuild-plan-preview" class="plan" aria-labelledby="rebuild-plan-title">
-      <header class="plan__header"><h4 id="rebuild-plan-title">{{ plan.scope.prefix ? '当前分类重建计划' : '整库重建计划' }}</h4><div class="plan__tools"><span class="note">由上方“{{ plan.scope.prefix ? '查看当前分类重建计划' : '查看整库重建计划' }}”生成 · 待确认</span><button :disabled="busy || jobRunning" @click="preview(!plan.scope.prefix)">刷新计划</button><button @click="collapsePlan">收起</button></div></header>
+      <header class="plan__header"><h4 id="rebuild-plan-title">{{ plan.scope.prefix ? '当前分类重建计划' : '整库重建计划' }}</h4><div class="plan__tools"><span class="note">由上方“{{ plan.scope.prefix ? '查看当前分类重建计划' : '查看整库重建计划' }}”生成 · 待确认</span><button :disabled="busy || jobRunning" @click="preview(!plan.scope.prefix)">刷新计划</button></div></header>
       <div class="plan__body">
       <p>范围：{{ plan.scope.prefix || '整个知识库' }} · {{ plan.total }} 个文件 · 待确认 {{ plan.unknown }} · 不支持 {{ plan.unsupported }}</p>
       <p class="note">生效版本：{{ plan.active }}</p>
