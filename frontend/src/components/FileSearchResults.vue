@@ -91,10 +91,11 @@ button:hover:not(:disabled) { background: var(--primary-tint); } button:disabled
 .fs-results__list li:last-child {border-bottom:0;}
 .fs-results__details summary {display:flex;align-items:flex-start;gap:10px;padding:16px 76px 16px 14px;cursor:pointer;list-style:none;transition:background-color .12s;}
 .fs-results__details summary::-webkit-details-marker {display:none;}
-.fs-results__details summary:hover {background:var(--surface-2);}
+.fs-results__details summary:hover {background:var(--primary-tint);}
 .fs-results__details summary:focus-visible {outline:2px solid var(--focus);outline-offset:-2px;background:var(--primary-tint);}
 .fs-results__chevron {width:14px;height:14px;margin-top:3px;flex-shrink:0;stroke:var(--muted);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;transition:transform .15s;}
 .fs-results__details[open] .fs-results__chevron {transform:rotate(90deg);}
+.fs-results__details[open] summary {border-bottom:1px solid var(--line);}
 .fs-results__overview {min-width:0;flex:1;}
 .fs-results__overview strong {font-size:13px;font-weight:600;line-height:1.6;overflow-wrap:anywhere;}
 .fs-results__meta {display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;margin-top:8px;font-size:11px;}
@@ -103,7 +104,7 @@ button:hover:not(:disabled) { background: var(--primary-tint); } button:disabled
 .fs-results__expand {color:var(--primary);}
 .when-open,.fs-results__details[open] .when-closed {display:none;}
 .fs-results__details[open] .when-open {display:inline;}
-.fs-results__detail-body {padding:14px 16px 16px;margin:0 14px 14px 38px;border:1px solid var(--line);border-radius:var(--radius-xs);background:var(--surface-2);}
+.fs-results__detail-body {padding:14px 16px 16px;margin:12px 14px 14px 38px;border:1px solid var(--line);border-radius:var(--radius-xs);background:var(--surface-2);}
 .fs-results__detail-body h5 {font-size:12px;font-weight:600;color:var(--muted);}
 .fs-results__evidence {font-size:13px;margin-top:10px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7;}
 .fs-results__evidence+.fs-results__evidence {border-top:1px solid var(--line);padding-top:10px;}
