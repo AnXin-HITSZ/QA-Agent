@@ -73,11 +73,13 @@ onMounted(()=>void loadHistory());
     <div class="section-body">
     <p class="note">复用当前生效版本中各文件的提取方式，使用当前切块策略。默认复用有效缓存，整批完成后统一发布。</p>
     <div class="actions">
-      <button :disabled="busy || jobRunning" @click="preview(true)">查看整库重建计划</button>
-      <button :disabled="busy || jobRunning || !prefix" @click="preview(false)">查看当前分类重建计划</button>
+      <button :class="{'is-active':plan && !plan.scope.prefix}" :aria-expanded="!!plan && !plan.scope.prefix" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning" @click="preview(true)">查看整库重建计划</button>
+      <button :class="{'is-active':plan && !!plan.scope.prefix}" :aria-expanded="!!plan && !!plan.scope.prefix" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning || !prefix" @click="preview(false)">查看当前分类重建计划</button>
     </div>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
-    <div v-if="plan" class="plan">
+    <section v-if="plan" id="rebuild-plan-preview" class="plan" aria-labelledby="rebuild-plan-title">
+      <header class="plan__header"><h4 id="rebuild-plan-title">{{ plan.scope.prefix ? '当前分类重建计划' : '整库重建计划' }}</h4><span class="note">由上方“{{ plan.scope.prefix ? '查看当前分类重建计划' : '查看整库重建计划' }}”生成 · 待确认</span></header>
+      <div class="plan__body">
       <p>范围：{{ plan.scope.prefix || '整个知识库' }} · {{ plan.total }} 个文件 · 待确认 {{ plan.unknown }} · 不支持 {{ plan.unsupported }}</p>
       <p class="note">生效版本：{{ plan.active }}</p>
       <div class="groups"><span v-for="(count, mode) in plan.groups" :key="mode">{{ modeLabel(String(mode).split('+')[0]) }}{{ String(mode).includes('+') ? ' · 混贴票据' : '' }}：{{ count }}</span></div>
@@ -94,9 +96,12 @@ onMounted(()=>void loadHistory());
           </tr></tbody>
         </table>
       </div>
+      </div>
+      <footer class="plan__footer">
       <p class="note">重建可能产生 OCR／Embedding 调用费用。未支持的文件不纳入正文索引，覆盖范围会如实显示。</p>
       <button class="primary" :disabled="busy || jobRunning || !ready || !plan.total" @click="run">确认计划并开始重建</button>
-    </div>
+      </footer>
+    </section>
     </div>
     </section>
 
@@ -143,12 +148,21 @@ onMounted(()=>void loadHistory());
 .note {color:var(--muted);font-size:12px;line-height:1.7;overflow-wrap:anywhere;}
 .actions,.groups {display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;}
 .groups span {padding:3px 8px;border-radius:999px;background:var(--primary-tint);color:var(--primary-strong);font-size:12px;}
-button {font:inherit;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--surface);color:var(--ink);cursor:pointer;}
-button:hover {background:var(--primary-tint);}
+button {font:inherit;border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--surface);color:var(--ink);cursor:pointer;transition:background-color .18s ease,color .18s ease,border-color .18s ease,box-shadow .18s ease;}
+button:hover:not(:disabled) {background:var(--primary-tint);border-color:var(--primary);}
+button.is-active {background:var(--primary-tint);border-color:var(--primary);color:var(--primary-strong);}
 button:disabled {opacity:.5;cursor:not-allowed;}
 button:focus-visible {outline:2px solid var(--focus);outline-offset:2px;}
-.primary {background:var(--primary-tint);color:var(--primary-strong);}
-.plan {border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;}
+.primary {background:var(--primary);border-color:var(--primary);color:#fff;}
+.primary:hover:not(:disabled) {background:var(--primary-strong);border-color:var(--primary-strong);box-shadow:0 2px 6px var(--primary-tint);}
+.primary:active:not(:disabled) {background:var(--primary);box-shadow:none;}
+.plan {border:1px solid var(--line);border-left:3px solid var(--primary);border-radius:10px;margin:14px 0 0 12px;overflow:hidden;}
+.plan__header {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:12px 14px;background:var(--primary-tint);border-bottom:1px solid var(--line);}
+.plan__header h4 {margin:0;font-size:13px;font-weight:600;color:var(--primary-strong);}
+.plan__body {padding:0 14px 14px;}
+.plan__footer {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--line);background:var(--surface-2);}
+.plan__footer .note {flex:1 1 280px;margin:0;}
+.plan__footer button {flex-shrink:0;margin-left:auto;}
 .scroll {overflow:auto;max-height:360px;}
 table {width:100%;border-collapse:collapse;text-align:left;}
 th,td {padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
@@ -157,4 +171,6 @@ th {font-weight:500;color:var(--muted);font-size:12px;}
 .error {color:var(--seal);overflow-wrap:anywhere;}
 label {display:flex;align-items:center;gap:4px;margin-top:6px;}
 @media(max-width:640px) {.section-header {padding:14px;}.section-body {padding:4px 14px 14px;}.history-filters,.history-pagination {padding:12px 14px;}.section-header>.note {font-size:11px;}}
+@media(max-width:640px) {.plan {margin-left:0;}.plan__header,.plan__footer {padding:12px;}.plan__body {padding:0 12px 12px;}}
+@media(prefers-reduced-motion:reduce) {button {transition:none;}}
 </style>
