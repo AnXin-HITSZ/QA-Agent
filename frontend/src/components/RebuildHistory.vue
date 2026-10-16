@@ -9,6 +9,11 @@ import IndexJobDetail from "./IndexJobDetail.vue";
 
 const { prefix, jobRunning, trackJob } = useKnowledge();
 const plan = ref<RebuildPlan | null>(null);
+const planOpen = ref(false);
+const allPlanButton = ref<HTMLButtonElement | null>(null);
+const categoryPlanButton = ref<HTMLButtonElement | null>(null);
+const allPlanOpen = computed(() => planOpen.value && !!plan.value && !plan.value.scope.prefix);
+const categoryPlanOpen = computed(() => planOpen.value && !!plan.value?.scope.prefix);
 const busy = ref(false);
 const error = ref("");
 const overrides = ref<Record<string, IndexOptions>>({});
@@ -17,13 +22,24 @@ const ready = computed(() => plan.value && !plan.value.files.some(f => f.status 
   unknown.value.every(f => overrides.value[f.key]?.extraction_mode));
 const modeOptions = [{value:"",label:"请选择提取方式"},...EXTRACTION_MODES];
 let generation = 0;
-watch(prefix, () => {generation++;busy.value=false;plan.value=null;overrides.value={};});
+watch(prefix, () => {generation++;busy.value=false;plan.value=null;planOpen.value=false;overrides.value={};});
+function togglePlan(all: boolean) {
+  if (plan.value && (plan.value.scope.prefix || "") === (all ? "" : prefix.value)) {
+    planOpen.value = !planOpen.value;
+    return;
+  }
+  void preview(all);
+}
+function collapsePlan() {
+  planOpen.value = false;
+  (plan.value?.scope.prefix ? categoryPlanButton.value : allPlanButton.value)?.focus();
+}
 async function preview(all: boolean) {
   const request = ++generation;
   busy.value=true;error.value="";plan.value=null;overrides.value={};
   try {
     const result = await getRebuildPlan({kind:"prefix",prefix:all ? "" : prefix.value});
-    if (request === generation) plan.value=result;
+    if (request === generation) {plan.value=result;planOpen.value=true;}
   } catch(e) {if (request === generation) error.value=errorText(e);}
   finally {if(request===generation) busy.value=false;}
 }
@@ -73,12 +89,12 @@ onMounted(()=>void loadHistory());
     <div class="section-body">
     <p class="note">复用当前生效版本中各文件的提取方式，使用当前切块策略。默认复用有效缓存，整批完成后统一发布。</p>
     <div class="actions">
-      <button :class="{'is-active':plan && !plan.scope.prefix}" :aria-expanded="!!plan && !plan.scope.prefix" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning" @click="preview(true)">查看整库重建计划</button>
-      <button :class="{'is-active':plan && !!plan.scope.prefix}" :aria-expanded="!!plan && !!plan.scope.prefix" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning || !prefix" @click="preview(false)">查看当前分类重建计划</button>
+      <button ref="allPlanButton" :class="{'is-active':allPlanOpen}" :aria-expanded="allPlanOpen" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning" @click="togglePlan(true)">{{ allPlanOpen ? '收起整库重建计划' : '查看整库重建计划' }}</button>
+      <button ref="categoryPlanButton" :class="{'is-active':categoryPlanOpen}" :aria-expanded="categoryPlanOpen" aria-controls="rebuild-plan-preview" :disabled="busy || jobRunning || !prefix" @click="togglePlan(false)">{{ categoryPlanOpen ? '收起当前分类重建计划' : '查看当前分类重建计划' }}</button>
     </div>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
-    <section v-if="plan" id="rebuild-plan-preview" class="plan" aria-labelledby="rebuild-plan-title">
-      <header class="plan__header"><h4 id="rebuild-plan-title">{{ plan.scope.prefix ? '当前分类重建计划' : '整库重建计划' }}</h4><span class="note">由上方“{{ plan.scope.prefix ? '查看当前分类重建计划' : '查看整库重建计划' }}”生成 · 待确认</span></header>
+    <section v-if="plan" v-show="planOpen" id="rebuild-plan-preview" class="plan" aria-labelledby="rebuild-plan-title">
+      <header class="plan__header"><h4 id="rebuild-plan-title">{{ plan.scope.prefix ? '当前分类重建计划' : '整库重建计划' }}</h4><div class="plan__tools"><span class="note">由上方“{{ plan.scope.prefix ? '查看当前分类重建计划' : '查看整库重建计划' }}”生成 · 待确认</span><button :disabled="busy || jobRunning" @click="preview(!plan.scope.prefix)">刷新计划</button><button @click="collapsePlan">收起</button></div></header>
       <div class="plan__body">
       <p>范围：{{ plan.scope.prefix || '整个知识库' }} · {{ plan.total }} 个文件 · 待确认 {{ plan.unknown }} · 不支持 {{ plan.unsupported }}</p>
       <p class="note">生效版本：{{ plan.active }}</p>
@@ -159,6 +175,7 @@ button:focus-visible {outline:2px solid var(--focus);outline-offset:2px;}
 .plan {border:1px solid var(--line);border-left:3px solid var(--primary);border-radius:10px;margin:14px 0 0 12px;overflow:hidden;}
 .plan__header {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:12px 14px;background:var(--primary-tint);border-bottom:1px solid var(--line);}
 .plan__header h4 {margin:0;font-size:13px;font-weight:600;color:var(--primary-strong);}
+.plan__tools {display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-left:auto;}
 .plan__body {padding:0 14px 14px;}
 .plan__footer {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid var(--line);background:var(--surface-2);}
 .plan__footer .note {flex:1 1 280px;margin:0;}
