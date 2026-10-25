@@ -52,19 +52,30 @@ echo ">> 关闭上次 & 启用本次(systemd 原子重启)"
 sudo systemctl restart "$SERVICE"
 
 echo ">> 健康自检"
-# 轮询到就绪为止(最多 15 秒),而不是死等 2 秒:双 worker 冷启动偶尔要几秒才绑上端口,
-# 死等会把它误报成启动失败(2026-10-01 连撞两次假失败)。
+# 双 worker 导入与依赖初始化可能超过 15 秒；按实际耗时限制等待窗口。
+HEALTH_WAIT_SECONDS=60
+HEALTH_STARTED=$SECONDS
+HEALTH_DEADLINE=$((HEALTH_STARTED + HEALTH_WAIT_SECONDS))
 OK=0
-for i in $(seq 1 15); do
-  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
-    OK=1
-    echo "✓ 本次服务已上线,后端健康(/health 200,${i} 秒就绪)"
+HEALTH_FAILURE="健康检查 ${HEALTH_WAIT_SECONDS} 秒内未通过"
+while (( SECONDS < HEALTH_DEADLINE )); do
+  SERVICE_STATE=$(sudo systemctl show "$SERVICE" --property=ActiveState --value) || SERVICE_STATE=unknown
+  if [[ "$SERVICE_STATE" == failed || "$SERVICE_STATE" == inactive ]]; then
+    HEALTH_FAILURE="服务已进入 ${SERVICE_STATE} 状态，提前结束健康检查"
     break
   fi
-  sleep 1
+  HEALTH_REMAINING=$((HEALTH_DEADLINE - SECONDS))
+  if (( HEALTH_REMAINING <= 0 )); then break; fi
+  HEALTH_REQUEST_TIMEOUT=$((HEALTH_REMAINING < 3 ? HEALTH_REMAINING : 3))
+  if curl -fsS --connect-timeout 1 --max-time "$HEALTH_REQUEST_TIMEOUT" "$HEALTH_URL" >/dev/null 2>&1; then
+    OK=1
+    echo "✓ 本次服务已上线,后端健康(/health 200,$((SECONDS - HEALTH_STARTED)) 秒就绪)"
+    break
+  fi
+  if (( SECONDS < HEALTH_DEADLINE )); then sleep 1; fi
 done
 if [ "$OK" != 1 ]; then
-  echo "✗ 健康检查 15 秒内未通过,最近 30 行日志:"
+  echo "✗ ${HEALTH_FAILURE}(已等待 $((SECONDS - HEALTH_STARTED)) 秒),最近 30 行日志:"
   sudo journalctl -u "$SERVICE" -n 30 --no-pager
   exit 1
 fi
