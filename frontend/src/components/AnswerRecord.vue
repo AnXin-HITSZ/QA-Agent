@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import type { Source, SopImageReference, FileSearchResult } from "../api";
 import FileSearchResults from "./FileSearchResults.vue";
@@ -21,6 +21,21 @@ const props = defineProps<{
 const list = computed<Step[]>(() => props.steps ?? []);
 const hasContent = computed(() => list.value.some((s) => s.text || s.tools.length));
 const sources = computed<Source[]>(() => props.sources ?? []);
+// Associate loaded pages without removing files or changing any search ranking.
+const loadedSearches = ref<Record<string, string[]>>({});
+function rememberSearch(result: FileSearchResult) {
+  loadedSearches.value[result.search_id] = [...new Set([
+    ...(loadedSearches.value[result.search_id] ?? []), ...result.items.map(i => i.key),
+  ])];
+}
+function relatedSearches(id: string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  const current = new Set((props.fileSearches ?? []).map(r => r.search_id));
+  for (const [sid, keys] of Object.entries(loadedSearches.value)) {
+    if (sid !== id && current.has(sid)) for (const key of keys) counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+}
 
 // 展示名:优先文件名,退而取 oss_key 的末段。
 function srcName(s: Source): string {
@@ -98,7 +113,7 @@ function actLabel(a: ToolActivity): string {
     </div>
 
     <SopImageGallery :images="images ?? []" />
-    <FileSearchResults v-for="result in fileSearches ?? []" :key="result.search_id" :initial="result" />
+    <FileSearchResults v-for="result in fileSearches ?? []" :key="result.search_id" :initial="result" :collapsed="(fileSearches?.length ?? 0) > 1" :related="relatedSearches(result.search_id)" @loaded="rememberSearch" />
     <footer v-if="sources.length" class="ar__sources">
       <p class="ar__srchead">参考来源</p>
       <ul class="ar__srclist">

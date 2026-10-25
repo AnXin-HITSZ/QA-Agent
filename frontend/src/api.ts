@@ -9,6 +9,7 @@ import { apiFetch } from "./stores/auth";
 
 export interface FileSearchItem {
   key: string; name: string; routes: string[]; matched_terms: string[];
+  matched_fields?: Record<string, string[]>;
   evidence: { text: string; page: number | null; section: string[] }[];
 }
 export interface FileSearchResult {
@@ -16,6 +17,7 @@ export interface FileSearchResult {
   literal_operator: string; prefix: string; literal_total: number; supplement_total: number;
   total: number; items: FileSearchItem[]; offset: number; next_offset: number | null;
   page_size: number;
+  fields?: string[];
   unavailable_on_page: number; notes: string[];
   coverage: { source_files: number; body_indexed: number; body_uncovered: number };
 }

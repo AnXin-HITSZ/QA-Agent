@@ -2,7 +2,10 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { fileSearchPage, exportFileSearch, downloadKnowledgeFile, type FileSearchResult } from "../api";
 
-const props = defineProps<{ initial: FileSearchResult }>();
+const props = defineProps<{ initial: FileSearchResult; collapsed?: boolean; related?: Record<string, number> }>();
+const emit = defineEmits<{ loaded: [result: FileSearchResult] }>();
+const expanded = ref(!props.collapsed);
+const fieldLabels: Record<string, string> = {name: '文件名', path: '文件路径', body: '正文'};
 const result = ref({ ...props.initial, items: [] } as FileSearchResult);
 const busy = ref(false);
 const error = ref("");
@@ -16,7 +19,7 @@ let requestSeq = 0;
 async function turn(offset: number) {
   const seq = ++requestSeq;
   busy.value = true; error.value = "";
-  try { const next = await fileSearchPage(result.value.search_id, offset, result.value.page_size); if (seq === requestSeq) result.value = next; }
+  try { const next = await fileSearchPage(result.value.search_id, offset, result.value.page_size); if (seq === requestSeq) { result.value = next; emit('loaded', next); } }
   catch (e) { if (seq === requestSeq) error.value = e instanceof Error ? e.message : String(e); }
   finally { if (seq === requestSeq) busy.value = false; }
 }
@@ -31,17 +34,19 @@ async function action(fn: () => Promise<void>) {
   <section class="fs-results" aria-label="文件搜索结果">
     <header class="fs-results__head">
       <div>
-        <h3>文件搜索结果</h3>
-        <p>字面匹配 {{ result.literal_total }} 个 · 相关性补充 {{ result.supplement_total }} 个</p>
+        <h3><button class="fs-results__toggle" type="button" :aria-expanded="expanded" @click="expanded = !expanded">文件搜索 · {{ result.prefix ? result.prefix.replace(/\/$/, '').split('/').pop() + '目录' : '全部分类' }} <span>{{ expanded ? '收起' : '展开' }}</span></button></h3>
+        <p>包含指定关键词 {{ result.literal_total }} 个 · 其他可能相关 {{ result.supplement_total }} 个</p>
       </div>
       <button type="button" :disabled="busy" @click="action(() => exportFileSearch(result.search_id))">导出清单</button>
     </header>
-    <p class="fs-results__hint">{{ result.literal_terms.join(result.literal_operator === 'all' ? ' AND ' : ' OR ') }} · {{ result.prefix || '全部分类' }}</p>
+    <p class="fs-results__hint">关键词：{{ result.literal_terms.join(result.literal_operator === 'all' ? ' AND ' : ' OR ') }} · 字段：{{ result.fields?.map(f => fieldLabels[f] || f).join('、') || '历史记录未保存' }} · 范围：{{ result.prefix || '全部分类' }}</p>
+    <p v-if="result.query" class="fs-results__hint">查询主题：{{ result.query }}</p>
+    <div v-show="expanded">
     <p class="fs-results__hint">正文可搜索 {{ result.coverage.body_indexed }}/{{ result.coverage.source_files }} 个；{{ result.coverage.body_uncovered }} 个正文尚未覆盖或版本已变化。{{ result.mode === 'semantic' ? '相关性补充不保证穷尽。' : '' }}</p>
     <p v-for="note in result.notes" :key="note" class="fs-results__hint">{{ note }}</p>
     <p v-if="error" role="alert" class="fs-results__error">{{ error }}</p>
     <p v-if="result.unavailable_on_page" class="fs-results__hint">本页 {{ result.unavailable_on_page }} 个原件已删除或更新，未展示旧内容。</p>
-    <template v-for="group in [{ title: '字面匹配', items: literal }, { title: '相关性补充', items: supplement }]" :key="group.title">
+    <template v-for="group in [{ title: '包含指定关键词的文件', items: literal }, { title: '其他可能相关的文件', items: supplement }]" :key="group.title">
       <section v-if="group.items.length" class="fs-results__group" :aria-label="group.title">
         <header class="fs-results__group-head"><h4>{{ group.title }}</h4><span class="fs-results__count">本页 {{ group.items.length }} 个文件</span><span class="fs-results__group-note">点击文件概要查看匹配内容</span></header>
         <ul class="fs-results__list">
@@ -52,11 +57,12 @@ async function action(fn: () => Promise<void>) {
                 <div class="fs-results__overview">
                   <strong>{{ item.name }}</strong>
                   <p class="fs-results__path">{{ item.key }}</p>
-                  <div class="fs-results__meta"><span v-for="route in item.routes" :key="route" class="fs-results__route">{{ labels[route] || route }}</span><span v-if="item.matched_terms.length" class="fs-results__terms">命中关键词：{{ item.matched_terms.join('、') }}</span><span class="fs-results__expand"><span class="when-closed">查看匹配内容</span><span class="when-open">收起匹配内容</span></span></div>
+                  <div class="fs-results__meta"><template v-for="(terms, field) in item.matched_fields" :key="field"><span v-if="terms.length" class="fs-results__terms">{{ fieldLabels[field] || field }}包含：{{ terms.join('、') }}</span></template><span v-if="!item.matched_fields" class="fs-results__terms">历史记录未保存匹配位置</span><span v-if="related?.[item.key]" class="fs-results__terms">已加载结果中，其他 {{ related[item.key] }} 次搜索也找到此文件</span><span class="fs-results__expand"><span class="when-closed">查看匹配内容</span><span class="when-open">收起匹配内容</span></span></div>
                 </div>
               </summary>
               <div class="fs-results__detail-body">
                 <h5>匹配内容</h5>
+                <p class="fs-results__hint">检索方式：{{ item.routes.map(r => labels[r] || r).join('、') }}<template v-if="!item.routes.includes('literal')">；按相关性排序，不保证找全，也不代表已确认满足问题要求。</template></p>
                 <p v-for="(e, i) in item.evidence" :key="i" class="fs-results__evidence"><span v-if="e.page" class="fs-results__location">第 {{ e.page }} 页 · </span><span v-if="e.section.length" class="fs-results__location">{{ e.section.join(' › ') }} · </span>{{ e.text }}</p>
                 <p v-if="!item.evidence.length" class="fs-results__hint">暂无可展示的正文片段，可下载原文件查看。</p>
               </div>
@@ -72,11 +78,14 @@ async function action(fn: () => Promise<void>) {
       <span>共 {{ result.total }} 个 · 当前从第 {{ result.total ? result.offset + 1 : 0 }} 个开始</span>
       <button type="button" :disabled="busy || result.next_offset === null" @click="turn(result.next_offset!)">下一页</button>
     </nav>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .fs-results { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); }
+.fs-results__toggle {border:0;padding:0;background:transparent;color:var(--ink);font-size:15px;font-weight:600;text-align:left;overflow-wrap:anywhere;}
+.fs-results__toggle span {margin-left:12px;font-size:12px;font-weight:400;color:var(--primary);}
 .fs-results__head, .fs-results__pages { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 h3, h4, h5, p { margin: 0; } h3 { font-size: 16px; } h4 { font-size: 14px; }
 .fs-results__head p, .fs-results__hint, .fs-results__path { color: var(--muted); font-size: 12px; margin-top: 7px; overflow-wrap: anywhere; }

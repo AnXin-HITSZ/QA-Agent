@@ -129,10 +129,11 @@ def search_files_literal(literal_terms: list[str], config: RunnableConfig,
 @tool(response_format="content_and_artifact")
 def search_files_semantic(query: str, literal_terms: list[str], config: RunnableConfig,
                           literal_operator: str = "all", prefix: str = "", page_size: int = 20,
-                          candidate_limit: int | None = None):
+                          candidate_limit: int | None = None, fields: list[str] | None = None):
     """查找主题相关文件：完整字面集合 + 全文/向量补充；仅补充结果精排，无独立判定 LLM。
 
     query 传完整主题；literal_terms 必须明确。组合主题默认 all，扩大任一主题时用 any。
+    fields 可选 name/path/body，默认 name+body；目录用 prefix 限定，只有明确匹配路径时才选 path。
     例：发票报销 → query='发票报销', literal_terms=['发票','报销'], literal_operator='all'。
     用户明确 AND/OR/短语时优先遵守。candidate_limit 仅限制两路补充候选，不能限制字面集合。
     返回字面总数和补充总数、依据与分页。只承诺字面查全，不能宣称语义相关全部穷尽。
@@ -141,7 +142,7 @@ def search_files_semantic(query: str, literal_terms: list[str], config: Runnable
     from app.schemas.file_search import FileSearchRequest
     return _file_search_result(config, FileSearchRequest(mode="semantic", query=query,
         literal_terms=literal_terms, literal_operator=literal_operator, prefix=prefix,
-        page_size=page_size, candidate_limit=candidate_limit))
+        page_size=page_size, candidate_limit=candidate_limit, fields=fields or ["name", "body"]))
 
 
 @tool(response_format="content_and_artifact")

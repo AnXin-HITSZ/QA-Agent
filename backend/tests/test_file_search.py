@@ -32,6 +32,21 @@ def doc(key, body="聚餐报销", size=10):
         "snapshot_key": "snapshot", "units": [{"text": body, "page": 2, "section": ["说明"]}]}
 
 
+def test_matching_fields_do_not_turn_directory_name_into_body_evidence():
+    source = doc("王鸿鹏论文/english.pdf", body="Hongpeng Wang")
+    default = service.item(source, ["vector"], ["王鸿鹏"])
+    assert default["matched_terms"] == []
+    assert default["matched_fields"] == {"name": [], "body": []}
+    explicit = service.item(source, ["literal"], ["王鸿鹏"], fields=["path"])
+    assert explicit["matched_fields"] == {"path": ["王鸿鹏"]}
+
+
+def test_vector_snippet_can_prove_a_body_match_but_never_a_name_match():
+    source = {"key": "papers/english.pdf"}
+    row = service.item(source, ["vector"], ["王鸿鹏"], [{"text": "作者王鸿鹏"}])
+    assert row["matched_fields"] == {"name": [], "body": ["王鸿鹏"]}
+
+
 class Source:
     def __init__(self, docs):
         self.inventory = {d["key"]: {"key": d["key"], "size": d["source_size"], "last_modified": d["source_modified"]} for d in docs}

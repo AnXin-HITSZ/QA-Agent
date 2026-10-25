@@ -43,10 +43,15 @@ def evidence(doc, terms):
     return result
 
 
-def item(doc, routes, terms, snippets=None):
-    values = [doc.get("name", ""), doc["key"], doc.get("body", "")]
+def item(doc, routes, terms, snippets=None, fields=None):
+    fields = fields if fields is not None else ["name", "body"]
+    values = {"name": doc.get("name") or doc["key"].rsplit("/", 1)[-1],
+              "path": doc["key"],
+              "body": doc.get("body") or "\n".join(e["text"] for e in (snippets or []))}
+    matched = {field: [t for t in terms if t in values[field]] for field in fields}
     return {"key": doc["key"], "name": doc.get("name") or doc["key"].rsplit("/", 1)[-1],
-        "routes": routes, "matched_terms": [t for t in terms if any(t in v for v in values)],
+        "routes": routes, "matched_terms": [t for t in terms if any(t in ts for ts in matched.values())],
+        "matched_fields": matched,
         "evidence": snippets if snippets is not None else evidence(doc, terms),
         "content_sha256": doc.get("content_sha256"), "source_size": doc.get("source_size"),
         "source_modified": doc.get("source_modified"), "body_indexed": bool(doc.get("content_sha256"))}
@@ -110,7 +115,7 @@ def supplements(req, release, inventory, protected):
                 seen.add(key)
                 ranks[key] += 1 / (60 + rank)
                 if key not in candidates:
-                    candidates[key] = item({**doc, **meta}, [route], req.literal_terms, snippets or evidence(doc, req.literal_terms))
+                    candidates[key] = item({**doc, **meta}, [route], req.literal_terms, snippets or evidence(doc, req.literal_terms), fields=req.fields)
                 else:
                     candidates[key]["routes"].append(route)
                     candidates[key]["evidence"] = (candidates[key]["evidence"] + snippets)[:6]
@@ -160,11 +165,11 @@ def search(req: FileSearchRequest, user_id):
             if literal_matches(values, req.literal_terms, req.literal_operator):
                 doc = {"key": key, "name": key.rsplit("/", 1)[-1],
                        "source_size": info["size"], "source_modified": info.get("last_modified"), **indexed.get(key, {})}
-                literal[key] = item(doc, ["literal"], req.literal_terms, [])
+                literal[key] = item(doc, ["literal"], req.literal_terms, [], fields=req.fields)
     for doc in fulltext.scan(release["es_index"], fulltext.literal_query(req.literal_terms, req.literal_operator, req.fields), req.prefix):
         if not current_version(doc, inventory):
             continue
-        literal[doc["key"]] = item(doc, ["literal"], req.literal_terms)
+        literal[doc["key"]] = item(doc, ["literal"], req.literal_terms, fields=req.fields)
     extra, notes = supplements(req, release, inventory, set(literal)) if req.mode == "semantic" else ([], [])
     metadata = {"mode": req.mode, "query": req.query, "literal_terms": req.literal_terms,
         "literal_operator": req.literal_operator, "fields": req.fields, "prefix": req.prefix,

@@ -23,6 +23,8 @@ function clearTerms() {
   keywordsInput.value?.focus({preventScroll:true});
 }
 const scope = ref<'all' | 'current'>('all');
+const fields = ref('name-body');
+const fieldOptions = [{value:'name-body',label:'文件名与正文'}, {value:'name',label:'仅文件名'}, {value:'body',label:'仅正文'}, {value:'path',label:'文件路径'}];
 const props = defineProps<{ prefix: string }>();
 const result = ref<FileSearchResult | null>(null);
 const busy = ref(false);
@@ -34,7 +36,7 @@ async function run() {
   busy.value = true; error.value = ''; result.value = null;
   try { result.value = await searchKnowledgeFiles({ mode: mode.value, query: query.value,
     literal_terms: terms.value.split('\n').filter(t => t.length > 0), literal_operator: operator.value,
-    prefix: scope.value === 'current' ? props.prefix : '', fields: ['name', 'body'], page_size: 20 }); }
+    prefix: scope.value === 'current' ? props.prefix : '', fields: fields.value.split('-'), page_size: 20 }); }
   catch (e) { error.value = e instanceof Error ? e.message : String(e); }
   finally { busy.value = false; }
 }
@@ -46,6 +48,7 @@ async function run() {
         <SelectField v-model="mode" :options="modes" label="搜索方式" />
         <SelectField v-model="operator" :options="operators" label="字面条件" />
         <SelectField v-model="scope" :options="scopes" label="范围" />
+        <SelectField v-model="fields" :options="fieldOptions" label="匹配字段" />
       </div>
       <label v-if="mode === 'semantic'" class="fs-panel__field">查询主题<input v-model="query" required maxlength="500" placeholder="例如：发票报销" /></label>
       <div class="fs-panel__field">
