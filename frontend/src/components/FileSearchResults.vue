@@ -39,7 +39,12 @@ async function action(fn: () => Promise<void>) {
       </div>
       <button type="button" :disabled="busy" @click="action(() => exportFileSearch(result.search_id))">导出清单</button>
     </header>
-    <p class="fs-results__hint">关键词：{{ result.literal_terms.join(result.literal_operator === 'all' ? ' AND ' : ' OR ') }} · 字段：{{ result.fields?.map(f => fieldLabels[f] || f).join('、') || '历史记录未保存' }} · 范围：{{ result.prefix || '全部分类' }}</p>
+    <dl class="fs-results__criteria" aria-label="本次搜索条件">
+      <div><dt>关键词</dt><dd>{{ result.literal_terms.join('、') }}</dd></div>
+      <div><dt>条件</dt><dd>{{ result.literal_operator === 'all' ? '全部词都出现（AND）' : result.literal_operator === 'any' ? '任一词出现（OR）' : '历史记录未保存' }}</dd></div>
+      <div><dt>字段</dt><dd>{{ result.fields?.map(f => fieldLabels[f] || f).join('、') || '历史记录未保存' }}</dd></div>
+      <div><dt>范围</dt><dd>{{ result.prefix || '全部分类' }}</dd></div>
+    </dl>
     <p v-if="result.query" class="fs-results__hint">查询主题：{{ result.query }}</p>
     <div v-show="expanded">
     <p class="fs-results__hint">正文可搜索 {{ result.coverage.body_indexed }}/{{ result.coverage.source_files }} 个；{{ result.coverage.body_uncovered }} 个正文尚未覆盖或版本已变化。{{ result.mode === 'semantic' ? '相关性补充不保证穷尽。' : '' }}</p>
@@ -86,6 +91,10 @@ async function action(fn: () => Promise<void>) {
 .fs-results { margin-top: 18px; padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); }
 .fs-results__toggle {border:0;padding:0;background:transparent;color:var(--ink);font-size:15px;font-weight:600;text-align:left;overflow-wrap:anywhere;}
 .fs-results__toggle span {margin-left:12px;font-size:12px;font-weight:400;color:var(--primary);}
+.fs-results__criteria {display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0;padding:0;font-size:12px;line-height:1.6;}
+.fs-results__criteria > div {display:flex;align-items:baseline;gap:8px;min-width:0;max-width:100%;box-sizing:border-box;padding:5px 10px;border:1px solid var(--line);border-radius:var(--radius-xs);background:var(--surface-2);}
+.fs-results__criteria dt {flex-shrink:0;color:var(--muted);}
+.fs-results__criteria dd {margin:0;min-width:0;color:var(--ink);overflow-wrap:anywhere;white-space:pre-wrap;}
 .fs-results__head, .fs-results__pages { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 h3, h4, h5, p { margin: 0; } h3 { font-size: 16px; } h4 { font-size: 14px; }
 .fs-results__head p, .fs-results__hint, .fs-results__path { color: var(--muted); font-size: 12px; margin-top: 7px; overflow-wrap: anywhere; }
