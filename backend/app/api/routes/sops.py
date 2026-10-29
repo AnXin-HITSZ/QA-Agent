@@ -20,7 +20,6 @@ from uuid import uuid4
 
 import frontmatter
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
-from fastapi.responses import RedirectResponse
 from PIL import Image, UnidentifiedImageError
 
 from app.auth.deps import require_admin, require_user
@@ -165,8 +164,8 @@ def upload_image(file: UploadFile = File(...)) -> dict[str, str]:
 
 
 @router.get("/images/{image_id}", dependencies=[Depends(require_user)])
-def get_image(image_id: str) -> RedirectResponse:
-    """每次访问重新签名并跳转到私有 OSS 原件。"""
+def get_image(image_id: str) -> Response:
+    """鉴权后同源返回图片，避免跨域读取私有 OSS。"""
     if not _IMAGE_ID_RE.fullmatch(image_id):
         raise HTTPException(status_code=400, detail="图片标识无效")
     store = oss.sops_store()
@@ -174,8 +173,13 @@ def get_image(image_id: str) -> RedirectResponse:
     with _dep_503():
         if not store.object_exists(key):
             raise HTTPException(status_code=404, detail="图片不存在")
-        url = store.sign_url(key)
-    return RedirectResponse(url, status_code=307, headers={"Cache-Control": "no-store"})
+        data = store.get_object(key)
+    extension = image_id.rsplit(".", 1)[1]
+    content_type = next(mime for ext, mime in _IMAGE_FORMATS.values() if ext == extension)
+    return Response(
+        data, media_type=content_type,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @router.get("/{sop_id}", response_model=SopDetail, dependencies=[Depends(require_user)])

@@ -66,8 +66,9 @@ def test_upload_and_fresh_redirect(image_store, fmt, ext, mime):
     assert image_store.types[result["key"]] == mime
     first = client.get(result["url"], follow_redirects=False)
     second = client.get(result["url"], follow_redirects=False)
-    assert first.status_code == second.status_code == 307
-    assert first.headers["location"] != second.headers["location"]
+    assert first.status_code == second.status_code == 200
+    assert first.content == second.content == data
+    assert first.headers["content-type"] == mime
     assert first.headers["cache-control"] == "no-store"
     # 图片与 Markdown 同前缀时，不能成为 SOP 目录项。
     assert client.get(sops.router.prefix).json() == []
